@@ -2,12 +2,10 @@ import type {NextConfig} from 'next';
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
   typescript: {
     ignoreBuildErrors: false,
   },
+  allowedDevOrigins: ['*.replit.dev', '*.replit.app'],
   // Allow access to remote image placeholder.
   images: {
     remotePatterns: [
