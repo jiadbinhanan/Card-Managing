@@ -26,7 +26,8 @@
     "react-dom": "^19.2.1",
     "shadcn": "^4.2.0",
     "tailwind-merge": "^3.5.0",
-    "vaul": "^1.1.2"
+    "vaul": "^1.1.2",
+    "zustand": "^5.0.12"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "4.1.11",

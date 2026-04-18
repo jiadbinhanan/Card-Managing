@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useCardStore } from "@/store/cardStore";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   AlertCircle, 
@@ -76,7 +77,7 @@ export default function LentsPage() {
   const [imgError, setImgError] = useState(false);
 
   // Global Header State
-  const [globalSelectedCardId, setGlobalSelectedCardId] = useState<string>("all");
+  const { globalSelectedCardId, setGlobalSelectedCardId } = useCardStore();
 
   // UI States
   const [isModalOpen, setIsModalOpen] = useState(false);
