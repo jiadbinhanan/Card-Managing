@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useCardStore } from "@/store/cardStore";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   ArrowDownLeft, 
@@ -119,7 +120,7 @@ export default function TransactionsPage() {
   const [isLoading, setIsLoading] = useState(true);
 
   // Global Selected Card Filter
-  const [globalSelectedCardId, setGlobalSelectedCardId] = useState<string>("all");
+  const { globalSelectedCardId, setGlobalSelectedCardId } = useCardStore();
 
   // Balances
   const [familyLimitsMap, setFamilyLimitsMap] = useState<Record<string, number>>({});

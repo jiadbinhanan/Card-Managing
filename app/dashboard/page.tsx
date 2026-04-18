@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useCardStore } from "@/store/cardStore";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   Bell, 
@@ -73,7 +74,7 @@ export default function Dashboard() {
 
   // Card Context States
   const [accessibleCards, setAccessibleCards] = useState<CardData[]>([]);
-  const [selectedCardId, setSelectedCardId] = useState<string>("all");
+  const { globalSelectedCardId: selectedCardId, setGlobalSelectedCardId: setSelectedCardId } = useCardStore();
 
   // Financial States
   const [totalLimit, setTotalLimit] = useState(0); 
