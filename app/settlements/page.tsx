@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useCardStore } from "@/store/cardStore";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   ArrowDownLeft, 
@@ -88,7 +89,7 @@ export default function SettlementsPage() {
   const [imgError, setImgError] = useState(false);
 
   // Global Selected Card Filter
-  const [globalSelectedCardId, setGlobalSelectedCardId] = useState<string>("all");
+  const { globalSelectedCardId, setGlobalSelectedCardId } = useCardStore();
 
   // Settlement Modal States
   const [isSettleModalOpen, setIsSettleModalOpen] = useState(false);
