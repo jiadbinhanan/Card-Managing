@@ -9,8 +9,30 @@ const geist = Geist({subsets:['latin'],variable:'--font-sans'});
 const spaceGrotesk = Space_Grotesk({subsets:['latin'],variable:'--font-space'});
 
 export const metadata: Metadata = {
-  title: 'Credics Dashboard',
-  description: 'High-end Credit Card Limit Management Application',
+  title: 'Credics: Your Complete Credit Management Ecosystem',
+  description: 'Manage shared card limits, track personal dues, and effortlessly coordinate card rotations within your financial community.',
+  icons: {
+    icon: '/favicon.ico',
+    shortcut: '/favicon.ico',
+  },
+  openGraph: {
+    title: 'Credics: Your Complete Credit Management Ecosystem',
+    description: 'Manage shared card limits, track personal dues, and effortlessly coordinate card rotations within your financial community.',
+    images: [
+      {
+        url: '/og.webp',
+        width: 1200,
+        height: 630,
+        alt: 'Credics',
+      },
+    ],
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'Credics: Your Complete Credit Management Ecosystem',
+    description: 'Manage shared card limits, track personal dues, and effortlessly coordinate card rotations within your financial community.',
+    images: ['/og.webp'],
+  },
 };
 
 export default function RootLayout({children}: {children: React.ReactNode}) {
