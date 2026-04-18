@@ -11,7 +11,7 @@ const spaceGrotesk = Space_Grotesk({subsets:['latin'],variable:'--font-space'});
 export const metadata: Metadata = {
   title: 'Credics: Your Complete Credit Management Ecosystem',
   description: 'Manage shared card limits, track personal dues, and effortlessly coordinate card rotations within your financial community.',
-  icons: {
+icons: {
     icon: '/favicon.ico',
     shortcut: '/favicon.ico',
   },
