@@ -11,7 +11,7 @@ export function BottomNav() {
     { icon: Home, label: "Home", path: "/dashboard" },
     { icon: PieChart, label: "Trans", path: "/transactions" },
     { icon: Wallet, label: "Settled", path: "/settlements" },
-    { icon: CreditCard, label: "Loans", path: "/loans" }
+    { icon: CreditCard, label: "Loans", path: "/lents" }
   ];
 
   return (

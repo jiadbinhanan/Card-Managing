@@ -19,7 +19,6 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: false,
   },
   allowedDevOrigins,
-  // Allow access to remote image placeholder.
   images: {
     remotePatterns: [
       {
@@ -27,6 +26,13 @@ const nextConfig: NextConfig = {
         hostname: 'picsum.photos',
         port: '',
         pathname: '/**',
+      },
+      // Supabase Storage Domain Added
+      {
+        protocol: 'https',
+        hostname: 'mredhrvxhcdhityoouxa.supabase.co',
+        port: '',
+        pathname: '/storage/v1/object/public/**',
       },
     ],
   },
