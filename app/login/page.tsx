@@ -192,7 +192,7 @@ export default function LoginPage() {
                   <Fingerprint className="w-8 h-8 text-[#0ea5e9]" />
                 </div>
                 <h1 className="text-3xl font-bold tracking-tight font-space bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-transparent drop-shadow-[0_0_15px_rgba(255,255,255,0.3)]">
-                  NexLimit
+                  Credics Login
                 </h1>
                 <p className="text-sm text-slate-400 mt-2">Secure access to your wallet</p>
               </motion.div>
@@ -207,7 +207,7 @@ export default function LoginPage() {
                       type="email" 
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      placeholder="arjun@example.com" 
+                      placeholder="your mail@example.com" 
                       required
                       className="pl-10 h-12 bg-black/20 border-white/10 text-white placeholder:text-slate-600 focus-visible:ring-[#0ea5e9]/50 focus-visible:border-[#0ea5e9] rounded-xl transition-all"
                     />
