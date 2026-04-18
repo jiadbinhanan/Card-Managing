@@ -354,7 +354,7 @@ export default function SettingsPage() {
                           <img 
                              src={currentUser.avatar_url} 
                              alt="Profile" 
-                             className={`w-full h-full object-cover rounded-full ${uploadingAvatar ? 'opacity-50' : ''}`} 
+                             className={`w-full h-full object-cover ${uploadingAvatar ? 'opacity-50' : ''}`}
                              style={{ aspectRatio: '1/1' }}
                              onError={() => setImgError(true)} 
                           />
