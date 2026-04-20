@@ -6,7 +6,6 @@ import { motion, AnimatePresence } from "motion/react";
 import { 
   ArrowDownLeft, 
   Banknote,
-  CalendarRange,
   CheckCircle2,
   ChevronDown,
   Clock,
@@ -83,9 +82,6 @@ export default function SettlementsPage() {
   const [isSettling, setIsSettling] = useState(false);
   const [settlementType, setSettlementType] = useState<"full" | "partial">("full");
   const [partialAmount, setPartialAmount] = useState<number | "">("");
-
-  const [historyDateType, setHistoryDateType] = useState<"all" | "today" | "month" | "custom">("all");
-  const [customDateRange, setCustomDateRange] = useState<{ start: string; end: string }>({ start: "", end: "" });
 
   const [isManualEntryOpen, setIsManualEntryOpen] = useState(false);
   const [manualCardId, setManualCardId] = useState("");
@@ -288,22 +284,7 @@ export default function SettlementsPage() {
      }
   };
 
-  const filteredSettledTxs = settledTxs.filter((item) => {
-    const itemDate = (item.settled_date || item.transaction_date).substring(0, 10);
-    const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-    const monthStr = todayStr.substring(0, 7);
-    if (historyDateType === 'today') return itemDate === todayStr;
-    if (historyDateType === 'month') return itemDate.startsWith(monthStr);
-    if (historyDateType === 'custom') {
-      if (!customDateRange.start && !customDateRange.end) return true;
-      if (customDateRange.start && !customDateRange.end) return itemDate >= customDateRange.start;
-      if (!customDateRange.start && customDateRange.end) return itemDate <= customDateRange.end;
-      return itemDate >= customDateRange.start && itemDate <= customDateRange.end;
-    }
-    return true;
-  });
-
-  const groupedHistory = filteredSettledTxs.reduce((acc, item) => {
+  const groupedHistory = settledTxs.reduce((acc, item) => {
      const dateObj = new Date(item.settled_date || item.transaction_date);
      const dateStr = dateObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
      if (!acc[dateStr]) acc[dateStr] = [];

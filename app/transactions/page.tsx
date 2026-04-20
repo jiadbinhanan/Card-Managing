@@ -96,7 +96,7 @@ export default function TransactionsPage() {
 
   // Simplified Native Date Filter States
   const [filterDateType, setFilterDateType] = useState<"all" | "today" | "month" | "custom">("all"); 
-  const [customFilterDate, setCustomFilterDate] = useState("");
+  const [customDateRange, setCustomDateRange] = useState<{ start: string; end: string }>({ start: "", end: "" });
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [txType, setTxType] = useState<"rotate" | "spend" | "bill">("rotate");
@@ -540,7 +540,13 @@ export default function TransactionsPage() {
        const monthStr = todayStr.substring(0, 7); 
        if (filterDateType === 'today') return item.displayDate === todayStr;
        if (filterDateType === 'month') return item.displayDate.startsWith(monthStr);
-       if (filterDateType === 'custom' && customFilterDate) return item.displayDate === customFilterDate;
+       if (filterDateType === 'custom') {
+         const { start, end } = customDateRange;
+         if (!start && !end) return true;
+         if (start && !end) return item.displayDate >= start;
+         if (!start && end) return item.displayDate <= end;
+         return item.displayDate >= start && item.displayDate <= end;
+       }
        return true;
     }).sort((a, b) => b.sortDate - a.sortDate);
 
@@ -552,7 +558,7 @@ export default function TransactionsPage() {
        return acc;
     }, {} as Record<string, any[]>);
 
-  }, [transactions, spends, filterUser, activeTab, filterDateType, customFilterDate]);
+  }, [transactions, spends, filterUser, activeTab, filterDateType, customDateRange]);
 
   const toggleExpand = (id: string) => {
      setExpandedId(expandedId === id ? null : id);
@@ -678,27 +684,37 @@ export default function TransactionsPage() {
                       value={filterDateType} 
                       onChange={(e) => {
                          setFilterDateType(e.target.value as any);
-                         if (e.target.value !== 'custom') setCustomFilterDate('');
+                         if (e.target.value !== 'custom') setCustomDateRange({ start: "", end: "" });
                       }} 
                       className="appearance-none pl-8 pr-6 py-1.5 rounded-xl text-xs font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 outline-none focus:border-emerald-500/50 shadow-[0_0_10px_rgba(16,185,129,0.1)]"
                    >
                       <option value="all" className="bg-black">All Time</option>
                       <option value="today" className="bg-black">Today</option>
                       <option value="month" className="bg-black">This Month</option>
-                      <option value="custom" className="bg-black">Custom Date</option>
+                      <option value="custom" className="bg-black">Custom Range</option>
                    </select>
                    <CalendarClock className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-emerald-500 pointer-events-none" />
                    <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-emerald-500 pointer-events-none" />
                 </div>
 
-                {/* Native Date Input when Custom is selected */}
+                {/* Date Range Inputs when Custom is selected */}
                 {filterDateType === 'custom' && (
-                   <input 
-                      type="date" 
-                      value={customFilterDate} 
-                      onChange={(e) => setCustomFilterDate(e.target.value)} 
-                      className="h-[30px] bg-white/[0.03] border border-emerald-500/30 rounded-xl text-[11px] font-bold text-white px-2 outline-none focus:border-emerald-500" 
-                   />
+                   <div className="flex items-center gap-1.5">
+                      <input 
+                         type="date" 
+                         value={customDateRange.start} 
+                         onChange={(e) => setCustomDateRange(r => ({ ...r, start: e.target.value }))} 
+                         className="h-[30px] bg-white/[0.03] border border-emerald-500/30 rounded-xl text-[11px] font-bold text-white px-2 outline-none focus:border-emerald-500" 
+                      />
+                      <span className="text-[10px] font-bold text-slate-500 shrink-0">to</span>
+                      <input 
+                         type="date" 
+                         value={customDateRange.end} 
+                         min={customDateRange.start || undefined}
+                         onChange={(e) => setCustomDateRange(r => ({ ...r, end: e.target.value }))} 
+                         className="h-[30px] bg-white/[0.03] border border-emerald-500/30 rounded-xl text-[11px] font-bold text-white px-2 outline-none focus:border-emerald-500" 
+                      />
+                   </div>
                 )}
              </div>
            </div>
