@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { motion } from "motion/react";
+import { motion, AnimatePresence } from "motion/react";
 import { 
   Plus, 
   QrCode,
@@ -15,7 +15,8 @@ import {
   Clock,
   Timer,
   ArrowRight,
-  CreditCard
+  CreditCard,
+  History
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
@@ -44,6 +45,13 @@ interface Profile {
   name: string;
 }
 
+interface ActiveCooldown {
+  qrId: string;
+  merchantName: string;
+  expiresAt: number;
+  isBharatPe: boolean;
+}
+
 interface QRTabProps {
   accessibleCards: CardData[];
   globalSelectedCardId: string;
@@ -57,8 +65,9 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
   const [dynamicQrs, setDynamicQrs] = useState<QR[]>([]);
   const [staticQrs, setStaticQrs] = useState<QR[]>([]);
 
-  const [coolingTimeLeft, setCoolingTimeLeft] = useState<string | null>(null);
-  const [lastUsedMerchant, setLastUsedMerchant] = useState<string>("");
+  // Personal Cooldown States
+  const [activeCooldowns, setActiveCooldowns] = useState<ActiveCooldown[]>([]);
+  const [now, setNow] = useState(Date.now());
 
   const [isQrModalOpen, setIsQrModalOpen] = useState(false);
   const [editingQr, setEditingQr] = useState<QR | null>(null);
@@ -78,61 +87,81 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
   const [generatedAmounts, setGeneratedAmounts] = useState<number[]>([]);
   const [selectedPaymentCardId, setSelectedPaymentCardId] = useState<string>("");
 
-  const fetchQRs = async () => {
-    const { data: qrData } = await supabase.from('qrs').select('*');
-    if (qrData) {
-      setQrs(qrData as QR[]);
-      categorizeQRs(qrData as QR[]);
-      calculateCoolingTimer(qrData as QR[]);
-    }
-  };
-
   useEffect(() => {
     fetchQRs();
     const channel = supabase.channel('qrs_changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'qrs' }, () => fetchQRs())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'card_transactions' }, () => fetchQRs())
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [firstName]);
+  }, [firstName, currentUser]);
 
   useEffect(() => {
-    const interval = setInterval(() => calculateCoolingTimer(qrs), 1000);
+    const interval = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(interval);
-  }, [qrs]);
+  }, []);
 
-  const calculateCoolingTimer = (allQrs: QR[]) => {
-    const activeUsedQrs = allQrs.filter(q => q.status !== 'static' && q.last_used_date);
-    if (activeUsedQrs.length === 0) {
-      setCoolingTimeLeft(null);
-      return;
+  const fetchQRs = async () => {
+    if (!currentUser) return;
+
+    const { data: qrData } = await supabase.from('qrs').select('*');
+    if (!qrData) return;
+
+    // Fetch personal transaction history for the last 5 days
+    const fiveDaysAgo = new Date();
+    fiveDaysAgo.setDate(fiveDaysAgo.getDate() - 5);
+
+    const { data: recentTxs } = await supabase
+      .from('card_transactions')
+      .select('qr_id, created_at')
+      .eq('recorded_by', currentUser.id)
+      .not('qr_id', 'is', null)
+      .gte('created_at', fiveDaysAgo.toISOString())
+      .order('created_at', { ascending: false });
+
+    const cooldownList: ActiveCooldown[] = [];
+    const processedQrIds = new Set<string>();
+
+    if (recentTxs) {
+        recentTxs.forEach(tx => {
+            if (!tx.qr_id || processedQrIds.has(tx.qr_id)) return;
+
+            const qrInfo = qrData.find(q => q.id === tx.qr_id);
+            if (!qrInfo) return;
+
+            const isBharatPe = qrInfo.platform.toLowerCase().includes('bharatpe') || qrInfo.merchant_name.toLowerCase().includes('bharatpe');
+            const txTime = new Date(tx.created_at).getTime();
+
+            let expiresAt = 0;
+            if (isBharatPe) {
+                expiresAt = txTime + (5 * 24 * 60 * 60 * 1000); // 5 days
+            } else {
+                expiresAt = txTime + (24 * 60 * 60 * 1000); // 24 hours
+            }
+
+            if (expiresAt > Date.now()) {
+                cooldownList.push({
+                    qrId: tx.qr_id,
+                    merchantName: qrInfo.merchant_name,
+                    expiresAt,
+                    isBharatPe
+                });
+            }
+
+            processedQrIds.add(tx.qr_id);
+        });
     }
 
-    const latestQr = activeUsedQrs.reduce((latest, current) => {
-      return new Date(current.last_used_date!) > new Date(latest.last_used_date!) ? current : latest;
-    });
-
-    const lastUsedTime = new Date(latestQr.last_used_date!).getTime();
-    const targetTime = lastUsedTime + (24 * 60 * 60 * 1000); 
-    const now = new Date().getTime();
-    const difference = targetTime - now;
-
-    if (difference > 0) {
-      setLastUsedMerchant(latestQr.merchant_name);
-      const hours = Math.floor((difference % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-      const minutes = Math.floor((difference % (1000 * 60 * 60)) / (1000 * 60));
-      const seconds = Math.floor((difference % (1000 * 60)) / 1000);
-      setCoolingTimeLeft(`${hours}h ${minutes}m ${seconds}s`);
-    } else {
-      setCoolingTimeLeft(null);
-    }
+    setActiveCooldowns(cooldownList);
+    setQrs(qrData as QR[]);
+    categorizeQRs(qrData as QR[], cooldownList);
   };
 
-  const categorizeQRs = (qrData: QR[]) => {
+  const categorizeQRs = (qrData: QR[], cooldownList: ActiveCooldown[]) => {
     const statics = qrData.filter(q => q.status === 'static');
     setStaticQrs(statics);
 
     const operational = qrData.filter(q => q.status !== 'static');
-    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 
     operational.sort((a, b) => {
       let scoreA = 0; let scoreB = 0;
@@ -141,13 +170,12 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
 
       if (firstName && nameA.includes(firstName)) scoreA += 10000;
       if (firstName && nameB.includes(firstName)) scoreB += 10000;
-      if (a.platform.includes('BharatPe')) scoreA += 1000;
-      if (b.platform.includes('BharatPe')) scoreB += 1000;
 
-      const isAUsedToday = a.last_used_date?.startsWith(today);
-      const isBUsedToday = b.last_used_date?.startsWith(today);
-      if (isAUsedToday) scoreA += 5000;
-      if (isBUsedToday) scoreB += 5000;
+      const isAOnCooldown = cooldownList.some(c => c.qrId === a.id);
+      const isBOnCooldown = cooldownList.some(c => c.qrId === b.id);
+
+      if (isAOnCooldown) scoreA += 5000;
+      if (isBOnCooldown) scoreB += 5000;
 
       const timeA = a.last_used_date ? new Date(a.last_used_date).getTime() : 0;
       const timeB = b.last_used_date ? new Date(b.last_used_date).getTime() : 0;
@@ -165,7 +193,6 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
     const recommended = activeOperational.slice(0, 4);
 
     setRecommendedQrs(recommended);
-    // As requested: all operational QRs stay in the Dynamic List
     setDynamicQrs(operational);
   };
 
@@ -292,31 +319,50 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
     return new Date(isoString).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' });
   };
 
+  const currentCooldowns = activeCooldowns.filter(c => c.expiresAt > now);
+
   return (
     <motion.div initial="hidden" animate="visible" className="space-y-6 pb-6">
 
-      {/* ================= 24H COOLING COUNTDOWN TIMER ================= */}
+      {/* ================= 24H / MULTIPLE COOLING COUNTDOWN TIMERS ================= */}
       <div className="bg-white/[0.03] border border-white/10 rounded-2xl p-4 backdrop-blur-xl shadow-inner relative overflow-hidden">
         <div className="absolute -right-10 -top-10 w-32 h-32 bg-[#0ea5e9]/10 rounded-full blur-[40px] pointer-events-none" />
-        <div className="flex items-center gap-3">
-          <div className={`w-10 h-10 rounded-xl flex items-center justify-center border ${coolingTimeLeft ? 'bg-amber-500/10 border-amber-500/20' : 'bg-emerald-500/10 border-emerald-500/20'}`}>
-            <Timer className={`w-5 h-5 ${coolingTimeLeft ? 'text-amber-400' : 'text-emerald-400'}`} />
+        <div className="flex items-center gap-3 mb-1">
+          <div className={`w-10 h-10 rounded-xl flex items-center justify-center border ${currentCooldowns.length > 0 ? 'bg-amber-500/10 border-amber-500/20' : 'bg-emerald-500/10 border-emerald-500/20'}`}>
+            <Timer className={`w-5 h-5 ${currentCooldowns.length > 0 ? 'text-amber-400' : 'text-emerald-400'}`} />
           </div>
           <div>
             <h3 className="text-xs font-black text-white uppercase tracking-wider">
-              {coolingTimeLeft ? "Cooling Period Active" : "Ready for Rotation"}
+              {currentCooldowns.length > 0 ? "Cooling Period Active" : "Ready for Rotation"}
             </h3>
-            {coolingTimeLeft ? (
-              <p className="text-[10px] font-bold text-slate-400 mt-1">
-                Last used: <span className="text-amber-400">{lastUsedMerchant}</span> • <span className="text-white">{coolingTimeLeft}</span> remaining
-              </p>
-            ) : (
-              <p className="text-[10px] font-bold text-slate-400 mt-1">
-                24 hours cooling period is over. You can use a new QR now.
-              </p>
-            )}
+            <p className="text-[10px] font-bold text-slate-400 mt-1">
+              {currentCooldowns.length > 0 ? "Personal timers for recently used QRs." : "24 hours cooling period is over. You can use a new QR now."}
+            </p>
           </div>
         </div>
+
+        {currentCooldowns.length > 0 && (
+           <div className="space-y-2 mt-4 pt-3 border-t border-white/5 relative z-10">
+              {currentCooldowns.map((c) => {
+                 const timeLeft = Math.max(0, c.expiresAt - now);
+                 const days = Math.floor(timeLeft / (1000 * 60 * 60 * 24));
+                 const hours = Math.floor((timeLeft / (1000 * 60 * 60)) % 24);
+                 const minutes = Math.floor((timeLeft / 1000 / 60) % 60);
+                 const seconds = Math.floor((timeLeft / 1000) % 60);
+
+                 const timeString = (c.isBharatPe && days > 0)
+                      ? `${days}d ${hours}h ${minutes}m`
+                      : `${hours.toString().padStart(2, '0')}h ${minutes.toString().padStart(2, '0')}m ${seconds.toString().padStart(2, '0')}s`;
+
+                 return (
+                    <div key={c.qrId} className="flex justify-between items-center bg-black/40 p-2.5 rounded-xl border border-white/5 shadow-inner">
+                       <span className="text-xs font-bold text-slate-200">{c.merchantName}</span>
+                       <span className="text-[11px] font-mono font-bold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">{timeString} remaining</span>
+                    </div>
+                 );
+              })}
+           </div>
+        )}
       </div>
 
       {/* ================= SECTION 1: RECOMMENDED TODAY ================= */}

@@ -1,12 +1,11 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useCardStore } from "@/store/cardStore";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   ArrowDownLeft, 
   CreditCard, 
-  PieChart, 
   Plus, 
   Wallet, 
   Banknote,
@@ -15,13 +14,10 @@ import {
   CheckCircle2,
   QrCode,
   ChevronDown,
-  ChevronUp,
   Edit3,
   Filter,
   Zap,
   CalendarClock,
-  ChevronLeft,
-  ChevronRight,
   ShieldCheck,
   CalendarDays,
   Info
@@ -31,6 +27,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { BottomNav } from "@/components/BottomNav";
 import { supabase } from "@/lib/supabase";
+import Link from "next/link";
 
 // --- Interfaces ---
 interface Transaction {
@@ -97,11 +94,9 @@ export default function TransactionsPage() {
   // Expanded Card State
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  // Custom Date Filter States
-  const [isDateFilterOpen, setIsDateFilterOpen] = useState(false);
+  // Simplified Native Date Filter States
   const [filterDateType, setFilterDateType] = useState<"all" | "today" | "month" | "custom">("all"); 
   const [customFilterDate, setCustomFilterDate] = useState("");
-  const [calendarMonth, setCalendarMonth] = useState(new Date());
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [txType, setTxType] = useState<"rotate" | "spend" | "bill">("rotate");
@@ -118,6 +113,7 @@ export default function TransactionsPage() {
 
   const [currentUser, setCurrentUser] = useState<Profile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [imgError, setImgError] = useState(false);
 
   // Global Selected Card Filter
   const { globalSelectedCardId, setGlobalSelectedCardId } = useCardStore();
@@ -149,6 +145,11 @@ export default function TransactionsPage() {
     return () => { supabase.removeChannel(channel); };
   }, [globalSelectedCardId]);
 
+  const cleanUrl = (url?: string | null) => {
+    if (!url) return "";
+    return url.trim().replace(/^['"]|['"]$/g, '');
+  };
+
   const fetchInitialData = async () => {
     setIsLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
@@ -164,7 +165,7 @@ export default function TransactionsPage() {
     if (user) {
       const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).single();
       if (profile) {
-         setCurrentUser(profile);
+         setCurrentUser({ ...profile, avatar_url: cleanUrl(profile.avatar_url) });
          setSelectedUserId(profile.id);
       }
 
@@ -195,7 +196,6 @@ export default function TransactionsPage() {
       }
     }
 
-    // Include cards(card_name, last_4_digits) to show detailed card info
     let txQuery = supabase.from('card_transactions').select(`*, qrs (merchant_name), profiles:recorded_by (name, avatar_url), cards(card_name, last_4_digits)`).order('transaction_date', { ascending: false });
     let spendsQuery = supabase.from('spends').select('*, profiles (name, avatar_url), cards(card_name, last_4_digits)').order('spend_date', { ascending: false });
 
@@ -245,6 +245,56 @@ export default function TransactionsPage() {
         setEntryCardId(entryUserCards[0].id);
      }
   }, [selectedUserId, entryUserCards, entryCardId]);
+
+
+  // --- Helper: Cash Update with Ledger ---
+  const updateCashBalance = async (userId: string, amt: number, type: 'credit' | 'debit', note: string) => {
+    const { data: coh } = await supabase.from('cash_on_hand').select('*').eq('user_id', userId).maybeSingle();
+    const currentBalance = coh ? Number(coh.current_balance) : 0;
+    const newBalance = type === 'credit' ? currentBalance + amt : currentBalance - amt;
+
+    await supabase.from('cash_on_hand').upsert({ user_id: userId, current_balance: newBalance });
+    await supabase.from('cash_on_hand_ledger').insert({
+       user_id: userId, amount: amt, transaction_type: type, remarks: note, transaction_date: new Date().toISOString()
+    });
+  };
+
+  // --- Helper: Process Bill Payment (Billing Cycles) ---
+  const processBillPayment = async (cardId: string, amt: number, txDate: string) => {
+    let activeCycleId = null;
+    const txDateObj = new Date(txDate);
+    const startOfMonth = new Date(txDateObj.getFullYear(), txDateObj.getMonth(), 1).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const endOfMonth = new Date(txDateObj.getFullYear(), txDateObj.getMonth() + 1, 0).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
+    const { data: cycles } = await supabase
+       .from('billing_cycles')
+       .select('*')
+       .eq('card_id', cardId)
+       .gte('billing_month', startOfMonth)
+       .lte('billing_month', endOfMonth);
+
+    if (cycles && cycles.length > 0) {
+       const cycle = cycles[0];
+       const generatedAmt = Number(cycle.generated_amount);
+       const paidAmt = Number(cycle.paid_amount);
+
+       if (paidAmt < generatedAmt) {
+          const newPaidAmt = paidAmt + amt;
+          let cycleStatus = cycle.status;
+          if (newPaidAmt >= generatedAmt) cycleStatus = 'paid';
+          else if (newPaidAmt > 0) cycleStatus = 'partially_paid';
+
+          await supabase.from('billing_cycles').update({
+             paid_amount: newPaidAmt,
+             status: cycleStatus
+          }).eq('id', cycle.id);
+
+          activeCycleId = cycle.id;
+       }
+    }
+    return activeCycleId;
+  };
+
 
   // --- AUTOMATIC SPLIT CALCULATION ---
   const amtNum = Number(amount) || 0;
@@ -307,6 +357,7 @@ export default function TransactionsPage() {
 
     setIsModalOpen(false);
 
+    // 1. OPTIMISTIC UI UPDATES
     if (txType === "rotate") {
         const tempTx: any = {
            id: `temp-${Date.now()}`, type: 'withdrawal', amount: amtNum, status: 'pending_settlement', 
@@ -364,43 +415,52 @@ export default function TransactionsPage() {
 
     resetForm();
 
-    // 2. BACKGROUND DATABASE SYNC
+    // 2. BACKGROUND DATABASE SYNC (With New Ledger & Billing Logic)
     try {
       if (txType === "rotate") {
-        supabase.from('card_transactions').insert({
+        await supabase.from('card_transactions').insert({
           amount: amtNum, type: 'withdrawal', status: 'pending_settlement', qr_id: selectedQrId, transaction_date: finalDate, recorded_by: actingUserId, remarks: remarks, card_id: entryCardId
-        }).then();
+        });
       } 
       else if (txType === "spend") {
         if (isSplitting) {
-           if (cardSplitAmt > 0) supabase.from('spends').insert({ user_id: actingUserId, amount: cardSplitAmt, spend_type: 'personal', payment_method: 'credit_card', remarks: remarks, spend_date: finalDate, card_id: entryCardId }).then();
+           if (cardSplitAmt > 0) await supabase.from('spends').insert({ user_id: actingUserId, amount: cardSplitAmt, spend_type: 'personal', payment_method: 'credit_card', remarks: remarks, spend_date: finalDate, card_id: entryCardId });
            if (cashSplitAmt > 0) {
-              supabase.from('spends').insert({ user_id: actingUserId, amount: cashSplitAmt, spend_type: 'personal', payment_method: 'cash_on_hand', remarks: remarks + " (Auto-Split)", spend_date: finalDate, card_id: entryCardId }).then();
-              supabase.from('cash_on_hand').upsert({ user_id: actingUserId, current_balance: (userCashMap[actingUserId]||0) - cashSplitAmt }).then();
+              await supabase.from('spends').insert({ user_id: actingUserId, amount: cashSplitAmt, spend_type: 'personal', payment_method: 'cash_on_hand', remarks: remarks + " (Auto-Split)", spend_date: finalDate, card_id: entryCardId });
+              await updateCashBalance(actingUserId, cashSplitAmt, 'debit', `Personal spend ${remarks ? '- '+remarks : ''} (Auto-Split)`);
            }
         } else {
-           supabase.from('spends').insert({ user_id: actingUserId, amount: amtNum, spend_type: 'personal', payment_method: spendMethod, remarks: remarks, spend_date: finalDate, card_id: entryCardId }).then();
-           if (spendMethod === "cash_on_hand") supabase.from('cash_on_hand').upsert({ user_id: actingUserId, current_balance: (userCashMap[actingUserId]||0) - amtNum }).then();
+           await supabase.from('spends').insert({ user_id: actingUserId, amount: amtNum, spend_type: 'personal', payment_method: spendMethod, remarks: remarks, spend_date: finalDate, card_id: entryCardId });
+           if (spendMethod === "cash_on_hand") {
+              await updateCashBalance(actingUserId, amtNum, 'debit', `Personal spend ${remarks ? '- '+remarks : ''}`);
+           }
         }
       } 
       else if (txType === "bill") {
+        // Find if there is an active billing cycle for this month to update
+        let activeCycleId = await processBillPayment(entryCardId, amtNum, finalDate);
+
         if (isDebtRepayment) {
-            supabase.from('spends').insert({ user_id: actingUserId, amount: -amtNum, spend_type: 'repayment', payment_method: billMethod, remarks: "Debt Cleared" + (remarks ? `: ${remarks}` : ''), spend_date: finalDate, card_id: entryCardId }).then();
+            await supabase.from('spends').insert({ user_id: actingUserId, amount: -amtNum, spend_type: 'repayment', payment_method: billMethod, remarks: "Debt Cleared" + (remarks ? `: ${remarks}` : ''), spend_date: finalDate, card_id: entryCardId });
         }
 
         if (isSplitting) {
            if (cashSplitAmt > 0) {
-              supabase.from('card_transactions').insert({ amount: cashSplitAmt, type: 'bill_payment', status: 'settled', transaction_date: finalDate, recorded_by: actingUserId, payment_method: 'cash_on_hand', remarks: remarks, card_id: entryCardId }).then();
-              supabase.from('cash_on_hand').upsert({ user_id: actingUserId, current_balance: (userCashMap[actingUserId]||0) - cashSplitAmt }).then();
+              await supabase.from('card_transactions').insert({ amount: cashSplitAmt, type: 'bill_payment', status: 'settled', transaction_date: finalDate, recorded_by: actingUserId, payment_method: 'cash_on_hand', remarks: remarks, card_id: entryCardId, billing_cycle_id: activeCycleId });
+              await updateCashBalance(actingUserId, cashSplitAmt, 'debit', `Bill payment ${remarks ? '- '+remarks : ''}`);
            }
-           if (pocketSplitAmt > 0) supabase.from('card_transactions').insert({ amount: pocketSplitAmt, type: 'bill_payment', status: 'settled', transaction_date: finalDate, recorded_by: actingUserId, payment_method: 'own_pocket', remarks: remarks, card_id: entryCardId }).then();
+           if (pocketSplitAmt > 0) {
+              await supabase.from('card_transactions').insert({ amount: pocketSplitAmt, type: 'bill_payment', status: 'settled', transaction_date: finalDate, recorded_by: actingUserId, payment_method: 'own_pocket', remarks: remarks, card_id: entryCardId, billing_cycle_id: activeCycleId });
+           }
         } else {
-           supabase.from('card_transactions').insert({ amount: amtNum, type: 'bill_payment', status: 'settled', transaction_date: finalDate, recorded_by: actingUserId, payment_method: billMethod, remarks: remarks, card_id: entryCardId }).then();
-           if (billMethod === "cash_on_hand") supabase.from('cash_on_hand').upsert({ user_id: actingUserId, current_balance: (userCashMap[actingUserId]||0) - amtNum }).then();
+           await supabase.from('card_transactions').insert({ amount: amtNum, type: 'bill_payment', status: 'settled', transaction_date: finalDate, recorded_by: actingUserId, payment_method: billMethod, remarks: remarks, card_id: entryCardId, billing_cycle_id: activeCycleId });
+           if (billMethod === "cash_on_hand") {
+              await updateCashBalance(actingUserId, amtNum, 'debit', `Bill payment ${remarks ? '- '+remarks : ''}`);
+           }
         }
       }
     } catch (error: any) {
-      console.error(error);
+      console.error("Save Error:", error);
     }
   };
 
@@ -419,27 +479,9 @@ export default function TransactionsPage() {
     setIsModalOpen(true);
   };
 
-  // --- CUSTOM CALENDAR LOGIC ---
-  const generateCalendarDays = () => {
-    const year = calendarMonth.getFullYear();
-    const month = calendarMonth.getMonth();
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
-    const firstDay = new Date(year, month, 1).getDay();
 
-    const days = [];
-    for (let i = 0; i < firstDay; i++) days.push(null); 
-    for (let i = 1; i <= daysInMonth; i++) days.push(i);
-    return days;
-  };
-
-  const changeMonth = (offset: number) => {
-     const newMonth = new Date(calendarMonth);
-     newMonth.setMonth(newMonth.getMonth() + offset);
-     setCalendarMonth(newMonth);
-  };
-
-  // --- LEDGER UNIFICATION & TIMELINE GROUPING ---
-  const getUnifiedList = () => {
+  // --- LEDGER UNIFICATION & TIMELINE GROUPING (Optimized with useMemo) ---
+  const groupedLedger = useMemo(() => {
     const list: any[] = [];
 
     transactions.forEach(t => {
@@ -486,7 +528,7 @@ export default function TransactionsPage() {
       });
     });
 
-    return list.filter(item => {
+    const filteredList = list.filter(item => {
        if (filterUser !== 'all' && item.userId !== filterUser) return false;
        if (activeTab === "all") return true;
        if (activeTab === "rotations") return item.type === 'withdrawal';
@@ -501,15 +543,16 @@ export default function TransactionsPage() {
        if (filterDateType === 'custom' && customFilterDate) return item.displayDate === customFilterDate;
        return true;
     }).sort((a, b) => b.sortDate - a.sortDate);
-  };
 
-  const groupedLedger = getUnifiedList().reduce((acc, item) => {
-     const dateObj = new Date(item.displayDate);
-     const dateStr = dateObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-     if (!acc[dateStr]) acc[dateStr] = [];
-     acc[dateStr].push(item);
-     return acc;
-  }, {} as Record<string, any[]>);
+    return filteredList.reduce((acc, item) => {
+       const dateObj = new Date(item.displayDate);
+       const dateStr = dateObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+       if (!acc[dateStr]) acc[dateStr] = [];
+       acc[dateStr].push(item);
+       return acc;
+    }, {} as Record<string, any[]>);
+
+  }, [transactions, spends, filterUser, activeTab, filterDateType, customFilterDate]);
 
   const toggleExpand = (id: string) => {
      setExpandedId(expandedId === id ? null : id);
@@ -526,21 +569,40 @@ export default function TransactionsPage() {
         <motion.div animate={{ scale: [1, 1.4, 1], opacity: [0.08, 0.2, 0.08] }} transition={{ duration: 10, repeat: Infinity }} className="absolute top-[30%] left-[15%] w-[60vw] h-[60vw] rounded-full bg-[#10b981] opacity-[0.15] blur-[100px] mix-blend-screen" />
       </div>
 
-      {/* ================= HEADER ================= */}
+      {/* ================= HEADER (Unified with Settlements Page) ================= */}
       <header className="relative z-10 px-5 pt-8 pb-3 sticky top-0 bg-[#030014]/70 backdrop-blur-3xl border-b border-white/5 shadow-[0_15px_40px_rgba(0,0,0,0.8)] flex justify-between items-center">
-        <div>
-          <motion.div 
-            animate={{ backgroundPosition: ['0% 50%', '100% 50%', '0% 50%'] }}
-            transition={{ duration: 5, ease: "linear", repeat: Infinity }}
-            className="bg-[length:200%_200%] bg-gradient-to-r from-[#0ea5e9] via-[#a855f7] to-[#0ea5e9] bg-clip-text"
-          >
-            <p className="text-[10px] font-black uppercase tracking-widest leading-none mb-0.5 text-transparent">
-              Live Ledger
-            </p>
-          </motion.div>
-          <h1 className="text-xl font-black tracking-tight bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent leading-none drop-shadow-[0_0_15px_rgba(255,255,255,0.3)]">
-            Transactions
-          </h1>
+        <div className="flex items-center gap-3">
+           <Link href="/settings">
+             <div className="h-10 w-10 rounded-full bg-gradient-to-tr from-[#0ea5e9] to-[#a855f7] p-0.5 shadow-[0_0_20px_rgba(14,165,233,0.4)] cursor-pointer hover:scale-105 transition-transform overflow-hidden">
+               <div className="w-full h-full bg-[#030014] rounded-full flex items-center justify-center relative overflow-hidden">
+                 {currentUser?.avatar_url && !imgError ? (
+                   <img 
+                      src={currentUser.avatar_url} 
+                      alt="Profile" 
+                      className="w-full h-full object-cover rounded-full" 
+                      style={{ aspectRatio: '1/1' }}
+                      onError={() => setImgError(true)} 
+                   />
+                 ) : (
+                   <span className="text-sm font-black text-white">{currentUser?.name?.charAt(0) || 'U'}</span>
+                 )}
+               </div>
+             </div>
+           </Link>
+           <div>
+             <motion.div 
+               animate={{ backgroundPosition: ['0% 50%', '100% 50%', '0% 50%'] }}
+               transition={{ duration: 5, ease: "linear", repeat: Infinity }}
+               className="bg-[length:200%_200%] bg-gradient-to-r from-[#0ea5e9] via-[#a855f7] to-[#0ea5e9] bg-clip-text"
+             >
+               <p className="text-[10px] font-black uppercase tracking-widest leading-none mb-0.5 text-transparent">
+                 Live Ledger
+               </p>
+             </motion.div>
+             <h1 className="text-xl font-black tracking-tight bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent leading-none drop-shadow-[0_0_15px_rgba(255,255,255,0.3)]">
+               Transactions
+             </h1>
+           </div>
         </div>
 
         <div className="relative">
@@ -609,65 +671,36 @@ export default function TransactionsPage() {
                <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#e879f9] pointer-events-none" />
              </div>
 
-             {/* Custom Date Filter Button */}
-             <button 
-                onClick={() => setIsDateFilterOpen(!isDateFilterOpen)}
-                className="flex items-center justify-between px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 shadow-[0_0_10px_rgba(16,185,129,0.1)] shrink-0 gap-2 transition-all hover:bg-emerald-500/20"
-             >
-                <div className="flex items-center gap-1.5"><CalendarClock className="w-3.5 h-3.5" /> 
-                   {filterDateType === 'all' ? 'All Time' : filterDateType === 'today' ? 'Today' : filterDateType === 'month' ? 'This Month' : customFilterDate}
-                </div>
-                <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isDateFilterOpen ? 'rotate-180' : ''}`} />
-             </button>
-
-             {/* Premium Custom Calendar Dropdown */}
-             <AnimatePresence>
-                {isDateFilterOpen && (
-                   <motion.div 
-                      initial={{ opacity: 0, y: -10, scale: 0.95 }}
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
-                      exit={{ opacity: 0, y: -10, scale: 0.95 }}
-                      className="absolute right-0 top-10 w-64 bg-[#0a0a0a]/95 backdrop-blur-3xl border border-white/10 rounded-[24px] p-4 shadow-[0_20px_50px_rgba(0,0,0,0.9)] z-50 origin-top-right"
+             {/* Native Date Filter */}
+             <div className="flex items-center gap-2 shrink-0">
+                <div className="relative">
+                   <select 
+                      value={filterDateType} 
+                      onChange={(e) => {
+                         setFilterDateType(e.target.value as any);
+                         if (e.target.value !== 'custom') setCustomFilterDate('');
+                      }} 
+                      className="appearance-none pl-8 pr-6 py-1.5 rounded-xl text-xs font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 outline-none focus:border-emerald-500/50 shadow-[0_0_10px_rgba(16,185,129,0.1)]"
                    >
-                      <div className="grid grid-cols-2 gap-2 mb-4">
-                         <button onClick={() => { setFilterDateType('all'); setIsDateFilterOpen(false); }} className={`px-2 py-1.5 text-[10px] font-bold rounded-lg border ${filterDateType === 'all' ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40' : 'bg-white/5 text-slate-300 border-transparent hover:bg-white/10'}`}>All Time</button>
-                         <button onClick={() => { setFilterDateType('today'); setIsDateFilterOpen(false); }} className={`px-2 py-1.5 text-[10px] font-bold rounded-lg border ${filterDateType === 'today' ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40' : 'bg-white/5 text-slate-300 border-transparent hover:bg-white/10'}`}>Today</button>
-                         <button onClick={() => { setFilterDateType('month'); setIsDateFilterOpen(false); }} className={`col-span-2 px-2 py-1.5 text-[10px] font-bold rounded-lg border ${filterDateType === 'month' ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40' : 'bg-white/5 text-slate-300 border-transparent hover:bg-white/10'}`}>This Month</button>
-                      </div>
+                      <option value="all" className="bg-black">All Time</option>
+                      <option value="today" className="bg-black">Today</option>
+                      <option value="month" className="bg-black">This Month</option>
+                      <option value="custom" className="bg-black">Custom Date</option>
+                   </select>
+                   <CalendarClock className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-emerald-500 pointer-events-none" />
+                   <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-emerald-500 pointer-events-none" />
+                </div>
 
-                      <div className="pt-3 border-t border-white/10">
-                         <div className="flex justify-between items-center mb-3">
-                            <button onClick={() => changeMonth(-1)} className="p-1 hover:bg-white/10 rounded-md"><ChevronLeft className="w-4 h-4 text-slate-400" /></button>
-                            <span className="text-xs font-bold text-white">{calendarMonth.toLocaleString('default', { month: 'short' })} {calendarMonth.getFullYear()}</span>
-                            <button onClick={() => changeMonth(1)} className="p-1 hover:bg-white/10 rounded-md"><ChevronRight className="w-4 h-4 text-slate-400" /></button>
-                         </div>
-                         <div className="grid grid-cols-7 gap-1 text-center text-[9px] font-bold text-slate-500 mb-2">
-                            {['Su','Mo','Tu','We','Th','Fr','Sa'].map(d=><div key={d}>{d}</div>)}
-                         </div>
-                         <div className="grid grid-cols-7 gap-1">
-                            {generateCalendarDays().map((day, i) => {
-                               if (!day) return <div key={`empty-${i}`} className="w-7 h-7"></div>;
-                               const dateStr = `${calendarMonth.getFullYear()}-${String(calendarMonth.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                               const isSelected = filterDateType === 'custom' && customFilterDate === dateStr;
-                               return (
-                                  <button 
-                                     key={i}
-                                     onClick={() => {
-                                        setCustomFilterDate(dateStr);
-                                        setFilterDateType('custom');
-                                        setIsDateFilterOpen(false);
-                                     }}
-                                     className={`w-7 h-7 flex items-center justify-center text-[10px] font-bold rounded-full transition-all ${isSelected ? 'bg-emerald-500 text-white shadow-[0_0_10px_#10b981]' : 'text-slate-300 hover:bg-white/10'}`}
-                                  >
-                                     {day}
-                                  </button>
-                               )
-                            })}
-                         </div>
-                      </div>
-                   </motion.div>
+                {/* Native Date Input when Custom is selected */}
+                {filterDateType === 'custom' && (
+                   <input 
+                      type="date" 
+                      value={customFilterDate} 
+                      onChange={(e) => setCustomFilterDate(e.target.value)} 
+                      className="h-[30px] bg-white/[0.03] border border-emerald-500/30 rounded-xl text-[11px] font-bold text-white px-2 outline-none focus:border-emerald-500" 
+                   />
                 )}
-             </AnimatePresence>
+             </div>
            </div>
         </div>
 
@@ -709,23 +742,20 @@ export default function TransactionsPage() {
 
                           {/* Top Compact View */}
                           <div className="flex items-center justify-between relative z-10 w-full">
-                             <div className="flex items-center gap-4 w-[65%]">
+                             <div className="flex items-center gap-3 w-[65%]">
                                <div className={`w-11 h-11 shrink-0 rounded-[14px] flex items-center justify-center border border-white/5 shadow-inner ${item.bg}`}>
                                  <Icon className={`w-4 h-4 ${item.color}`} />
                                </div>
-                               <div className="truncate">
+                               <div className="flex-1 min-w-0">
                                  <h3 className="text-sm font-bold text-slate-100 mb-0.5 truncate">{item.title}</h3>
-                                 <p className="text-[10px] font-medium text-slate-400 truncate flex items-center gap-1">
-                                    {item.remarks ? (
-                                       <><span className="text-slate-300 italic">"{item.remarks}"</span> • {item.subtitle}</>
-                                    ) : (
-                                       <>{item.subtitle}</>
-                                    )}
-                                 </p>
+                                 <div className="flex flex-col gap-0.5 leading-tight">
+                                    {item.remarks && <span className="text-[10px] text-slate-300 italic truncate">"{item.remarks}"</span>}
+                                    <span className="text-[9px] font-medium text-slate-400">{item.subtitle}</span>
+                                 </div>
                                </div>
                              </div>
 
-                             <div className="flex flex-col items-end gap-1 relative z-10 shrink-0">
+                             <div className="flex flex-col items-end gap-1 relative z-10 shrink-0 pl-2">
                                <span className={`text-base font-black tracking-tight drop-shadow-md flex items-center gap-1 ${item.color}`}>
                                  {item.type === 'withdrawal' || (item.type === 'spend' && !item.isRepaymentFlag) ? "-" : "+"}₹{item.amount.toLocaleString('en-IN')}
                                  <ChevronDown className={`w-3.5 h-3.5 opacity-50 transition-transform duration-300 ${isExpanded ? 'rotate-180' : ''}`} />
@@ -991,7 +1021,6 @@ export default function TransactionsPage() {
                 {txType === "bill" && (
                   <motion.div key="bill" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="space-y-5">
 
-                    {/* NEW: Debt Repayment Toggle */}
                     <div className="p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl flex items-center justify-between shadow-[0_0_15px_rgba(16,185,129,0.15)]">
                        <div>
                           <div className="text-sm font-bold text-emerald-400 flex items-center gap-1.5"><ShieldCheck className="w-4 h-4"/> Clear Personal Debt?</div>

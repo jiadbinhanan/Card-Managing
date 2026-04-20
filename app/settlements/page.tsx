@@ -6,6 +6,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { 
   ArrowDownLeft, 
   Banknote,
+  CalendarRange,
   CheckCircle2,
   ChevronDown,
   Clock,
@@ -53,6 +54,11 @@ interface CardData {
   parent_card_id?: string;
 }
 
+interface QRData {
+  id: string;
+  merchant_name: string;
+}
+
 export default function SettlementsPage() {
   const [activeTab, setActiveTab] = useState<"vault" | "pending" | "history">("vault");
 
@@ -61,6 +67,8 @@ export default function SettlementsPage() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [accessibleCards, setAccessibleCards] = useState<CardData[]>([]);
   const [userCashMap, setUserCashMap] = useState<Record<string, number>>({});
+
+  const [activeQrs, setActiveQrs] = useState<QRData[]>([]);
 
   const [currentUser, setCurrentUser] = useState<Profile | null>(null);
   const [firstName, setFirstName] = useState<string>("");
@@ -76,10 +84,14 @@ export default function SettlementsPage() {
   const [settlementType, setSettlementType] = useState<"full" | "partial">("full");
   const [partialAmount, setPartialAmount] = useState<number | "">("");
 
+  const [historyDateType, setHistoryDateType] = useState<"all" | "today" | "month" | "custom">("all");
+  const [customDateRange, setCustomDateRange] = useState<{ start: string; end: string }>({ start: "", end: "" });
+
   const [isManualEntryOpen, setIsManualEntryOpen] = useState(false);
   const [manualCardId, setManualCardId] = useState("");
   const [manualAmount, setManualAmount] = useState("");
   const [manualRemarks, setManualRemarks] = useState("");
+  const [manualQrId, setManualQrId] = useState(""); 
 
   useEffect(() => {
     fetchInitialData();
@@ -109,10 +121,12 @@ export default function SettlementsPage() {
     const { data: profData } = await supabase.from('profiles').select('id, name, avatar_url');
     const { data: cData } = await supabase.from('cards').select('*');
     const { data: aData } = await supabase.from('card_access').select('*');
+    const { data: qData } = await supabase.from('qrs').select('id, merchant_name').eq('status', 'active');
 
     const profs = profData || [];
     const cardsList = cData || [];
     const accessList = aData || [];
+    setActiveQrs(qData || []);
 
     setProfiles(profs);
 
@@ -216,6 +230,14 @@ export default function SettlementsPage() {
            current_balance: receiverCashBalance + amtToSettle
         });
 
+        await supabase.from('cash_on_hand_ledger').insert({
+           user_id: cashReceiverId,
+           amount: amtToSettle,
+           transaction_type: 'credit',
+           remarks: `Settlement received from ${settleTx.qrs?.merchant_name || 'Manual Entry'}`,
+           transaction_date: new Date().toISOString()
+        });
+
         setIsSettleModalOpen(false);
         fetchLedgerData(accessibleCards);
      } catch (error: any) {
@@ -235,8 +257,10 @@ export default function SettlementsPage() {
      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 
      try {
+         // ১. ট্রানজ্যাকশন এন্ট্রি
          await supabase.from('card_transactions').insert({
             card_id: manualCardId,
+            qr_id: manualQrId || null, 
             amount: Number(manualAmount),
             transaction_date: today,
             type: 'withdrawal',
@@ -245,9 +269,17 @@ export default function SettlementsPage() {
             remarks: manualRemarks || "Manual Entry"
          });
 
+         // ২. QR সিলেক্ট করা থাকলে qrs টেবিলে last_used_date আপডেট করা
+         if (manualQrId) {
+             await supabase.from('qrs').update({
+                 last_used_date: new Date().toISOString()
+             }).eq('id', manualQrId);
+         }
+
          setIsManualEntryOpen(false);
          setManualAmount("");
          setManualRemarks("");
+         setManualQrId(""); 
          fetchLedgerData(accessibleCards);
      } catch(e: any) {
          alert("Failed to add entry: " + e.message);
@@ -256,7 +288,22 @@ export default function SettlementsPage() {
      }
   };
 
-  const groupedHistory = settledTxs.reduce((acc, item) => {
+  const filteredSettledTxs = settledTxs.filter((item) => {
+    const itemDate = (item.settled_date || item.transaction_date).substring(0, 10);
+    const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const monthStr = todayStr.substring(0, 7);
+    if (historyDateType === 'today') return itemDate === todayStr;
+    if (historyDateType === 'month') return itemDate.startsWith(monthStr);
+    if (historyDateType === 'custom') {
+      if (!customDateRange.start && !customDateRange.end) return true;
+      if (customDateRange.start && !customDateRange.end) return itemDate >= customDateRange.start;
+      if (!customDateRange.start && customDateRange.end) return itemDate <= customDateRange.end;
+      return itemDate >= customDateRange.start && itemDate <= customDateRange.end;
+    }
+    return true;
+  });
+
+  const groupedHistory = filteredSettledTxs.reduce((acc, item) => {
      const dateObj = new Date(item.settled_date || item.transaction_date);
      const dateStr = dateObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
      if (!acc[dateStr]) acc[dateStr] = [];
@@ -362,7 +409,6 @@ export default function SettlementsPage() {
                             </div>
                         </div>
 
-                        {/* Glowing Custom Entry Button */}
                         <button onClick={() => setIsManualEntryOpen(true)} className="relative group w-[80px] bg-white/[0.03] border border-white/10 hover:border-[#10b981]/50 hover:bg-white/[0.05] rounded-[24px] flex flex-col items-center justify-center gap-1.5 transition-all overflow-hidden shadow-inner">
                            <div className="absolute inset-0 bg-[#10b981]/0 group-hover:bg-[#10b981]/10 transition-colors duration-500 blur-xl" />
                            <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[#10b981] to-[#0ea5e9] p-[1px] shadow-[0_0_15px_rgba(16,185,129,0.4)] group-hover:shadow-[0_0_25px_rgba(16,185,129,0.6)] transition-all">
@@ -483,35 +529,45 @@ export default function SettlementsPage() {
         )}
       </main>
 
-      {/* ================= MANUAL ENTRY MODAL ================= */}
       <Dialog open={isManualEntryOpen} onOpenChange={setIsManualEntryOpen}>
         <DialogContent className="bg-[#050505]/95 backdrop-blur-3xl border border-white/10 text-slate-50 rounded-[40px] w-[95vw] max-w-md p-6 shadow-[0_0_80px_rgba(0,0,0,0.9)] overflow-hidden">
           <DialogHeader className="mb-4">
             <DialogTitle className="text-xl font-black text-white">New Manual Entry</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-             <div className="space-y-1.5">
-                <label className="text-[11px] font-bold text-slate-400 uppercase">Select Card</label>
-                <select value={manualCardId} onChange={(e) => setManualCardId(e.target.value)} className="w-full h-12 bg-white/[0.05] border border-white/10 rounded-xl px-3 text-xs font-bold text-white outline-none">
+             <div className="space-y-1.5 relative">
+                <label className="text-[11px] font-bold text-slate-400 uppercase ml-1 flex items-center gap-1.5">Select QR (Optional)</label>
+                <select value={manualQrId} onChange={(e) => setManualQrId(e.target.value)} className="w-full h-12 bg-white/[0.05] border border-white/10 rounded-xl px-4 text-xs font-bold text-white outline-none appearance-none focus:border-[#10b981]">
+                   <option value="" className="bg-[#050505] text-slate-500">None (Manual Entry)</option>
+                   {activeQrs.map(q => <option key={q.id} value={q.id} className="bg-[#050505]">{q.merchant_name}</option>)}
+                </select>
+                <ChevronDown className="absolute right-3 top-[38px] w-4 h-4 text-slate-500 pointer-events-none" />
+             </div>
+
+             <div className="space-y-1.5 relative">
+                <label className="text-[11px] font-bold text-slate-400 uppercase ml-1">Select Card</label>
+                <select value={manualCardId} onChange={(e) => setManualCardId(e.target.value)} className="w-full h-12 bg-white/[0.05] border border-white/10 rounded-xl px-4 text-xs font-bold text-white outline-none appearance-none focus:border-[#10b981]">
                    {accessibleCards.map(c => <option key={c.id} value={c.id} className="bg-[#050505]">{c.card_name} (**{c.last_4_digits})</option>)}
                 </select>
+                <ChevronDown className="absolute right-3 top-[38px] w-4 h-4 text-slate-500 pointer-events-none" />
              </div>
+
              <div className="space-y-1.5">
-                <label className="text-[11px] font-bold text-slate-400 uppercase">Amount</label>
-                <input type="number" value={manualAmount} onChange={(e) => setManualAmount(e.target.value)} placeholder="0.00" className="w-full h-12 bg-white/[0.05] border border-white/10 rounded-xl px-4 text-sm font-bold text-white outline-none" />
+                <label className="text-[11px] font-bold text-slate-400 uppercase ml-1">Amount</label>
+                <input type="number" value={manualAmount} onChange={(e) => setManualAmount(e.target.value)} placeholder="0.00" className="w-full h-12 bg-white/[0.05] border border-white/10 rounded-xl px-4 text-sm font-bold text-white outline-none focus:border-[#10b981]" />
              </div>
+
              <div className="space-y-1.5">
-                <label className="text-[11px] font-bold text-slate-400 uppercase">Remarks / Merchant Name</label>
-                <input type="text" value={manualRemarks} onChange={(e) => setManualRemarks(e.target.value)} placeholder="e.g. Petrol Pump / Friend" className="w-full h-12 bg-white/[0.05] border border-white/10 rounded-xl px-4 text-sm font-bold text-white outline-none" />
+                <label className="text-[11px] font-bold text-slate-400 uppercase ml-1">Remarks {manualQrId && "(Optional)"}</label>
+                <input type="text" value={manualRemarks} onChange={(e) => setManualRemarks(e.target.value)} placeholder="e.g. Petrol Pump / Friend" className="w-full h-12 bg-white/[0.05] border border-white/10 rounded-xl px-4 text-sm font-bold text-white outline-none focus:border-[#10b981]" />
              </div>
-             <Button onClick={handleManualEntry} disabled={isSettling} className="w-full h-14 rounded-2xl bg-[#10b981] hover:bg-[#10b981]/90 text-black font-black text-lg border-0 mt-4">
+             <Button onClick={handleManualEntry} disabled={isSettling} className="w-full h-14 rounded-2xl bg-[#10b981] hover:bg-[#10b981]/90 text-black font-black text-lg border-0 mt-4 shadow-[0_0_20px_rgba(16,185,129,0.3)]">
                {isSettling ? "Saving..." : "Add Entry"}
              </Button>
           </div>
         </DialogContent>
       </Dialog>
 
-      {/* ================= PARTIAL/FULL SETTLEMENT MODAL ================= */}
       <Dialog open={isSettleModalOpen} onOpenChange={setIsSettleModalOpen}>
         <DialogContent className="bg-[#050505]/95 backdrop-blur-3xl border border-white/10 text-slate-50 rounded-[40px] w-[95vw] max-w-md p-6 shadow-[0_0_80px_rgba(0,0,0,0.9)] overflow-hidden">
           <div className="absolute top-0 right-0 w-40 h-40 bg-[#10b981]/20 rounded-full blur-[50px] pointer-events-none" />

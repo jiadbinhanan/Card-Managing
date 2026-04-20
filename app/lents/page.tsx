@@ -11,13 +11,14 @@ import {
   User, 
   Users,
   IndianRupee,
-  Wallet,
   CreditCard,
   Banknote,
   Edit3,
   ChevronDown,
   CalendarDays,
-  ShieldCheck
+  HandCoins,
+  History,
+  ArrowRight
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -26,18 +27,27 @@ import { supabase } from "@/lib/supabase";
 import Link from "next/link";
 
 // --- Interfaces ---
+interface PaymentHistory {
+  id: string;
+  date: string;
+  amount: number;
+  method: 'cash' | 'card';
+  card_name?: string;
+}
+
 interface LentRecord {
   id: string;
   borrower_name: string;
   amount: number;
   lent_date: string;
   due_date: string;
-  status: string;
+  status: string; // 'unpaid', 'partial', 'paid'
   given_by: string;
   funding_source: string;
   remarks: string;
   created_at: string;
   card_id?: string;
+  payment_history?: PaymentHistory[] | null;
   profiles?: { name: string; avatar_url?: string };
   cards?: { card_name: string; last_4_digits: string };
 }
@@ -53,6 +63,7 @@ interface CardData {
   card_name: string;
   last_4_digits: string;
   is_primary: boolean;
+  total_limit: number;
   parent_card_id?: string;
 }
 
@@ -69,36 +80,43 @@ export default function LentsPage() {
 
   const [allCards, setAllCards] = useState<CardData[]>([]);
   const [allCardAccess, setAllCardAccess] = useState<CardAccess[]>([]);
-  const [accessibleCards, setAccessibleCards] = useState<CardData[]>([]); // Header dropdown cards
+  const [accessibleCards, setAccessibleCards] = useState<CardData[]>([]); 
 
   const [userCashMap, setUserCashMap] = useState<Record<string, number>>({});
-  const [isLoading, setIsLoading] = useState(true);
+  const [cardAvailableMap, setCardAvailableMap] = useState<Record<string, number>>({});
 
+  const [isLoading, setIsLoading] = useState(true);
   const [imgError, setImgError] = useState(false);
 
-  // Global Header State
   const { globalSelectedCardId, setGlobalSelectedCardId } = useCardStore();
-
-  // UI States
-  const [isModalOpen, setIsModalOpen] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  // Form States
+  // --- LENDING ENTRY MODAL STATES ---
+  const [isModalOpen, setIsModalOpen] = useState(false);
   const [borrowerName, setBorrowerName] = useState("");
   const [amount, setAmount] = useState("");
   const [fundSource, setFundSource] = useState<"cash_on_hand" | "credit_card">("cash_on_hand");
   const [selectedCardId, setSelectedCardId] = useState("");
-  const [givenByUserId, setGivenByUserId] = useState("");
   const [lentDate, setLentDate] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [remarks, setRemarks] = useState("");
   const [isSaving, setIsSaving] = useState(false);
 
+  // --- COLLECTION MODAL STATES ---
+  const [isCollectModalOpen, setIsCollectModalOpen] = useState(false);
+  const [collectingLent, setCollectingLent] = useState<LentRecord | null>(null);
+  const [collectType, setCollectType] = useState<"full" | "partial">("full");
+  const [collectAmount, setCollectAmount] = useState<string>("");
+  const [receiveMethod, setReceiveMethod] = useState<"cash" | "card">("cash");
+  const [receiveCardId, setReceiveCardId] = useState<string>("");
+
   useEffect(() => {
     fetchInitialData();
 
-    const channel = supabase.channel('lents_changes')
+    const channel = supabase.channel('lents_ledger_changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'short_term_lents' }, () => fetchLentsData(allCards))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'cash_on_hand' }, () => fetchLentsData(allCards))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'card_transactions' }, () => fetchLentsData(allCards))
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
@@ -112,9 +130,7 @@ export default function LentsPage() {
   const getDefaultDueDate = () => {
      const now = new Date();
      let target = new Date(now.getFullYear(), now.getMonth(), 26); 
-     if (now > target) {
-       target = new Date(now.getFullYear(), now.getMonth() + 1, 26);
-     }
+     if (now > target) target = new Date(now.getFullYear(), now.getMonth() + 1, 26);
      return target.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
   };
 
@@ -122,7 +138,6 @@ export default function LentsPage() {
     setIsLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
 
-    // Global Data Fetch
     const { data: profData } = await supabase.from('profiles').select('id, name, avatar_url');
     const { data: cData } = await supabase.from('cards').select('*');
     const { data: aData } = await supabase.from('card_access').select('*');
@@ -139,10 +154,8 @@ export default function LentsPage() {
       const myProfile = profs.find(p => p.id === user.id);
       if (myProfile) {
          setCurrentUser({ ...myProfile, avatar_url: cleanUrl(myProfile.avatar_url) });
-         setGivenByUserId(myProfile.id);
       }
 
-      // Cards accessible to Logged In User for Header Filter
       const myCardIds = accessList.filter(a => a.user_id === user.id).map(a => a.card_id);
       const myCards = cardsList.filter(c => myCardIds.includes(c.id)).sort((a,b) => (a.is_primary === b.is_primary ? 0 : a.is_primary ? -1 : 1));
       setAccessibleCards(myCards);
@@ -165,11 +178,11 @@ export default function LentsPage() {
       }
     }
 
+    // 1. Fetch Lents
     let lentsQuery = supabase.from('short_term_lents')
       .select('*, profiles:given_by(name, avatar_url), cards(card_name, last_4_digits)')
       .order('lent_date', { ascending: false });
 
-    // If a specific card is selected, show only lents funded by that card family
     if (globalSelectedCardId !== 'all' && targetCardIds.length > 0) {
        lentsQuery = lentsQuery.in('card_id', targetCardIds);
     }
@@ -177,68 +190,129 @@ export default function LentsPage() {
     const { data: lData } = await lentsQuery;
     if (lData) setLents(lData as any);
 
-    // Fetch Cash for all users
+    // 2. Fetch Cash On Hand
     const { data: coh } = await supabase.from('cash_on_hand').select('*');
     const cashMap: Record<string, number> = {};
     coh?.forEach(c => { cashMap[c.user_id] = Number(c.current_balance); });
     setUserCashMap(cashMap);
+
+    // 3. Exact Dashboard Logic for Card Available Limits
+    const { data: txs } = await supabase.from('card_transactions').select('amount, type, payment_method, card_id, status');
+    const { data: spends } = await supabase.from('spends').select('amount, payment_method, user_id, card_id');
+
+    const availableMap: Record<string, number> = {};
+
+    currentCards.filter(c => c.is_primary).forEach(primaryCard => {
+       const familyCardIds = currentCards.filter(c => c.id === primaryCard.id || c.parent_card_id === primaryCard.id).map(c => c.id);
+
+       const withdrawals = txs?.filter(t => t.type === 'withdrawal' && t.status === 'pending_settlement' && t.card_id && familyCardIds.includes(t.card_id)).reduce((sum, t) => sum + Number(t.amount), 0) || 0;
+       const billPayments = txs?.filter(t => t.type === 'bill_payment' && t.card_id && familyCardIds.includes(t.card_id)).reduce((sum, t) => sum + Number(t.amount), 0) || 0;
+       const ccSpends = spends?.filter(s => s.payment_method === 'credit_card' && s.card_id && familyCardIds.includes(s.card_id)).reduce((sum, s) => sum + Number(s.amount), 0) || 0;
+
+       const available = Number(primaryCard.total_limit) - withdrawals - ccSpends + billPayments;
+
+       familyCardIds.forEach(id => {
+           availableMap[id] = available;
+       });
+    });
+    setCardAvailableMap(availableMap);
   };
 
-  // --- MODAL DYNAMIC CARD LIST ---
-  const entryUserAccessibleCardIds = allCardAccess.filter(a => a.user_id === givenByUserId).map(a => a.card_id);
-  const entryUserCards = allCards.filter(c => entryUserAccessibleCardIds.includes(c.id)).sort((a,b) => (a.is_primary === b.is_primary ? 0 : a.is_primary ? -1 : 1));
+  // --- Cash Update using cash_on_hand_ledger ---
+  const updateCashBalance = async (userId: string, amt: number, type: 'credit' | 'debit', note: string) => {
+     // 1. Get current balance
+     const { data: coh } = await supabase.from('cash_on_hand').select('*').eq('user_id', userId).maybeSingle();
+     const currentBalance = coh ? Number(coh.current_balance) : 0;
+     const newBalance = type === 'credit' ? currentBalance + amt : currentBalance - amt;
 
+     // 2. Update cash_on_hand table (Total tracking)
+     await supabase.from('cash_on_hand').upsert({
+        user_id: userId,
+        current_balance: newBalance
+     });
+
+     // 3. Insert into cash_on_hand_ledger (History tracking)
+     await supabase.from('cash_on_hand_ledger').insert({
+        user_id: userId,
+        amount: amt,
+        transaction_type: type,
+        remarks: note,
+        transaction_date: new Date().toISOString()
+     });
+  };
+
+  // --- RECORD NEW LENDING ---
   const handleSaveLent = async () => {
+    if (!currentUser) return;
     const amtNum = Number(amount);
+    const actorCash = userCashMap[currentUser.id] || 0;
+
+    let activeLimit = 0;
+    if (fundSource === 'credit_card' && selectedCardId) {
+        activeLimit = cardAvailableMap[selectedCardId] || 0;
+    }
+
     if (!borrowerName || isNaN(amtNum) || amtNum <= 0 || !dueDate || !lentDate) {
       alert("Please fill all details correctly.");
       return;
     }
 
-    const actorCash = userCashMap[givenByUserId] || 0;
-
     if (fundSource === 'cash_on_hand' && amtNum > actorCash) {
-       alert(`The selected user only has ₹${actorCash} in collected cash.`);
+       alert(`Insufficient Cash! You only have ₹${actorCash.toLocaleString()} available.`);
        return;
     }
 
-    if (fundSource === 'credit_card' && !selectedCardId) {
-       alert("Please select a card to swipe from.");
+    if (fundSource === 'credit_card' && amtNum > activeLimit) {
+       alert(`Insufficient Limit! The selected card only has ₹${activeLimit.toLocaleString()} available.`);
        return;
     }
 
     setIsSaving(true);
 
     try {
-      // 1. Record the Lent
+      // Cash Update with Ledger History
+      if (fundSource === 'cash_on_hand') {
+         await updateCashBalance(currentUser.id, amtNum, 'debit', `Lent given to ${borrowerName}`);
+      }
+
+      // Card Transactions & Spends Update
+      if (fundSource === 'credit_card') {
+         await supabase.from('card_transactions').insert({
+            card_id: selectedCardId,
+            amount: amtNum,
+            type: 'withdrawal',
+            status: 'pending_settlement',
+            transaction_date: lentDate,
+            recorded_by: currentUser.id,
+            remarks: `Lent given to ${borrowerName}`
+         });
+
+         await supabase.from('spends').insert({
+            user_id: currentUser.id,
+            amount: amtNum,
+            spend_type: 'personal',
+            payment_method: 'credit_card',
+            spend_date: lentDate,
+            card_id: selectedCardId,
+            remarks: `Lent to ${borrowerName} from card`
+         });
+      }
+
+      // Record in Lents Table
       const { error: lentError } = await supabase.from('short_term_lents').insert({
         borrower_name: borrowerName,
         amount: amtNum,
         lent_date: lentDate,
         due_date: dueDate,
         status: 'unpaid',
-        given_by: givenByUserId,
+        given_by: currentUser.id,
         funding_source: fundSource,
         remarks: remarks,
-        card_id: fundSource === 'credit_card' ? selectedCardId : null
+        card_id: fundSource === 'credit_card' ? selectedCardId : null,
+        payment_history: [] // Start with empty JSON array
       });
 
       if (lentError) throw lentError;
-
-      // 2. Process Deductions & Spends
-      if (fundSource === 'cash_on_hand') {
-         await supabase.from('cash_on_hand').upsert({ user_id: givenByUserId, current_balance: actorCash - amtNum });
-      } else if (fundSource === 'credit_card') {
-         await supabase.from('spends').insert({
-            user_id: givenByUserId,
-            amount: amtNum,
-            spend_type: 'personal', 
-            payment_method: 'credit_card',
-            remarks: `Lent to ${borrowerName}${remarks ? ` - ${remarks}` : ''}`,
-            spend_date: lentDate, // Match the lent date
-            card_id: selectedCardId
-         });
-      }
 
       setIsModalOpen(false);
       fetchLentsData(allCards);
@@ -249,12 +323,115 @@ export default function LentsPage() {
     }
   };
 
-  const markAsPaid = async (id: string) => {
+  // --- LENT COLLECTION & PARTIAL RECOVERY ---
+  const handleCollectLent = async () => {
+     if (!collectingLent || !currentUser) return;
+
+     const totalPaidBefore = (collectingLent.payment_history || []).reduce((s, p) => s + p.amount, 0);
+     const remainingDue = collectingLent.amount - totalPaidBefore;
+     const amtNum = collectType === 'full' ? remainingDue : Number(collectAmount);
+
+     if (isNaN(amtNum) || amtNum <= 0 || amtNum > remainingDue) {
+        alert("Invalid collection amount!");
+        return;
+     }
+
+     setIsSaving(true);
+     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
      try {
-        await supabase.from('short_term_lents').update({ status: 'paid' }).eq('id', id);
+        // Update Lent Table JSON History
+        const currentHistory = collectingLent.payment_history || [];
+        const newPayment: PaymentHistory = {
+           id: crypto.randomUUID(),
+           date: today,
+           amount: amtNum,
+           method: receiveMethod,
+           card_name: receiveMethod === 'card' ? accessibleCards.find(c=>c.id === receiveCardId)?.card_name : 'Cash'
+        };
+        const updatedHistory = [...currentHistory, newPayment];
+        const newTotalPaid = updatedHistory.reduce((s, p) => s + p.amount, 0);
+        const newStatus = newTotalPaid >= collectingLent.amount ? 'paid' : 'partial';
+
+        await supabase.from('short_term_lents').update({
+           status: newStatus,
+           payment_history: updatedHistory
+        }).eq('id', collectingLent.id);
+
+        // Process Received Funds
+        if (receiveMethod === 'cash') {
+           // Receive to Cash (Already contains cash_on_hand_ledger entry in updateCashBalance function)
+           await updateCashBalance(currentUser.id, amtNum, 'credit', `Collected lent from ${collectingLent.borrower_name}`);
+        } else if (receiveMethod === 'card') {
+           // --- NEW LOGIC: Check Billing Cycle for the current month ---
+           let activeCycleId = null;
+
+           const now = new Date();
+           const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+           const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
+           const { data: cycles } = await supabase
+              .from('billing_cycles')
+              .select('*')
+              .eq('card_id', receiveCardId)
+              .gte('billing_month', startOfMonth)
+              .lte('billing_month', endOfMonth);
+
+           if (cycles && cycles.length > 0) {
+              const cycle = cycles[0]; // Assuming one billing cycle per month
+              const generatedAmt = Number(cycle.generated_amount);
+              const paidAmt = Number(cycle.paid_amount);
+
+              if (paidAmt < generatedAmt) {
+                 const newPaidAmt = paidAmt + amtNum;
+                 let cycleStatus = cycle.status;
+
+                 if (newPaidAmt >= generatedAmt) cycleStatus = 'paid';
+                 else if (newPaidAmt > 0) cycleStatus = 'partially_paid';
+
+                 await supabase.from('billing_cycles').update({
+                    paid_amount: newPaidAmt,
+                    status: cycleStatus
+                 }).eq('id', cycle.id);
+
+                 activeCycleId = cycle.id;
+              }
+           }
+
+           // Receive to Card (with billing_cycle_id if applicable)
+           await supabase.from('card_transactions').insert({
+              card_id: receiveCardId,
+              amount: amtNum,
+              transaction_date: today,
+              type: 'bill_payment',
+              status: 'settled',
+              recorded_by: currentUser.id,
+              payment_method: 'lent_recovery',
+              remarks: `Collected lent from ${collectingLent.borrower_name}`,
+              billing_cycle_id: activeCycleId // If no unpaid bill, it stays null
+           });
+        }
+
+        // Negative Spends Entry (CRITICAL): ONLY if original lent was from a Credit Card
+        // This flawlessly offsets the Personal Due in Dashboard.
+        if (collectingLent.funding_source === 'credit_card') {
+           await supabase.from('spends').insert({
+              user_id: currentUser.id,
+              amount: -amtNum,
+              spend_type: 'personal',
+              payment_method: 'credit_card', 
+              spend_date: today,
+              card_id: receiveMethod === 'card' ? receiveCardId : collectingLent.card_id,
+              remarks: `Lent recovery from ${collectingLent.borrower_name}`
+           });
+        }
+
+        setIsCollectModalOpen(false);
         fetchLentsData(allCards);
-     } catch (error: any) {
-        alert("Error updating status: " + error.message);
+     } catch (err: any) {
+        alert("Error during collection: " + err.message);
+     } finally {
+        setIsSaving(false);
      }
   };
 
@@ -263,25 +440,49 @@ export default function LentsPage() {
     setAmount("");
     setRemarks("");
     setFundSource("cash_on_hand");
-    setGivenByUserId(currentUser?.id || "");
     setLentDate(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }));
     setDueDate(getDefaultDueDate());
 
-    // Auto-select card if a specific one is chosen in global filter
     if (globalSelectedCardId !== 'all') {
        setSelectedCardId(globalSelectedCardId);
-    } else {
-       setSelectedCardId(entryUserCards.length > 0 ? entryUserCards[0].id : "");
+    } else if (accessibleCards.length > 0) {
+       setSelectedCardId(accessibleCards[0].id);
     }
 
     setIsModalOpen(true);
   };
 
-  const totalReceivable = lents.filter(l => l.status === "unpaid").reduce((acc, curr) => acc + Number(curr.amount), 0);
+  const openCollectModal = (loan: LentRecord) => {
+     setCollectingLent(loan);
+     setCollectType("full");
+     setCollectAmount("");
+     setReceiveMethod("cash");
+
+     if (globalSelectedCardId !== 'all') {
+        setReceiveCardId(globalSelectedCardId);
+     } else if (accessibleCards.length > 0) {
+        setReceiveCardId(accessibleCards[0].id);
+     }
+
+     setIsCollectModalOpen(true);
+  };
+
+  // Remaining Calc Helpers
+  const getPaidAmount = (loan: LentRecord) => (loan.payment_history || []).reduce((s, p) => s + p.amount, 0);
+  const getRemainingAmount = (loan: LentRecord) => loan.amount - getPaidAmount(loan);
+
+  const activeLents = lents.filter(l => l.status !== "paid");
+  const totalReceivable = activeLents.reduce((acc, curr) => acc + getRemainingAmount(curr), 0);
+
+  const actorCash = userCashMap[currentUser?.id || ""] || 0;
 
   const toggleExpand = (id: string) => {
      setExpandedId(expandedId === id ? null : id);
   };
+
+  // User's own accessible cards for entry modal
+  const entryUserAccessibleCardIds = allCardAccess.filter(a => a.user_id === currentUser?.id).map(a => a.card_id);
+  const entryUserCards = allCards.filter(c => entryUserAccessibleCardIds.includes(c.id)).sort((a,b) => (a.is_primary === b.is_primary ? 0 : a.is_primary ? -1 : 1));
 
   return (
     <div className="relative min-h-screen bg-[#030014] text-slate-50 font-sans pb-28 overflow-x-hidden selection:bg-[#f59e0b]/30">
@@ -301,7 +502,7 @@ export default function LentsPage() {
         />
       </div>
 
-      {/* ================= HEADER (WITH AVATAR & CARD SELECTOR) ================= */}
+      {/* ================= HEADER ================= */}
       <header className="relative z-10 px-5 pt-8 pb-3 sticky top-0 bg-[#030014]/70 backdrop-blur-3xl border-b border-white/5 shadow-[0_15px_40px_rgba(0,0,0,0.8)] flex justify-between items-center">
         <div className="flex items-center gap-3">
            <Link href="/settings">
@@ -366,7 +567,7 @@ export default function LentsPage() {
           <div className="absolute inset-0 bg-gradient-to-br from-[#f59e0b]/10 to-[#ef4444]/5 z-0" />
 
           <div className="relative z-10 flex flex-col items-center text-center mt-2">
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-1">Total Receivable</span>
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-1">Total Due (Remaining)</span>
             <div className="text-4xl font-black font-space tracking-tight bg-gradient-to-r from-[#f59e0b] via-[#fbbf24] to-[#ef4444] bg-clip-text text-transparent drop-shadow-[0_0_20px_rgba(245,158,11,0.5)]">
               ₹{totalReceivable.toLocaleString('en-IN')}
             </div>
@@ -394,10 +595,12 @@ export default function LentsPage() {
               <AnimatePresence mode="popLayout">
                 {lents.map((loan) => {
                   const isExpanded = expandedId === loan.id;
-                  const isUnpaid = loan.status === "unpaid";
+                  const remainingAmount = getRemainingAmount(loan);
+                  const isPaid = loan.status === "paid";
+                  const isPartial = loan.status === "partial";
                   const daysToDue = Math.ceil((new Date(loan.due_date).getTime() - new Date().getTime()) / (1000 * 3600 * 24));
-                  const isUrgent = isUnpaid && daysToDue <= 3;
-                  const displayDate = loan.lent_date || loan.created_at.split('T')[0]; // Fallback to created_at if lent_date is missing
+                  const isUrgent = !isPaid && daysToDue <= 3;
+                  const displayDate = loan.lent_date || loan.created_at.split('T')[0];
 
                   return (
                     <motion.div
@@ -410,13 +613,12 @@ export default function LentsPage() {
                       onClick={() => toggleExpand(loan.id)}
                       className={`group relative p-4 bg-white/[0.03] border rounded-[24px] backdrop-blur-xl flex flex-col hover:bg-white/[0.05] transition-all cursor-pointer overflow-hidden shadow-inner ${
                         isUrgent ? "border-[#ef4444]/40 shadow-[0_0_20px_rgba(239,68,68,0.1)]" : "border-white/5 hover:border-white/10"
-                      } ${!isUnpaid ? "opacity-60 grayscale-[30%] hover:grayscale-0 hover:opacity-100" : ""}`}
+                      } ${isPaid ? "opacity-60 grayscale-[30%] hover:grayscale-0 hover:opacity-100" : ""}`}
                     >
-                      {/* Top Compact View */}
                       <div className="flex justify-between items-center relative z-10 w-full">
                         <div className="flex items-center gap-3 w-[65%]">
-                          <div className={`w-11 h-11 shrink-0 rounded-[14px] flex items-center justify-center border border-white/5 shadow-inner ${isUnpaid ? 'bg-[#f59e0b]/10' : 'bg-emerald-500/10'}`}>
-                            <User className={`w-5 h-5 ${isUnpaid ? 'text-[#f59e0b]' : 'text-emerald-400'}`} />
+                          <div className={`w-11 h-11 shrink-0 rounded-[14px] flex items-center justify-center border border-white/5 shadow-inner ${isPaid ? 'bg-emerald-500/10' : (isPartial ? 'bg-amber-500/10' : 'bg-[#f59e0b]/10')}`}>
+                            <User className={`w-5 h-5 ${isPaid ? 'text-emerald-400' : (isPartial ? 'text-amber-400' : 'text-[#f59e0b]')}`} />
                           </div>
                           <div className="truncate">
                             <h3 className="text-sm font-bold text-slate-100 mb-0.5 truncate">{loan.borrower_name}</h3>
@@ -431,22 +633,27 @@ export default function LentsPage() {
 
                         <div className="flex flex-col items-end gap-1 relative z-10 shrink-0">
                           <div className="text-base font-black text-white tracking-tight flex items-center gap-1">
-                            ₹{loan.amount.toLocaleString('en-IN')}
+                            ₹{remainingAmount.toLocaleString('en-IN')}
                             <ChevronDown className={`w-3.5 h-3.5 opacity-50 transition-transform duration-300 ${isExpanded ? 'rotate-180' : ''}`} />
                           </div>
-                          {isUnpaid ? (
-                            <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider bg-[#ef4444]/10 text-[#ef4444] px-1.5 py-0.5 rounded border border-[#ef4444]/20">
-                              Unpaid
-                            </span>
+
+                          {/* Dynamic Status Badges */}
+                          {isPaid ? (
+                             <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider bg-[#10b981]/10 text-[#10b981] px-1.5 py-0.5 rounded border border-[#10b981]/20">
+                                <CheckCircle2 className="w-2.5 h-2.5" /> Paid
+                             </span>
+                          ) : isPartial ? (
+                             <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider bg-amber-500/10 text-amber-500 px-1.5 py-0.5 rounded border border-amber-500/20">
+                                Partial
+                             </span>
                           ) : (
-                            <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider bg-[#10b981]/10 text-[#10b981] px-1.5 py-0.5 rounded border border-[#10b981]/20">
-                              <CheckCircle2 className="w-2.5 h-2.5" /> Paid
-                           </span>
+                             <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider bg-[#ef4444]/10 text-[#ef4444] px-1.5 py-0.5 rounded border border-[#ef4444]/20">
+                                Unpaid
+                             </span>
                           )}
                         </div>
                       </div>
 
-                      {/* Expanded Detailed View */}
                       <AnimatePresence>
                          {isExpanded && (
                             <motion.div 
@@ -455,6 +662,7 @@ export default function LentsPage() {
                                exit={{ height: 0, opacity: 0, marginTop: 0 }}
                                className="relative z-10 border-t border-white/10 pt-4 overflow-hidden"
                             >
+                               {/* Loan Details */}
                                <div className="grid grid-cols-2 gap-y-4 gap-x-2 text-xs mb-4">
                                   <div>
                                      <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Funded From</p>
@@ -463,8 +671,8 @@ export default function LentsPage() {
                                      </p>
                                   </div>
                                   <div>
-                                     <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Given By</p>
-                                     <p className="font-bold text-slate-200">{loan.profiles?.name.split(' ')[0] || 'Unknown'}</p>
+                                     <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Total Lent</p>
+                                     <p className="font-bold text-slate-200">₹{loan.amount.toLocaleString()}</p>
                                   </div>
                                   {loan.funding_source === 'credit_card' && loan.cards && (
                                      <div className="col-span-2">
@@ -482,12 +690,32 @@ export default function LentsPage() {
                                   </div>
                                </div>
 
-                               {isUnpaid && (
+                               {/* JSON Payment History Render */}
+                               {loan.payment_history && loan.payment_history.length > 0 && (
+                                  <div className="mb-4 bg-black/30 rounded-xl p-3 border border-white/5">
+                                     <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-2 flex items-center gap-1"><History className="w-3 h-3" /> Recovery History</p>
+                                     <div className="space-y-2">
+                                        {loan.payment_history.map((ph, idx) => (
+                                           <div key={idx} className="flex justify-between items-center text-xs">
+                                              <div className="flex items-center gap-2">
+                                                 <div className="w-1.5 h-1.5 rounded-full bg-[#10b981]" />
+                                                 <span className="text-slate-300">{new Date(ph.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>
+                                                 <span className="text-[9px] bg-white/10 px-1.5 rounded text-slate-400">{ph.method === 'card' ? `Card (${ph.card_name})` : 'Cash'}</span>
+                                              </div>
+                                              <span className="font-bold text-[#10b981]">+₹{ph.amount.toLocaleString()}</span>
+                                           </div>
+                                        ))}
+                                     </div>
+                                  </div>
+                               )}
+
+                               {/* Collection Button */}
+                               {!isPaid && (
                                   <Button 
-                                    onClick={(e) => { e.stopPropagation(); markAsPaid(loan.id); }}
-                                    className="w-full h-10 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-xl text-xs font-bold transition-all"
+                                    onClick={(e) => { e.stopPropagation(); openCollectModal(loan); }}
+                                    className="w-full h-11 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-xl text-xs font-black transition-all shadow-[0_0_15px_rgba(16,185,129,0.1)]"
                                   >
-                                     <CheckCircle2 className="w-4 h-4 mr-2" /> Mark as Settled & Paid
+                                     <HandCoins className="w-4 h-4 mr-2" /> Collect / Mark Received
                                   </Button>
                                )}
                             </motion.div>
@@ -511,7 +739,7 @@ export default function LentsPage() {
 
       </main>
 
-      {/* ================= ADD LENT FAB & MODAL ================= */}
+      {/* ================= ADD LENT FAB ================= */}
       <motion.button
         onClick={openEntryModal}
         whileHover={{ scale: 1.05 }}
@@ -521,6 +749,7 @@ export default function LentsPage() {
         <Plus className="w-7 h-7" />
       </motion.button>
 
+      {/* ================= LENDING ENTRY MODAL ================= */}
       <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
         <DialogContent className="bg-[#050505]/95 backdrop-blur-3xl border border-white/10 text-slate-50 rounded-[40px] w-[95vw] max-w-md p-0 overflow-hidden shadow-[0_0_80px_rgba(0,0,0,0.9)]">
           <div className="max-h-[85vh] overflow-y-auto custom-scrollbar p-6">
@@ -566,7 +795,67 @@ export default function LentsPage() {
                  </div>
               </div>
 
-              {/* Date & Given By Row */}
+              {/* Funding Source */}
+              <div className="space-y-1.5">
+                 <label className="text-[11px] font-bold text-slate-400 uppercase ml-1 flex justify-between">
+                    Funding Source <span className="text-[9px] lowercase text-[#f59e0b]">(Where is money coming from?)</span>
+                 </label>
+                 <div className="grid grid-cols-2 gap-3">
+                   <button 
+                     onClick={() => setFundSource("cash_on_hand")}
+                     className={`flex flex-col items-center justify-center p-3 rounded-2xl transition-all border ${
+                        fundSource === "cash_on_hand"
+                        ? "bg-[#f59e0b]/20 text-[#fbbf24] border-[#f59e0b]/50 shadow-[0_0_15px_rgba(245,158,11,0.2)]" 
+                        : "bg-white/[0.02] text-slate-400 border-white/5 hover:bg-white/[0.05]"
+                     }`}
+                   >
+                     <div className="flex items-center gap-1.5 mb-1"><Banknote className="w-4 h-4" /><span className="text-xs font-bold">My Cash</span></div>
+                     <span className="text-[9px] font-black opacity-70">Avail: ₹{actorCash.toLocaleString('en-IN')}</span>
+                   </button>
+                   <button 
+                     onClick={() => setFundSource("credit_card")}
+                     className={`flex flex-col items-center justify-center p-3 rounded-2xl transition-all border ${
+                        fundSource === "credit_card"
+                        ? "bg-indigo-500/20 text-indigo-400 border-indigo-500/50 shadow-[0_0_15px_rgba(99,102,241,0.2)]" 
+                        : "bg-white/[0.02] text-slate-400 border-white/5 hover:bg-white/[0.05]"
+                     }`}
+                   >
+                     <div className="flex items-center gap-1.5 mb-1"><CreditCard className="w-4 h-4" /><span className="text-xs font-bold">Card Swipe</span></div>
+                     <span className="text-[9px] font-black opacity-70">Swipe Directly</span>
+                   </button>
+                 </div>
+              </div>
+
+              {/* Card Selector (If Credit Card) */}
+              <AnimatePresence>
+                 {fundSource === 'credit_card' && (
+                    <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="space-y-1.5">
+                       <label className="text-[11px] font-bold text-indigo-400 uppercase ml-1 flex items-center gap-1.5">
+                         <CreditCard className="w-3.5 h-3.5" /> Select Card
+                       </label>
+                       <div className="relative">
+                          <select 
+                             value={selectedCardId} 
+                             onChange={(e) => setSelectedCardId(e.target.value)}
+                             className="w-full h-14 bg-indigo-500/10 border border-indigo-500/30 rounded-2xl px-4 text-sm font-bold text-white outline-none focus:border-indigo-400 appearance-none shadow-[0_0_15px_rgba(99,102,241,0.1)]"
+                          >
+                             <option value="" disabled className="bg-black text-slate-500">Select a Card to swipe...</option>
+                             {entryUserCards.map(c => {
+                                const avail = cardAvailableMap[c.id] || 0;
+                                return (
+                                   <option key={c.id} value={c.id} className="bg-black">
+                                      {c.card_name} (**{c.last_4_digits}) - Avail: ₹{avail.toLocaleString()}
+                                   </option>
+                                );
+                             })}
+                          </select>
+                          <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-indigo-400 pointer-events-none" />
+                       </div>
+                    </motion.div>
+                 )}
+              </AnimatePresence>
+
+              {/* Dates & Remarks */}
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                    <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Lent On (Date)</label>
@@ -581,80 +870,6 @@ export default function LentsPage() {
                    </div>
                 </div>
                 <div className="space-y-1.5">
-                   <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Given By User</label>
-                   <div className="relative">
-                      <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
-                      <select 
-                         value={givenByUserId} 
-                         onChange={(e) => setGivenByUserId(e.target.value)}
-                         className="w-full h-12 bg-white/[0.03] border border-white/10 rounded-xl text-xs font-bold text-white pl-3 pr-8 outline-none focus:border-[#f59e0b] transition-all appearance-none"
-                      >
-                         {allProfiles.map(p => (
-                            <option key={p.id} value={p.id} className="bg-black">{p.name.split(' ')[0]}</option>
-                         ))}
-                      </select>
-                   </div>
-                </div>
-              </div>
-
-              {/* Funding Source */}
-              <div className="space-y-1.5">
-                 <label className="text-[11px] font-bold text-slate-400 uppercase ml-1 flex justify-between">
-                    Funding Source <span className="text-[9px] lowercase text-[#f59e0b]">(How did you pay them?)</span>
-                 </label>
-                 <div className="grid grid-cols-2 gap-3">
-                   <button 
-                     onClick={() => setFundSource("cash_on_hand")}
-                     className={`flex flex-col items-center justify-center p-3 rounded-2xl transition-all border ${
-                        fundSource === "cash_on_hand"
-                        ? "bg-[#f59e0b]/20 text-[#fbbf24] border-[#f59e0b]/50 shadow-[0_0_15px_rgba(245,158,11,0.2)]" 
-                        : "bg-white/[0.02] text-slate-400 border-white/5 hover:bg-white/[0.05]"
-                     }`}
-                   >
-                     <div className="flex items-center gap-1.5 mb-1"><Banknote className="w-4 h-4" /><span className="text-xs font-bold">My Cash</span></div>
-                     <span className="text-[9px] font-black opacity-70">Bal: ₹{(userCashMap[givenByUserId] || 0).toLocaleString()}</span>
-                   </button>
-                   <button 
-                     onClick={() => setFundSource("credit_card")}
-                     className={`flex flex-col items-center justify-center p-3 rounded-2xl transition-all border ${
-                        fundSource === "credit_card"
-                        ? "bg-indigo-500/20 text-indigo-400 border-indigo-500/50 shadow-[0_0_15px_rgba(99,102,241,0.2)]" 
-                        : "bg-white/[0.02] text-slate-400 border-white/5 hover:bg-white/[0.05]"
-                     }`}
-                   >
-                     <div className="flex items-center gap-1.5 mb-1"><CreditCard className="w-4 h-4" /><span className="text-xs font-bold">Card Swipe</span></div>
-                     <span className="text-[9px] font-black opacity-70">Creates a Spend Entry</span>
-                   </button>
-                 </div>
-              </div>
-
-              {/* If Card Swipe, Select Card (Filtered by selected User) */}
-              <AnimatePresence>
-                 {fundSource === 'credit_card' && (
-                    <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="space-y-1.5">
-                       <label className="text-[11px] font-bold text-indigo-400 uppercase ml-1 flex items-center gap-1.5">
-                         <CreditCard className="w-3.5 h-3.5" /> Attach Card
-                       </label>
-                       <div className="relative">
-                          <select 
-                             value={selectedCardId} 
-                             onChange={(e) => setSelectedCardId(e.target.value)}
-                             className="w-full h-14 bg-indigo-500/10 border border-indigo-500/30 rounded-2xl px-4 text-sm font-bold text-white outline-none focus:border-indigo-400 appearance-none shadow-[0_0_15px_rgba(99,102,241,0.1)]"
-                          >
-                             <option value="" disabled className="bg-black text-slate-500">Select a Card to swipe...</option>
-                             {entryUserCards.map(c => (
-                                <option key={c.id} value={c.id} className="bg-black">{c.card_name} (**{c.last_4_digits})</option>
-                             ))}
-                          </select>
-                          <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-indigo-400 pointer-events-none" />
-                       </div>
-                    </motion.div>
-                 )}
-              </AnimatePresence>
-
-              {/* Due Date & Remarks */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
                    <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Est. Due Date</label>
                    <div className="relative">
                       <CalendarDays className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
@@ -666,7 +881,7 @@ export default function LentsPage() {
                       />
                    </div>
                 </div>
-                <div className="space-y-1.5">
+                <div className="col-span-2 space-y-1.5 mt-2">
                    <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Remarks</label>
                    <div className="relative flex items-center bg-white/[0.03] border border-white/10 rounded-xl h-12 px-3 focus-within:border-[#f59e0b] transition-colors">
                       <Edit3 className="w-3.5 h-3.5 text-slate-500 mr-2" />
@@ -675,23 +890,144 @@ export default function LentsPage() {
                          value={remarks} 
                          onChange={(e) => setRemarks(e.target.value)} 
                          placeholder="Optional details"
-                         className="bg-transparent border-none outline-none w-full text-[11px] font-bold text-white placeholder:text-slate-600"
+                         className="bg-transparent border-none outline-none w-full text-[12px] font-bold text-white placeholder:text-slate-600"
                       />
                    </div>
                 </div>
               </div>
 
+              {/* Dynamic Action Button */}
               <div className="pt-4">
-                <Button 
-                  onClick={handleSaveLent}
-                  disabled={isSaving}
-                  className="w-full h-14 rounded-2xl bg-gradient-to-r from-[#f59e0b] to-[#ef4444] hover:opacity-90 text-white font-black text-lg shadow-[0_0_30px_rgba(245,158,11,0.4)] border-0 disabled:opacity-50 transition-all"
-                >
-                  {isSaving ? "Saving Record..." : "Confirm Lending"}
-                </Button>
+                {(() => {
+                   const amtNum = Number(amount);
+                   const isNoAmount = isNaN(amtNum) || amtNum <= 0;
+                   let isInsufficient = false;
+
+                   if (fundSource === 'cash_on_hand' && amtNum > actorCash) isInsufficient = true;
+                   if (fundSource === 'credit_card' && selectedCardId) {
+                      const avail = cardAvailableMap[selectedCardId] || 0;
+                      if (amtNum > avail) isInsufficient = true;
+                   }
+
+                   const isDisabled = isSaving || !borrowerName || isNoAmount || !lentDate || !dueDate || isInsufficient || (fundSource === 'credit_card' && !selectedCardId);
+
+                   return (
+                      <Button 
+                         onClick={handleSaveLent}
+                         disabled={isDisabled}
+                         className="w-full h-14 rounded-2xl bg-gradient-to-r from-[#f59e0b] to-[#ef4444] hover:opacity-90 text-white font-black text-lg shadow-[0_0_30px_rgba(245,158,11,0.4)] border-0 disabled:opacity-50 transition-all"
+                      >
+                         {isSaving ? "Saving Record..." : isInsufficient ? (fundSource === 'credit_card' ? "Insufficient Card Limit" : "Insufficient Cash Balance") : "Confirm Lending"}
+                      </Button>
+                   );
+                })()}
               </div>
 
             </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ================= COLLECTION (RECEIVE) MODAL ================= */}
+      <Dialog open={isCollectModalOpen} onOpenChange={setIsCollectModalOpen}>
+        <DialogContent className="bg-[#050505]/95 backdrop-blur-3xl border border-white/10 text-slate-50 rounded-[40px] w-[95vw] max-w-md p-6 shadow-[0_0_80px_rgba(0,0,0,0.9)] overflow-hidden">
+          <div className="absolute top-0 right-0 w-40 h-40 bg-[#10b981]/20 rounded-full blur-[50px] pointer-events-none" />
+          <DialogHeader className="mb-4 relative z-10">
+            <DialogTitle className="text-2xl font-space font-black bg-gradient-to-r from-[#10b981] to-[#34d399] bg-clip-text text-transparent">
+              Collect Lent Money
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-400">Receiving from {collectingLent?.borrower_name}</DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-6 relative z-10">
+             <div className="flex bg-black/60 p-1.5 rounded-xl border border-white/5">
+               <button onClick={() => { setCollectType("full"); setCollectAmount(""); }} className={`flex-1 py-2.5 text-xs font-bold rounded-lg transition-all ${collectType === "full" ? "bg-white/10 text-white shadow-sm" : "text-slate-500 hover:text-slate-300"}`}>Full Collection</button>
+               <button onClick={() => setCollectType("partial")} className={`flex-1 py-2.5 text-xs font-bold rounded-lg transition-all ${collectType === "partial" ? "bg-[#10b981]/20 text-[#10b981] shadow-sm" : "text-slate-500 hover:text-slate-300"}`}>Partial Amount</button>
+             </div>
+
+             {collectType === "full" ? (
+                 <div className="text-center p-6 bg-white/[0.02] border border-white/10 rounded-[24px] shadow-inner">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">Total Remaining</p>
+                    <p className="text-4xl font-black text-white">₹{collectingLent ? getRemainingAmount(collectingLent).toLocaleString() : 0}</p>
+                 </div>
+             ) : (
+                 <div className="space-y-1.5">
+                    <label className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider ml-1">Received Amount</label>
+                    <div className="relative">
+                       <span className="absolute left-4 top-1/2 -translate-y-1/2 text-emerald-500 font-bold">₹</span>
+                       <input 
+                          type="number" 
+                          value={collectAmount} 
+                          onChange={(e) => setCollectAmount(e.target.value)} 
+                          placeholder="0.00" 
+                          className="w-full h-14 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl pl-8 pr-4 text-xl font-bold text-white outline-none focus:border-emerald-500" 
+                       />
+                    </div>
+                    {Number(collectAmount) > 0 && Number(collectAmount) < (collectingLent ? getRemainingAmount(collectingLent) : 0) && (
+                       <p className="text-[10px] text-slate-400 font-medium text-right mt-1.5">
+                         Remaining debt will be: ₹{((collectingLent ? getRemainingAmount(collectingLent) : 0) - Number(collectAmount)).toLocaleString()}
+                       </p>
+                    )}
+                 </div>
+             )}
+
+             <div className="space-y-2 pt-2 border-t border-white/5">
+                 <label className="text-[11px] font-bold text-slate-400 uppercase ml-1">Where did you receive it?</label>
+                 <div className="grid grid-cols-2 gap-3">
+                   <button 
+                     onClick={() => setReceiveMethod("cash")}
+                     className={`flex items-center justify-center gap-2 p-3.5 rounded-xl transition-all border ${
+                        receiveMethod === "cash"
+                        ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/50 shadow-[0_0_15px_rgba(16,185,129,0.2)]" 
+                        : "bg-white/[0.02] text-slate-400 border-white/5 hover:bg-white/[0.05]"
+                     }`}
+                   >
+                     <Banknote className="w-4 h-4" /> <span className="text-xs font-bold">To My Cash</span>
+                   </button>
+                   <button 
+                     onClick={() => setReceiveMethod("card")}
+                     className={`flex items-center justify-center gap-2 p-3.5 rounded-xl transition-all border ${
+                        receiveMethod === "card"
+                        ? "bg-indigo-500/20 text-indigo-400 border-indigo-500/50 shadow-[0_0_15px_rgba(99,102,241,0.2)]" 
+                        : "bg-white/[0.02] text-slate-400 border-white/5 hover:bg-white/[0.05]"
+                     }`}
+                   >
+                     <CreditCard className="w-4 h-4" /> <span className="text-xs font-bold">Direct to Card</span>
+                   </button>
+                 </div>
+             </div>
+
+             <AnimatePresence>
+                 {receiveMethod === 'card' && (
+                    <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="space-y-1.5 pt-2">
+                       <label className="text-[11px] font-bold text-indigo-400 uppercase ml-1 flex items-center gap-1.5">
+                         <CreditCard className="w-3.5 h-3.5" /> Select Card to Credit
+                       </label>
+                       <div className="relative">
+                          <select 
+                             value={receiveCardId} 
+                             onChange={(e) => setReceiveCardId(e.target.value)}
+                             className="w-full h-14 bg-indigo-500/10 border border-indigo-500/30 rounded-2xl px-4 text-sm font-bold text-white outline-none focus:border-indigo-400 appearance-none shadow-[0_0_15px_rgba(99,102,241,0.1)]"
+                          >
+                             {accessibleCards.map(c => (
+                                <option key={c.id} value={c.id} className="bg-[#050505]">{c.card_name} (**{c.last_4_digits})</option>
+                             ))}
+                          </select>
+                          <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-indigo-400 pointer-events-none" />
+                       </div>
+                    </motion.div>
+                 )}
+              </AnimatePresence>
+
+              <div className="pt-2">
+                <Button 
+                    onClick={handleCollectLent} 
+                    disabled={isSaving || (collectType === 'partial' && (!collectAmount || Number(collectAmount) <= 0 || Number(collectAmount) >= (collectingLent ? getRemainingAmount(collectingLent) : 0))) || (receiveMethod === 'card' && !receiveCardId)} 
+                    className="w-full h-14 rounded-2xl bg-gradient-to-r from-[#10b981] to-[#34d399] hover:opacity-90 text-black font-black text-lg border-0 disabled:opacity-50 shadow-[0_0_30px_rgba(16,185,129,0.3)] transition-all"
+                >
+                  {isSaving ? "Processing..." : "Confirm Receipt"}
+                </Button>
+              </div>
           </div>
         </DialogContent>
       </Dialog>
