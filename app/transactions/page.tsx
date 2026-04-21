@@ -133,6 +133,7 @@ export default function TransactionsPage() {
   const [txDate, setTxDate] = useState(""); 
   const [isDebtRepayment, setIsDebtRepayment] = useState(false);
 
+  /* eslint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     fetchInitialData();
 
@@ -150,7 +151,7 @@ export default function TransactionsPage() {
     return url.trim().replace(/^['"]|['"]$/g, '');
   };
 
-  const fetchInitialData = async () => {
+  async function fetchInitialData() {
     setIsLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
 
@@ -186,7 +187,7 @@ export default function TransactionsPage() {
     setIsLoading(false);
   };
 
-  const fetchLedgerData = async (currentCards: CardData[]) => {
+  async function fetchLedgerData(currentCards: CardData[]) {
     let targetCardIds: string[] = [];
     if (globalSelectedCardId !== 'all') {
       const selected = currentCards.find(c => c.id === globalSelectedCardId);
@@ -240,6 +241,7 @@ export default function TransactionsPage() {
   const entryUserAccessibleCardIds = allCardAccess.filter(a => a.user_id === selectedUserId).map(a => a.card_id);
   const entryUserCards = allCards.filter(c => entryUserAccessibleCardIds.includes(c.id)).sort((a,b) => (a.is_primary === b.is_primary ? 0 : a.is_primary ? -1 : 1));
 
+  /* eslint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
      if (entryUserCards.length > 0 && !entryUserCards.find(c => c.id === entryCardId)) {
         setEntryCardId(entryUserCards[0].id);
@@ -248,19 +250,19 @@ export default function TransactionsPage() {
 
 
   // --- Helper: Cash Update with Ledger ---
-  const updateCashBalance = async (userId: string, amt: number, type: 'credit' | 'debit', note: string) => {
+  async function updateCashBalance(userId: string, amt: number, type: 'credit' | 'debit', note: string) {
     const { data: coh } = await supabase.from('cash_on_hand').select('*').eq('user_id', userId).maybeSingle();
     const currentBalance = coh ? Number(coh.current_balance) : 0;
     const newBalance = type === 'credit' ? currentBalance + amt : currentBalance - amt;
 
-    await supabase.from('cash_on_hand').upsert({ user_id: userId, current_balance: newBalance });
-    await supabase.from('cash_on_hand_ledger').insert({
+    await supabase.from('cash_on_hand').upsert({ user_id: userId, current_balance: newBalance, card_id: globalSelectedCardId !== 'all' ? globalSelectedCardId : accessibleCards[0]?.id });
+    await supabase.from('cash_on_hand_ledger').insert({ card_id: globalSelectedCardId !== 'all' ? globalSelectedCardId : accessibleCards[0]?.id,
        user_id: userId, amount: amt, transaction_type: type, remarks: note, transaction_date: new Date().toISOString()
     });
   };
 
   // --- Helper: Process Bill Payment (Billing Cycles) ---
-  const processBillPayment = async (cardId: string, amt: number, txDate: string) => {
+  async function processBillPayment(cardId: string, amt: number, txDate: string) {
     let activeCycleId = null;
     const txDateObj = new Date(txDate);
     const startOfMonth = new Date(txDateObj.getFullYear(), txDateObj.getMonth(), 1).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
@@ -765,7 +767,7 @@ export default function TransactionsPage() {
                                <div className="flex-1 min-w-0">
                                  <h3 className="text-sm font-bold text-slate-100 mb-0.5 truncate">{item.title}</h3>
                                  <div className="flex flex-col gap-0.5 leading-tight">
-                                    {item.remarks && <span className="text-[10px] text-slate-300 italic truncate">"{item.remarks}"</span>}
+                                    {item.remarks && <span className="text-[10px] text-slate-300 italic truncate">&quot;{item.remarks}&quot;</span>}
                                     <span className="text-[9px] font-medium text-slate-400">{item.subtitle}</span>
                                  </div>
                                </div>
@@ -1040,7 +1042,7 @@ export default function TransactionsPage() {
                     <div className="p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl flex items-center justify-between shadow-[0_0_15px_rgba(16,185,129,0.15)]">
                        <div>
                           <div className="text-sm font-bold text-emerald-400 flex items-center gap-1.5"><ShieldCheck className="w-4 h-4"/> Clear Personal Debt?</div>
-                          <div className="text-[9px] text-emerald-500/70 mt-0.5">Toggle ON to reduce your "Total Personal Due"</div>
+                          <div className="text-[9px] text-emerald-500/70 mt-0.5">Toggle ON to reduce your &quot;Total Personal Due&quot;</div>
                        </div>
                        <Switch 
                           checked={isDebtRepayment} 
