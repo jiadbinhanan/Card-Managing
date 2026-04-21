@@ -255,14 +255,22 @@ export default function TransactionsPage() {
     const currentBalance = coh ? Number(coh.current_balance) : 0;
     const newBalance = type === 'credit' ? currentBalance + amt : currentBalance - amt;
 
-    const { error: cashUpsertError } = await supabase.from('cash_on_hand').upsert({
-      user_id: userId,
-      card_id: cardId,
-      current_balance: newBalance
-    }, {
-      onConflict: 'user_id,card_id'
-    });
-    if (cashUpsertError) throw cashUpsertError;
+    const { data: updatedRows, error: cashUpdateError } = await supabase
+      .from('cash_on_hand')
+      .update({ current_balance: newBalance })
+      .eq('user_id', userId)
+      .eq('card_id', cardId)
+      .select('user_id');
+    if (cashUpdateError) throw cashUpdateError;
+
+    if (!updatedRows || updatedRows.length === 0) {
+      const { error: cashInsertError } = await supabase.from('cash_on_hand').insert({
+        user_id: userId,
+        card_id: cardId,
+        current_balance: newBalance
+      });
+      if (cashInsertError) throw cashInsertError;
+    }
 
     const { error: cashLedgerError } = await supabase.from('cash_on_hand_ledger').insert({
        card_id: cardId,

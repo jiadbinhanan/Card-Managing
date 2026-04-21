@@ -193,7 +193,6 @@ export default function SettlementsPage() {
      setIsSettling(true);
 
      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-     const receiverCashBalance = userCashMap[cashReceiverId] || 0;
      const isPartial = settlementType === "partial" && Number(partialAmount) > 0 && Number(partialAmount) < settleTx.amount;
      const amtToSettle = isPartial ? Number(partialAmount) : settleTx.amount;
 
@@ -224,14 +223,31 @@ export default function SettlementsPage() {
             }).eq('id', settleTx.id);
         }
 
-        const { error: cashUpsertError } = await supabase.from('cash_on_hand').upsert({
-           user_id: cashReceiverId,
-           card_id: settleTx.card_id,
-           current_balance: receiverCashBalance + amtToSettle
-        }, {
-           onConflict: 'user_id,card_id'
-        });
-        if (cashUpsertError) throw cashUpsertError;
+        const { data: existingCashRow, error: existingCashError } = await supabase
+           .from('cash_on_hand')
+           .select('current_balance')
+           .eq('user_id', cashReceiverId)
+           .eq('card_id', settleTx.card_id)
+           .maybeSingle();
+        if (existingCashError) throw existingCashError;
+
+        const newBalance = Number(existingCashRow?.current_balance || 0) + amtToSettle;
+        const { data: updatedRows, error: cashUpdateError } = await supabase
+           .from('cash_on_hand')
+           .update({ current_balance: newBalance })
+           .eq('user_id', cashReceiverId)
+           .eq('card_id', settleTx.card_id)
+           .select('user_id');
+        if (cashUpdateError) throw cashUpdateError;
+
+        if (!updatedRows || updatedRows.length === 0) {
+           const { error: cashInsertError } = await supabase.from('cash_on_hand').insert({
+              user_id: cashReceiverId,
+              card_id: settleTx.card_id,
+              current_balance: newBalance
+           });
+           if (cashInsertError) throw cashInsertError;
+        }
 
         const { error: cashLedgerError } = await supabase.from('cash_on_hand_ledger').insert({
            user_id: cashReceiverId,
