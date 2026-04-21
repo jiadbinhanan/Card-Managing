@@ -51,22 +51,65 @@ export default function DashboardQRs({ firstName, currentUser, accessibleCards, 
     return () => { supabase.removeChannel(channel); };
   }, [firstName]);
 
-  async function fetchQRs() {
-    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-    const { data: qrData } = await supabase.from('qrs').select('*').eq('status', 'active');
+    async function fetchQRs() {
+    if (!currentUser) return;
 
-    if (qrData) {
-      let usable = qrData.filter(q => q.last_used_date !== today);
+    let qrsQuery = supabase.from('qrs').select('*').eq('status', 'active');
+    if (globalSelectedCardId !== 'all') {
+      qrsQuery = qrsQuery.eq('card_id', globalSelectedCardId);
+    }
+    const { data: qrData } = await qrsQuery;
 
-      usable.sort((a, b) => {
+    if (!qrData) return;
+
+    // Fetch personal transaction history for the last 5 days
+    const fiveDaysAgo = new Date();
+    fiveDaysAgo.setDate(fiveDaysAgo.getDate() - 5);
+
+    const { data: recentTxs } = await supabase
+      .from('card_transactions')
+      .select('qr_id, created_at')
+      .eq('recorded_by', currentUser.id)
+      .not('qr_id', 'is', null)
+      .gte('created_at', fiveDaysAgo.toISOString())
+      .order('created_at', { ascending: false });
+
+    const processedQrIds = new Set<string>();
+    const activeCooldowns: any[] = [];
+    const nowTime = Date.now();
+
+    if (recentTxs) {
+        recentTxs.forEach(tx => {
+            if (!tx.qr_id || processedQrIds.has(tx.qr_id)) return;
+
+            const qrInfo = qrData.find(q => q.id === tx.qr_id);
+            if (!qrInfo) return;
+
+            const txTime = new Date(tx.created_at).getTime();
+            const cooldownMs = 24 * 60 * 60 * 1000;
+            const expiresAt = txTime + cooldownMs;
+
+            if (nowTime < expiresAt) {
+                activeCooldowns.push({ qrId: tx.qr_id, expiresAt });
+            }
+            processedQrIds.add(tx.qr_id);
+        });
+    }
+
+    let usable = qrData.filter(q => {
+       const cd = activeCooldowns.find(c => c.qrId === q.id);
+       return !cd || cd.expiresAt < nowTime;
+    });
+
+    usable.sort((a, b) => {
         let scoreA = 0; let scoreB = 0;
         const nameA = a.merchant_name.toLowerCase();
         const nameB = b.merchant_name.toLowerCase();
 
         if (firstName && nameA.includes(firstName)) scoreA += 10000;
         if (firstName && nameB.includes(firstName)) scoreB += 10000;
-        if (a.platform.includes('BharatPe')) scoreA += 1000;
-        if (b.platform.includes('BharatPe')) scoreB += 1000;
+        if (a.platform.toLowerCase().includes('bharatpe')) scoreA += 1000;
+        if (b.platform.toLowerCase().includes('bharatpe')) scoreB += 1000;
 
         const timeA = a.last_used_date ? new Date(a.last_used_date).getTime() : 0;
         const timeB = b.last_used_date ? new Date(b.last_used_date).getTime() : 0;
@@ -78,11 +121,10 @@ export default function DashboardQRs({ firstName, currentUser, accessibleCards, 
         scoreB += timeB / 100000000000;
 
         return scoreA - scoreB;
-      });
+    });
 
-      setSuggestedQrs(usable.slice(0, 3)); 
-    }
-  };
+    setSuggestedQrs(usable.slice(0, 3));
+  }
 
   const generatePaymentAmounts = () => {
     if (paymentMode === "once") {
@@ -130,7 +172,7 @@ export default function DashboardQRs({ firstName, currentUser, accessibleCards, 
   };
 
   return (
-    <section className="pb-8">
+    <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.4 }} className="pb-8">
       <div className="flex items-center gap-2 mb-4 px-1">
         <Sparkles className="w-4 h-4 text-[#0ea5e9]" />
         <h2 className="text-xs font-black text-slate-300 uppercase tracking-widest drop-shadow-[0_0_10px_rgba(14,165,233,0.3)]">
@@ -291,6 +333,6 @@ export default function DashboardQRs({ firstName, currentUser, accessibleCards, 
           </div>
         </DialogContent>
       </Dialog>
-    </section>
+    </motion.section>
   );
 }

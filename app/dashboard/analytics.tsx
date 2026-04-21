@@ -29,13 +29,9 @@ export default function DashboardAnalytics({ userStats }: AnalyticsProps) {
   const [cashLedger, setCashLedger] = useState<any[]>([]);
   const [dueLedger, setDueLedger] = useState<any[]>([]);
 
-  useEffect(() => {
-    if (selectedUserStat) {
-      fetchLedgers(selectedUserStat.id, dateFilter);
-    }
-  }, [selectedUserStat, dateFilter]);
 
-  const fetchLedgers = async (userId: string, filter: string) => {
+
+  async function fetchLedgers(userId: string, filter: string) {
     let startDate = new Date(0).toISOString();
     let endDate = new Date().toISOString();
     const now = new Date();
@@ -78,7 +74,15 @@ export default function DashboardAnalytics({ userStats }: AnalyticsProps) {
 
     combinedDue.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
     setDueLedger(combinedDue);
-  };
+  }
+
+  /* eslint-disable react-hooks/set-state-in-effect */
+  /* eslint-disable react-hooks/exhaustive-deps */
+  useEffect(() => {
+    if (selectedUserStat) {
+      fetchLedgers(selectedUserStat.id, dateFilter);
+    }
+  }, [selectedUserStat, dateFilter]);
 
   const handleUserStatClick = (stat: UserStat) => {
     setSelectedUserStat(stat);
@@ -88,7 +92,7 @@ export default function DashboardAnalytics({ userStats }: AnalyticsProps) {
   };
 
   return (
-    <section>
+    <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.3 }} className="mb-8">
       <div className="flex items-center gap-2 mb-4 px-1">
         <Banknote className="w-4 h-4 text-[#10b981]" />
         <h2 className="text-xs font-black text-slate-300 uppercase tracking-widest drop-shadow-[0_0_10px_rgba(16,185,129,0.3)]">
@@ -158,7 +162,7 @@ export default function DashboardAnalytics({ userStats }: AnalyticsProps) {
                     </div>
                     <div>
                        <DialogTitle className="text-2xl font-space font-black bg-gradient-to-r from-white to-slate-300 bg-clip-text text-transparent leading-tight">
-                         {selectedUserStat?.name}'s Ledger
+                         {selectedUserStat?.name}&apos;s Ledger
                        </DialogTitle>
                        <p className="text-[10px] text-[#a855f7] font-bold uppercase tracking-wider mt-0.5">Advanced Analytics</p>
                     </div>
@@ -266,6 +270,6 @@ export default function DashboardAnalytics({ userStats }: AnalyticsProps) {
           </div>
         </DialogContent>
       </Dialog>
-    </section>
+    </motion.section>
   );
 }
