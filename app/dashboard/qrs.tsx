@@ -42,6 +42,7 @@ export default function DashboardQRs({ firstName, currentUser, accessibleCards, 
   const [generatedAmounts, setGeneratedAmounts] = useState<number[]>([]);
   const [selectedPaymentCardId, setSelectedPaymentCardId] = useState<string>("");
 
+  /* eslint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     fetchQRs();
     const channel = supabase.channel('qrs_dashboard_changes')
@@ -50,7 +51,7 @@ export default function DashboardQRs({ firstName, currentUser, accessibleCards, 
     return () => { supabase.removeChannel(channel); };
   }, [firstName]);
 
-  const fetchQRs = async () => {
+  async function fetchQRs() {
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
     const { data: qrData } = await supabase.from('qrs').select('*').eq('status', 'active');
 

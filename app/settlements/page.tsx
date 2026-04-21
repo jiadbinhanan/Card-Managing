@@ -158,7 +158,10 @@ export default function SettlementsPage() {
     let txQuery = supabase.from('card_transactions')
         .select(`*, qrs (merchant_name), profiles:recorded_by (name, avatar_url), cards(card_name, last_4_digits), settled_to_profile:settled_to_user(name)`)
         .eq('type', 'withdrawal')
+        .not('remarks', 'ilike', 'Lent given to%')
         .order('transaction_date', { ascending: false });
+    // Remove the old select and eq
+
 
     if (globalSelectedCardId !== 'all' && targetCardIds.length > 0) {
        txQuery = txQuery.in('card_id', targetCardIds);
