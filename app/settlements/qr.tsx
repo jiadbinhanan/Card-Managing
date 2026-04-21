@@ -132,12 +132,7 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
             const isBharatPe = qrInfo.platform.toLowerCase().includes('bharatpe') || qrInfo.merchant_name.toLowerCase().includes('bharatpe');
             const txTime = new Date(tx.created_at).getTime();
 
-            let expiresAt = 0;
-            if (isBharatPe) {
-                expiresAt = txTime + (5 * 24 * 60 * 60 * 1000); // 5 days
-            } else {
-                expiresAt = txTime + (24 * 60 * 60 * 1000); // 24 hours
-            }
+            let expiresAt = txTime + (24 * 60 * 60 * 1000); // 24 hours for all
 
             if (expiresAt > Date.now()) {
                 cooldownList.push({
@@ -350,9 +345,7 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
                  const minutes = Math.floor((timeLeft / 1000 / 60) % 60);
                  const seconds = Math.floor((timeLeft / 1000) % 60);
 
-                 const timeString = (c.isBharatPe && days > 0)
-                      ? `${days}d ${hours}h ${minutes}m`
-                      : `${hours.toString().padStart(2, '0')}h ${minutes.toString().padStart(2, '0')}m ${seconds.toString().padStart(2, '0')}s`;
+                 const timeString = `${hours.toString().padStart(2, '0')}h ${minutes.toString().padStart(2, '0')}m ${seconds.toString().padStart(2, '0')}s`;
 
                  return (
                     <div key={c.qrId} className="flex justify-between items-center bg-black/40 p-2.5 rounded-xl border border-white/5 shadow-inner">

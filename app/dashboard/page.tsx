@@ -156,7 +156,7 @@ export default function Dashboard() {
 
       // 2. Dynamic Limit Calculations
       let currentLimit = 0;
-      let familyCardIds: string[] = [];
+      let activeCardIds: string[] = [];
 
       if (selectedCardId === 'all') {
          currentLimit = myCards.filter(c => c.is_primary).reduce((sum, c) => sum + Number(c.total_limit), 0);
@@ -168,7 +168,7 @@ export default function Dashboard() {
             currentLimit = primaryCard ? Number(primaryCard.total_limit) : Number(selected.total_limit);
 
             const familyCards = myCards.filter(c => c.id === primaryId || c.parent_card_id === primaryId);
-            familyCardIds = familyCards.map(c => c.id);
+            activeCardIds = familyCards.map(c => c.id);
          }
       }
       if (currentLimit === 0) currentLimit = 180000; 
@@ -178,10 +178,10 @@ export default function Dashboard() {
       let spendsQuery = supabase.from('spends').select('amount, payment_method, user_id, card_id');
       let billsQuery = supabase.from('billing_cycles').select('*').neq('status', 'paid');
 
-      if (selectedCardId !== 'all' && familyCardIds.length > 0) {
-         txQuery = txQuery.in('card_id', familyCardIds);
-         spendsQuery = spendsQuery.in('card_id', familyCardIds);
-         billsQuery = billsQuery.in('card_id', familyCardIds);
+      if (activeCardIds.length > 0) {
+         txQuery = txQuery.in('card_id', activeCardIds);
+         spendsQuery = spendsQuery.in('card_id', activeCardIds);
+         billsQuery = billsQuery.in('card_id', activeCardIds);
       }
 
       const { data: txs } = await txQuery;
@@ -198,9 +198,15 @@ export default function Dashboard() {
 
       // 3. Advanced User Stats
       const { data: profiles } = await supabase.from('profiles').select('id, name, avatar_url');
-      const { data: coh } = await supabase.from('cash_on_hand').select('*');
-      const { data: allSpends } = await supabase.from('spends').select('user_id, amount, payment_method');
-      const { data: allTxs } = await supabase.from('card_transactions').select('recorded_by, amount, type, payment_method');
+      let cohQuery = supabase.from('cash_on_hand').select('*');
+      if (activeCardIds.length > 0) cohQuery = cohQuery.in('card_id', activeCardIds);
+      const { data: coh } = await cohQuery;
+      let allSpendsQuery = supabase.from('spends').select('user_id, amount, payment_method, card_id');
+      if (activeCardIds.length > 0) allSpendsQuery = allSpendsQuery.in('card_id', activeCardIds);
+      const { data: allSpends } = await allSpendsQuery;
+      let allTxsQuery = supabase.from('card_transactions').select('recorded_by, amount, type, payment_method, card_id');
+      if (activeCardIds.length > 0) allTxsQuery = allTxsQuery.in('card_id', activeCardIds);
+      const { data: allTxs } = await allTxsQuery;
 
       if (profiles) {
         const stats = profiles.map(p => {
@@ -394,39 +400,65 @@ export default function Dashboard() {
         </section>
 
         {/* ================= ADVANCED BILLING CYCLES ================= */}
-        <section className="bg-gradient-to-br from-[#a855f7]/10 to-[#d946ef]/5 border border-[#a855f7]/20 rounded-[28px] p-5 backdrop-blur-2xl shadow-[0_10px_30px_rgba(168,85,247,0.15)] relative overflow-hidden">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-[#d946ef]/20 rounded-full blur-[30px] pointer-events-none" />
+
+        {/* ================= ADVANCED BILLING CYCLES ================= */}
+        <section className="bg-gradient-to-br from-[#10b981]/10 to-[#0ea5e9]/5 border border-[#10b981]/20 rounded-[28px] p-5 backdrop-blur-2xl shadow-[0_10px_30px_rgba(16,185,129,0.15)] relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-[#10b981]/20 rounded-full blur-[30px] pointer-events-none" />
 
           <div className="flex items-center justify-between relative z-10 mb-4">
              <div className="flex items-center gap-3">
                <div className="w-10 h-10 bg-black/40 rounded-xl flex items-center justify-center border border-white/10 shadow-inner">
-                 <CalendarClock className="w-5 h-5 text-[#e879f9]" />
+                 <CalendarClock className="w-5 h-5 text-[#10b981]" />
                </div>
                <div>
-                 <p className="text-[10px] font-bold text-fuchsia-300/80 uppercase tracking-wider mb-0.5">Upcoming Bill Due</p>
-                 <p className="text-sm font-black text-white">{nextBillDate} <span className="text-fuchsia-300/50 text-[10px] ml-1">({daysToBill} days)</span></p>
+                 <p className="text-[10px] font-bold text-emerald-300/80 uppercase tracking-wider mb-0.5">Active Bills</p>
+                 <p className="text-sm font-black text-white">{activeBills.length} Bills Pending</p>
                </div>
              </div>
-             <Button onClick={openBillModal} size="icon" className="w-10 h-10 rounded-full bg-[#d946ef]/20 text-[#e879f9] border border-[#d946ef]/40 hover:bg-[#d946ef]/40 shadow-[0_0_15px_rgba(217,70,239,0.3)] transition-all">
+             <Button onClick={openBillModal} size="icon" className="w-10 h-10 rounded-full bg-[#10b981]/20 text-[#10b981] border border-[#10b981]/40 hover:bg-[#10b981]/40 shadow-[0_0_15px_rgba(16,185,129,0.3)] transition-all">
                 <Plus className="w-5 h-5" />
              </Button>
           </div>
 
-          <div className="grid grid-cols-3 gap-2 relative z-10 border-t border-white/10 pt-4">
-             <div className="text-center">
-                <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Generated</p>
-                <p className="text-sm font-black text-slate-300">₹{totalGenerated.toLocaleString()}</p>
+          {selectedCardId === 'all' ? (
+             <div className="space-y-3 relative z-10 border-t border-white/10 pt-4 max-h-48 overflow-y-auto custom-scrollbar">
+                {activeBills.length > 0 ? activeBills.map(bill => {
+                   const card = accessibleCards.find(c => c.id === bill.card_id);
+                   const due = bill.generated_amount - bill.paid_amount;
+                   return (
+                      <div key={bill.id} className="flex items-center justify-between bg-white/[0.02] border border-white/5 p-3 rounded-xl">
+                         <div>
+                            <p className="text-[10px] font-bold text-slate-400 uppercase">{card?.card_name || 'Card'} {card ? '(**'+card.last_4_digits+')' : ''}</p>
+                            <p className="text-xs font-black text-slate-300">{bill.billing_month}</p>
+                         </div>
+                         <div className="text-right">
+                            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-0.5">Due</p>
+                            <p className="text-sm font-black text-rose-400">₹{due.toLocaleString()}</p>
+                         </div>
+                      </div>
+                   )
+                }) : (
+                   <p className="text-xs text-center text-slate-500 font-bold py-2">No active bills found.</p>
+                )}
              </div>
-             <div className="text-center border-l border-white/5">
-                <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Paid</p>
-                <p className="text-sm font-black text-emerald-400">₹{totalPaid.toLocaleString()}</p>
+          ) : (
+             <div className="grid grid-cols-3 gap-2 relative z-10 border-t border-white/10 pt-4">
+                <div className="text-center">
+                   <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Generated</p>
+                   <p className="text-sm font-black text-slate-300">₹{totalGenerated.toLocaleString()}</p>
+                </div>
+                <div className="text-center border-l border-white/5">
+                   <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Paid</p>
+                   <p className="text-sm font-black text-emerald-400">₹{totalPaid.toLocaleString()}</p>
+                </div>
+                <div className="text-center border-l border-white/5">
+                   <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Total Due</p>
+                   <p className="text-sm font-black text-rose-400 drop-shadow-[0_0_10px_rgba(244,63,94,0.3)]">₹{totalDue.toLocaleString()}</p>
+                </div>
              </div>
-             <div className="text-center border-l border-white/5">
-                <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Total Due</p>
-                <p className="text-sm font-black text-rose-400 drop-shadow-[0_0_10px_rgba(244,63,94,0.3)]">₹{totalDue.toLocaleString()}</p>
-             </div>
-          </div>
+          )}
         </section>
+
 
         {/* ================= ANALYTICS MODULE ================= */}
         <DashboardAnalytics userStats={userStats} />
@@ -440,31 +472,31 @@ export default function Dashboard() {
       <Dialog open={isBillModalOpen} onOpenChange={setIsBillModalOpen}>
         <DialogContent className="bg-[#050505]/95 backdrop-blur-3xl border border-white/10 text-slate-50 rounded-[40px] w-[95vw] max-w-md p-6 shadow-[0_0_80px_rgba(0,0,0,0.9)] overflow-hidden">
           <DialogHeader className="mb-4">
-            <DialogTitle className="text-xl font-space font-black bg-gradient-to-r from-[#d946ef] to-[#a855f7] bg-clip-text text-transparent">Manage Billing Cycle</DialogTitle>
+            <DialogTitle className="text-xl font-space font-black bg-gradient-to-r from-[#10b981] to-[#0ea5e9] bg-clip-text text-transparent">Manage Billing Cycle</DialogTitle>
             <DialogDescription className="text-[10px] text-slate-400 uppercase tracking-widest">Add or Update Card Bill</DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">
              <div className="space-y-1.5">
                 <label className="text-[11px] font-bold text-slate-400 uppercase ml-1">Select Card</label>
-                <select value={billFormCardId} onChange={(e) => setBillFormCardId(e.target.value)} className="w-full h-12 bg-white/[0.05] border border-white/10 rounded-xl px-3 text-xs font-bold text-white outline-none focus:border-[#d946ef]">
+                <select value={billFormCardId} onChange={(e) => setBillFormCardId(e.target.value)} className="w-full h-12 bg-white/[0.05] border border-white/10 rounded-xl px-3 text-xs font-bold text-white outline-none focus:border-[#10b981]">
                    {accessibleCards.map(c => <option key={c.id} value={c.id} className="bg-[#050505]">{c.card_name} (**{c.last_4_digits})</option>)}
                 </select>
              </div>
              <div className="space-y-1.5">
                 <label className="text-[11px] font-bold text-slate-400 uppercase ml-1">Billing Month</label>
-                <input type="month" value={billFormMonth} onChange={(e) => setBillFormMonth(e.target.value)} className="w-full h-12 bg-white/[0.05] border border-white/10 rounded-xl px-4 text-sm font-bold text-white outline-none focus:border-[#d946ef] appearance-none" />
+                <input type="month" value={billFormMonth} onChange={(e) => setBillFormMonth(e.target.value)} className="w-full h-12 bg-white/[0.05] border border-white/10 rounded-xl px-4 text-sm font-bold text-white outline-none focus:border-[#10b981] appearance-none" />
              </div>
              <div className="space-y-1.5">
                 <label className="text-[11px] font-bold text-slate-400 uppercase ml-1">Generated Bill Amount (₹)</label>
-                <input type="number" value={billFormGenAmount} onChange={(e) => setBillFormGenAmount(e.target.value)} placeholder="0" className="w-full h-12 bg-white/[0.05] border border-white/10 rounded-xl px-4 text-sm font-bold text-white outline-none focus:border-[#d946ef]" />
+                <input type="number" value={billFormGenAmount} onChange={(e) => setBillFormGenAmount(e.target.value)} placeholder="0" className="w-full h-12 bg-white/[0.05] border border-white/10 rounded-xl px-4 text-sm font-bold text-white outline-none focus:border-[#10b981]" />
              </div>
              <div className="space-y-1.5">
                 <label className="text-[11px] font-bold text-slate-400 uppercase ml-1">Amount Paid So Far (₹)</label>
-                <input type="number" value={billFormPaidAmount} onChange={(e) => setBillFormPaidAmount(e.target.value)} placeholder="0" className="w-full h-12 bg-white/[0.05] border border-white/10 rounded-xl px-4 text-sm font-bold text-white outline-none focus:border-[#d946ef]" />
+                <input type="number" value={billFormPaidAmount} onChange={(e) => setBillFormPaidAmount(e.target.value)} placeholder="0" className="w-full h-12 bg-white/[0.05] border border-white/10 rounded-xl px-4 text-sm font-bold text-white outline-none focus:border-[#10b981]" />
              </div>
 
-             <Button onClick={handleSaveBill} disabled={isSavingBill} className="w-full h-14 rounded-2xl bg-gradient-to-r from-[#d946ef] to-[#a855f7] hover:opacity-90 text-white font-black text-lg border-0 mt-4 shadow-[0_0_20px_rgba(217,70,239,0.3)]">
+             <Button onClick={handleSaveBill} disabled={isSavingBill} className="w-full h-14 rounded-2xl bg-gradient-to-r from-[#10b981] to-[#0ea5e9] hover:opacity-90 text-white font-black text-lg border-0 mt-4 shadow-[0_0_20px_rgba(16,185,129,0.3)]">
                {isSavingBill ? "Saving..." : "Save Bill Details"}
              </Button>
           </div>
