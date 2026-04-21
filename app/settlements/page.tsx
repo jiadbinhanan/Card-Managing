@@ -176,7 +176,7 @@ export default function SettlementsPage() {
     }
 
     const cashMap: Record<string, number> = {};
-    coh?.forEach(c => { cashMap[c.user_id] = Number(c.current_balance); });
+    coh?.forEach(c => { cashMap[c.user_id] = (cashMap[c.user_id] || 0) + Number(c.current_balance); });
     setUserCashMap(cashMap);
   };
 
@@ -224,18 +224,24 @@ export default function SettlementsPage() {
             }).eq('id', settleTx.id);
         }
 
-        await supabase.from('cash_on_hand').upsert({
+        const { error: cashUpsertError } = await supabase.from('cash_on_hand').upsert({
            user_id: cashReceiverId,
+           card_id: settleTx.card_id,
            current_balance: receiverCashBalance + amtToSettle
+        }, {
+           onConflict: 'user_id,card_id'
         });
+        if (cashUpsertError) throw cashUpsertError;
 
-        await supabase.from('cash_on_hand_ledger').insert({
+        const { error: cashLedgerError } = await supabase.from('cash_on_hand_ledger').insert({
            user_id: cashReceiverId,
+           card_id: settleTx.card_id,
            amount: amtToSettle,
            transaction_type: 'credit',
            remarks: `Settlement received from ${settleTx.qrs?.merchant_name || 'Manual Entry'}`,
            transaction_date: new Date().toISOString()
         });
+        if (cashLedgerError) throw cashLedgerError;
 
         setIsSettleModalOpen(false);
         fetchLedgerData(accessibleCards);

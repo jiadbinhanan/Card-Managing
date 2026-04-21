@@ -193,7 +193,7 @@ export default function LentsPage() {
     // 2. Fetch Cash On Hand
     const { data: coh } = await supabase.from('cash_on_hand').select('*');
     const cashMap: Record<string, number> = {};
-    coh?.forEach(c => { cashMap[c.user_id] = Number(c.current_balance); });
+    coh?.forEach(c => { cashMap[c.user_id] = (cashMap[c.user_id] || 0) + Number(c.current_balance); });
     setUserCashMap(cashMap);
 
     // 3. Exact Dashboard Logic for Card Available Limits
@@ -219,26 +219,32 @@ export default function LentsPage() {
   };
 
   // --- Cash Update using cash_on_hand_ledger ---
-  const updateCashBalance = async (userId: string, amt: number, type: 'credit' | 'debit', note: string) => {
+  const updateCashBalance = async (userId: string, cardId: string, amt: number, type: 'credit' | 'debit', note: string) => {
      // 1. Get current balance
-     const { data: coh } = await supabase.from('cash_on_hand').select('*').eq('user_id', userId).maybeSingle();
+     const { data: coh } = await supabase.from('cash_on_hand').select('*').eq('user_id', userId).eq('card_id', cardId).maybeSingle();
      const currentBalance = coh ? Number(coh.current_balance) : 0;
      const newBalance = type === 'credit' ? currentBalance + amt : currentBalance - amt;
 
      // 2. Update cash_on_hand table (Total tracking)
-     await supabase.from('cash_on_hand').upsert({
+     const { error: cashUpsertError } = await supabase.from('cash_on_hand').upsert({
         user_id: userId,
+        card_id: cardId,
         current_balance: newBalance
+     }, {
+        onConflict: 'user_id,card_id'
      });
+     if (cashUpsertError) throw cashUpsertError;
 
      // 3. Insert into cash_on_hand_ledger (History tracking)
-     await supabase.from('cash_on_hand_ledger').insert({
+     const { error: cashLedgerError } = await supabase.from('cash_on_hand_ledger').insert({
         user_id: userId,
+        card_id: cardId,
         amount: amt,
         transaction_type: type,
         remarks: note,
         transaction_date: new Date().toISOString()
      });
+     if (cashLedgerError) throw cashLedgerError;
   };
 
   // --- RECORD NEW LENDING ---
@@ -272,7 +278,12 @@ export default function LentsPage() {
     try {
       // Cash Update with Ledger History
       if (fundSource === 'cash_on_hand') {
-         await updateCashBalance(currentUser.id, amtNum, 'debit', `Lent given to ${borrowerName}`);
+         const cashCardId =
+           globalSelectedCardId !== 'all'
+             ? globalSelectedCardId
+             : accessibleCards[0]?.id;
+         if (!cashCardId) throw new Error("No card selected for cash entry.");
+         await updateCashBalance(currentUser.id, cashCardId, amtNum, 'debit', `Lent given to ${borrowerName}`);
       }
 
       // Card Transactions & Spends Update
@@ -361,7 +372,12 @@ export default function LentsPage() {
         // Process Received Funds
         if (receiveMethod === 'cash') {
            // Receive to Cash (Already contains cash_on_hand_ledger entry in updateCashBalance function)
-           await updateCashBalance(currentUser.id, amtNum, 'credit', `Collected lent from ${collectingLent.borrower_name}`);
+           const cashCardId =
+             (globalSelectedCardId !== 'all' ? globalSelectedCardId : null) ||
+             collectingLent.card_id ||
+             accessibleCards[0]?.id;
+           if (!cashCardId) throw new Error("No card selected for cash collection.");
+           await updateCashBalance(currentUser.id, cashCardId, amtNum, 'credit', `Collected lent from ${collectingLent.borrower_name}`);
         } else if (receiveMethod === 'card') {
            // --- NEW LOGIC: Check Billing Cycle for the current month ---
            let activeCycleId = null;

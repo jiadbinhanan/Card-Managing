@@ -233,7 +233,7 @@ export default function TransactionsPage() {
     setFamilyLimitsMap(limitsMap);
 
     const cashMap: Record<string, number> = {};
-    coh?.forEach(c => { cashMap[c.user_id] = Number(c.current_balance); });
+    coh?.forEach(c => { cashMap[c.user_id] = (cashMap[c.user_id] || 0) + Number(c.current_balance); });
     setUserCashMap(cashMap);
   };
 
@@ -250,15 +250,25 @@ export default function TransactionsPage() {
 
 
   // --- Helper: Cash Update with Ledger ---
-  async function updateCashBalance(userId: string, amt: number, type: 'credit' | 'debit', note: string) {
-    const { data: coh } = await supabase.from('cash_on_hand').select('*').eq('user_id', userId).maybeSingle();
+  async function updateCashBalance(userId: string, cardId: string, amt: number, type: 'credit' | 'debit', note: string) {
+    const { data: coh } = await supabase.from('cash_on_hand').select('*').eq('user_id', userId).eq('card_id', cardId).maybeSingle();
     const currentBalance = coh ? Number(coh.current_balance) : 0;
     const newBalance = type === 'credit' ? currentBalance + amt : currentBalance - amt;
 
-    await supabase.from('cash_on_hand').upsert({ user_id: userId, current_balance: newBalance, card_id: globalSelectedCardId !== 'all' ? globalSelectedCardId : accessibleCards[0]?.id });
-    await supabase.from('cash_on_hand_ledger').insert({ card_id: globalSelectedCardId !== 'all' ? globalSelectedCardId : accessibleCards[0]?.id,
+    const { error: cashUpsertError } = await supabase.from('cash_on_hand').upsert({
+      user_id: userId,
+      card_id: cardId,
+      current_balance: newBalance
+    }, {
+      onConflict: 'user_id,card_id'
+    });
+    if (cashUpsertError) throw cashUpsertError;
+
+    const { error: cashLedgerError } = await supabase.from('cash_on_hand_ledger').insert({
+       card_id: cardId,
        user_id: userId, amount: amt, transaction_type: type, remarks: note, transaction_date: new Date().toISOString()
     });
+    if (cashLedgerError) throw cashLedgerError;
   };
 
   // --- Helper: Process Bill Payment (Billing Cycles) ---
@@ -429,12 +439,12 @@ export default function TransactionsPage() {
            if (cardSplitAmt > 0) await supabase.from('spends').insert({ user_id: actingUserId, amount: cardSplitAmt, spend_type: 'personal', payment_method: 'credit_card', remarks: remarks, spend_date: finalDate, card_id: entryCardId });
            if (cashSplitAmt > 0) {
               await supabase.from('spends').insert({ user_id: actingUserId, amount: cashSplitAmt, spend_type: 'personal', payment_method: 'cash_on_hand', remarks: remarks + " (Auto-Split)", spend_date: finalDate, card_id: entryCardId });
-              await updateCashBalance(actingUserId, cashSplitAmt, 'debit', `Personal spend ${remarks ? '- '+remarks : ''} (Auto-Split)`);
+              await updateCashBalance(actingUserId, entryCardId, cashSplitAmt, 'debit', `Personal spend ${remarks ? '- '+remarks : ''} (Auto-Split)`);
            }
         } else {
            await supabase.from('spends').insert({ user_id: actingUserId, amount: amtNum, spend_type: 'personal', payment_method: spendMethod, remarks: remarks, spend_date: finalDate, card_id: entryCardId });
            if (spendMethod === "cash_on_hand") {
-              await updateCashBalance(actingUserId, amtNum, 'debit', `Personal spend ${remarks ? '- '+remarks : ''}`);
+              await updateCashBalance(actingUserId, entryCardId, amtNum, 'debit', `Personal spend ${remarks ? '- '+remarks : ''}`);
            }
         }
       } 
@@ -449,7 +459,7 @@ export default function TransactionsPage() {
         if (isSplitting) {
            if (cashSplitAmt > 0) {
               await supabase.from('card_transactions').insert({ amount: cashSplitAmt, type: 'bill_payment', status: 'settled', transaction_date: finalDate, recorded_by: actingUserId, payment_method: 'cash_on_hand', remarks: remarks, card_id: entryCardId, billing_cycle_id: activeCycleId });
-              await updateCashBalance(actingUserId, cashSplitAmt, 'debit', `Bill payment ${remarks ? '- '+remarks : ''}`);
+              await updateCashBalance(actingUserId, entryCardId, cashSplitAmt, 'debit', `Bill payment ${remarks ? '- '+remarks : ''}`);
            }
            if (pocketSplitAmt > 0) {
               await supabase.from('card_transactions').insert({ amount: pocketSplitAmt, type: 'bill_payment', status: 'settled', transaction_date: finalDate, recorded_by: actingUserId, payment_method: 'own_pocket', remarks: remarks, card_id: entryCardId, billing_cycle_id: activeCycleId });
@@ -457,7 +467,7 @@ export default function TransactionsPage() {
         } else {
            await supabase.from('card_transactions').insert({ amount: amtNum, type: 'bill_payment', status: 'settled', transaction_date: finalDate, recorded_by: actingUserId, payment_method: billMethod, remarks: remarks, card_id: entryCardId, billing_cycle_id: activeCycleId });
            if (billMethod === "cash_on_hand") {
-              await updateCashBalance(actingUserId, amtNum, 'debit', `Bill payment ${remarks ? '- '+remarks : ''}`);
+              await updateCashBalance(actingUserId, entryCardId, amtNum, 'debit', `Bill payment ${remarks ? '- '+remarks : ''}`);
            }
         }
       }
