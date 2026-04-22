@@ -279,7 +279,7 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
   };
 
   const markQrAsUsedToday = async () => {
-    if (!selectedQr || !selectedPaymentCardId) {
+    if (!selectedQr || !selectedPaymentCardId || !currentUser) {
         alert("Please select a card for the payment first!");
         return;
     }
@@ -289,17 +289,20 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
     const totalAmt = generatedAmounts.length > 0 ? generatedAmounts.reduce((a, b) => a + b, 0) : 1900;
 
     try {
-        await supabase.from('qrs').update({ last_used_date: nowISO }).eq('id', selectedQr.id);
-
-        await supabase.from('card_transactions').insert({
+        const { error: txInsertError } = await supabase.from('card_transactions').insert({
             card_id: selectedPaymentCardId,
             qr_id: selectedQr.id,
             amount: totalAmt,
             transaction_date: todayStr,
             type: 'withdrawal',
             status: 'pending_settlement',
-            recorded_by: currentUser?.id
+            recorded_by: currentUser.id,
+            remarks: 'Qr rotation withdraw'
         });
+        if (txInsertError) throw txInsertError;
+
+        const { error: qrUpdateError } = await supabase.from('qrs').update({ last_used_date: nowISO }).eq('id', selectedQr.id);
+        if (qrUpdateError) throw qrUpdateError;
 
         setIsViewModalOpen(false);
         fetchQRs();

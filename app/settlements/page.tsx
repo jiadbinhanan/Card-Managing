@@ -190,21 +190,27 @@ export default function SettlementsPage() {
 
   const handleConfirmSettlement = async () => {
      if (!settleTx || !cashReceiverId) return;
+     if (!settleTx.card_id) {
+        alert("Card তথ্য পাওয়া যায়নি। Settlement করা যাচ্ছে না।");
+        return;
+     }
      setIsSettling(true);
 
      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
      const isPartial = settlementType === "partial" && Number(partialAmount) > 0 && Number(partialAmount) < settleTx.amount;
      const amtToSettle = isPartial ? Number(partialAmount) : settleTx.amount;
+     const settleCardId = settleTx.card_id;
 
      try {
         if (isPartial) {
             const newPendingBalance = settleTx.amount - amtToSettle;
-            await supabase.from('card_transactions').update({
+            const { error: pendingUpdateError } = await supabase.from('card_transactions').update({
                 amount: newPendingBalance
             }).eq('id', settleTx.id);
+            if (pendingUpdateError) throw pendingUpdateError;
 
-            await supabase.from('card_transactions').insert({
-                card_id: settleTx.card_id,
+            const { error: settledInsertError } = await supabase.from('card_transactions').insert({
+                card_id: settleCardId,
                 qr_id: settleTx.qr_id, 
                 amount: amtToSettle,
                 transaction_date: settleTx.transaction_date, 
@@ -215,19 +221,21 @@ export default function SettlementsPage() {
                 recorded_by: currentUser?.id,
                 remarks: `Partial Settlement (Total was ₹${settleTx.amount})`
             });
+            if (settledInsertError) throw settledInsertError;
         } else {
-            await supabase.from('card_transactions').update({
+            const { error: settledUpdateError } = await supabase.from('card_transactions').update({
                 status: 'settled',
                 settled_date: today,
                 settled_to_user: cashReceiverId
             }).eq('id', settleTx.id);
+            if (settledUpdateError) throw settledUpdateError;
         }
 
         const { data: existingCashRow, error: existingCashError } = await supabase
            .from('cash_on_hand')
            .select('current_balance')
            .eq('user_id', cashReceiverId)
-           .eq('card_id', settleTx.card_id)
+           .eq('card_id', settleCardId)
            .maybeSingle();
         if (existingCashError) throw existingCashError;
 
@@ -236,14 +244,14 @@ export default function SettlementsPage() {
            .from('cash_on_hand')
            .update({ current_balance: newBalance })
            .eq('user_id', cashReceiverId)
-           .eq('card_id', settleTx.card_id)
+           .eq('card_id', settleCardId)
            .select('user_id');
         if (cashUpdateError) throw cashUpdateError;
 
         if (!updatedRows || updatedRows.length === 0) {
            const { error: cashInsertError } = await supabase.from('cash_on_hand').insert({
               user_id: cashReceiverId,
-              card_id: settleTx.card_id,
+              card_id: settleCardId,
               current_balance: newBalance
            });
            if (cashInsertError) throw cashInsertError;
@@ -251,7 +259,7 @@ export default function SettlementsPage() {
 
         const { error: cashLedgerError } = await supabase.from('cash_on_hand_ledger').insert({
            user_id: cashReceiverId,
-           card_id: settleTx.card_id,
+           card_id: settleCardId,
            amount: amtToSettle,
            transaction_type: 'credit',
            remarks: `Settlement received from ${settleTx.qrs?.merchant_name || 'Manual Entry'}`,
