@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { useCardStore } from "@/store/cardStore";
-import { motion, AnimatePresence } from "motion/react";
+import { motion, AnimatePresence, type Variants } from "motion/react";
 import { 
   ArrowDownLeft, 
   CreditCard, 
@@ -86,6 +86,17 @@ interface CardAccess {
   user_id: string;
   role: string;
 }
+
+// Stagger Animation Variants
+const listContainerVars: Variants = {
+  hidden: { opacity: 0, transition: { duration: 0 } },
+  visible: { opacity: 1, transition: { staggerChildren: 0.08 } }
+};
+
+const listItemVars: Variants = {
+  hidden: { opacity: 0, y: 20, scale: 0.95, filter: "blur(4px)" },
+  visible: { opacity: 1, y: 0, scale: 1, filter: "blur(0px)", transition: { type: "spring", stiffness: 300, damping: 24 } }
+};
 
 export default function TransactionsPage() {
   const [activeTab, setActiveTab] = useState<"all" | "rotations" | "spends" | "bill_paid">("all");
@@ -584,6 +595,9 @@ export default function TransactionsPage() {
      setExpandedId(expandedId === id ? null : id);
   };
 
+  // Generate a composite key so that stagger animations trigger on any filter change
+  const animationKey = `${activeTab}-${filterUser}-${filterDateType}-${customDateRange.start}-${customDateRange.end}`;
+
   return (
     <div className="relative min-h-screen bg-[#030014] text-slate-50 font-sans pb-28 overflow-x-hidden selection:bg-[#0ea5e9]/30">
 
@@ -595,8 +609,8 @@ export default function TransactionsPage() {
         <motion.div animate={{ scale: [1, 1.4, 1], opacity: [0.08, 0.2, 0.08] }} transition={{ duration: 10, repeat: Infinity }} className="absolute top-[30%] left-[15%] w-[60vw] h-[60vw] rounded-full bg-[#10b981] opacity-[0.15] blur-[100px] mix-blend-screen" />
       </div>
 
-      {/* ================= HEADER (Unified with Settlements Page) ================= */}
-      <header className="relative z-10 px-5 pt-8 pb-3 sticky top-0 bg-[#030014]/70 backdrop-blur-3xl border-b border-white/5 shadow-[0_15px_40px_rgba(0,0,0,0.8)] flex justify-between items-center">
+      {/* ================= HEADER ================= */}
+      <motion.header initial={{ y: -20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className="relative z-10 px-5 pt-8 pb-3 sticky top-0 bg-[#030014]/70 backdrop-blur-3xl border-b border-white/5 shadow-[0_15px_40px_rgba(0,0,0,0.8)] flex justify-between items-center">
         <div className="flex items-center gap-3">
            <Link href="/settings">
              <div className="h-10 w-10 rounded-full bg-gradient-to-tr from-[#0ea5e9] to-[#a855f7] p-0.5 shadow-[0_0_20px_rgba(14,165,233,0.4)] cursor-pointer hover:scale-105 transition-transform overflow-hidden">
@@ -617,17 +631,28 @@ export default function TransactionsPage() {
            </Link>
            <div>
              <motion.div 
-               animate={{ backgroundPosition: ['0% 50%', '100% 50%', '0% 50%'] }}
-               transition={{ duration: 5, ease: "linear", repeat: Infinity }}
-               className="bg-[length:200%_200%] bg-gradient-to-r from-[#0ea5e9] via-[#a855f7] to-[#0ea5e9] bg-clip-text"
+               initial={{ filter: "blur(10px)", opacity: 0, x: -10 }} 
+               animate={{ filter: "blur(0px)", opacity: 1, x: 0 }} 
+               transition={{ duration: 0.8, ease: "easeOut" }}
              >
-               <p className="text-[10px] font-black uppercase tracking-widest leading-none mb-0.5 text-transparent">
-                 Live Ledger
-               </p>
+               <motion.div 
+                 animate={{ backgroundPosition: ['0% 50%', '100% 50%', '0% 50%'] }}
+                 transition={{ duration: 5, ease: "linear", repeat: Infinity }}
+                 className="bg-[length:200%_200%] bg-gradient-to-r from-[#0ea5e9] via-[#a855f7] to-[#0ea5e9] bg-clip-text"
+               >
+                 <p className="text-[10px] font-black uppercase tracking-widest leading-none mb-0.5 text-transparent">
+                   Live Ledger
+                 </p>
+               </motion.div>
              </motion.div>
-             <h1 className="text-xl font-black tracking-tight bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent leading-none drop-shadow-[0_0_15px_rgba(255,255,255,0.3)]">
+             <motion.h1 
+               initial={{ filter: "blur(10px)", opacity: 0, y: -5 }} 
+               animate={{ filter: "blur(0px)", opacity: 1, y: 0 }} 
+               transition={{ duration: 0.8, delay: 0.1, ease: "easeOut" }}
+               className="text-xl font-black tracking-tight bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent leading-none drop-shadow-[0_0_15px_rgba(255,255,255,0.3)]"
+             >
                Transactions
-             </h1>
+             </motion.h1>
            </div>
         </div>
 
@@ -644,12 +669,12 @@ export default function TransactionsPage() {
           </select>
           <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
         </div>
-      </header>
+      </motion.header>
 
       <main className="relative z-10 px-4 pt-5 max-w-md mx-auto space-y-5">
 
         {/* ================= DYNAMIC FILTERS ================= */}
-        <div className="space-y-3">
+        <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="space-y-3">
            <div className="bg-white/[0.03] p-1.5 rounded-2xl border border-white/10 flex items-center justify-between backdrop-blur-xl shadow-inner overflow-x-auto custom-scrollbar">
              {[
                { id: "all", label: "All" },
@@ -738,7 +763,7 @@ export default function TransactionsPage() {
                 )}
              </div>
            </div>
-        </div>
+        </motion.div>
 
         {/* ================= TIMELINE TRANSACTION LIST WITH SMOOTH EXPAND ================= */}
         {isLoading ? (
@@ -746,18 +771,24 @@ export default function TransactionsPage() {
              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#0ea5e9]"></div>
           </div>
         ) : (
-          <motion.div initial="hidden" animate="visible" className="space-y-6 pb-6 relative z-10">
+          <motion.div 
+            key={animationKey} // Forces re-animation on tab or filter change
+            variants={listContainerVars}
+            initial="hidden"
+            animate="visible"
+            className="space-y-6 pb-6 relative z-10"
+          >
             <AnimatePresence mode="popLayout">
               {(Object.entries(groupedLedger) as [string, any[]][]).map(([date, items]) => (
                  <div key={date} className="space-y-3">
 
                     {/* Timeline Date Header */}
-                    <div className="sticky top-20 z-20 flex items-center gap-3">
+                    <motion.div variants={listItemVars} className="sticky top-20 z-20 flex items-center gap-3">
                        <span className="px-3 py-1 bg-black/80 backdrop-blur-md border border-white/10 rounded-full text-[10px] font-black uppercase tracking-widest text-[#0ea5e9] shadow-[0_0_10px_rgba(14,165,233,0.2)]">
                           {date}
                        </span>
                        <div className="flex-1 h-px bg-gradient-to-r from-white/10 to-transparent" />
-                    </div>
+                    </motion.div>
 
                     {items.map((item) => {
                       const Icon = item.icon;
@@ -767,8 +798,7 @@ export default function TransactionsPage() {
                         <motion.div
                           key={item.id}
                           layout
-                          initial={{ opacity: 0, y: 15, scale: 0.98 }}
-                          animate={{ opacity: 1, y: 0, scale: 1 }}
+                          variants={listItemVars}
                           exit={{ opacity: 0, scale: 0.95 }}
                           transition={{ duration: 0.3 }}
                           onClick={() => toggleExpand(item.id)}
@@ -843,7 +873,7 @@ export default function TransactionsPage() {
             </AnimatePresence>
 
             {Object.keys(groupedLedger).length === 0 && (
-              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-center py-12 px-4 bg-white/[0.02] rounded-[28px] border border-white/10 border-dashed backdrop-blur-md">
+              <motion.div variants={listItemVars} className="text-center py-12 px-4 bg-white/[0.02] rounded-[28px] border border-white/10 border-dashed backdrop-blur-md">
                 <AlertCircle className="w-10 h-10 text-slate-500/40 mx-auto mb-3" />
                 <p className="text-slate-400 text-sm font-medium">No records found for this view.</p>
               </motion.div>
@@ -857,6 +887,9 @@ export default function TransactionsPage() {
         onClick={openEntryModal}
         whileHover={{ scale: 1.05 }}
         whileTap={{ scale: 0.95 }}
+        initial={{ y: 50, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ type: "spring", stiffness: 300, damping: 20 }}
         className="fixed bottom-24 right-6 w-14 h-14 rounded-[20px] bg-gradient-to-br from-[#0ea5e9] to-[#a855f7] flex items-center justify-center shadow-[0_10px_40px_rgba(168,85,247,0.6)] border border-white/20 z-40"
       >
         <Plus className="w-7 h-7 text-white" />
