@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useCardStore } from "@/store/cardStore";
 import { motion, AnimatePresence } from "motion/react";
 import { 
@@ -73,6 +73,45 @@ interface CardAccess {
   role: string;
 }
 
+// ─── Smoke Reveal: per-character (gradient applied inline per-span) ────────
+function SmokeText({ text, className = "" }: { text: string; className?: string }) {
+  return (
+    <span className={`inline-flex ${className}`} aria-label={text}>
+      {text.split("").map((char, i) => (
+        <motion.span
+          key={i}
+          initial={{ opacity: 0, filter: "blur(12px)", y: 8 }}
+          animate={{ opacity: 1, filter: "blur(0px)", y: 0 }}
+          transition={{ delay: i * 0.045, duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+          className="inline-block bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent"
+          style={{ whiteSpace: char === " " ? "pre" : "normal" }}
+        >
+          {char}
+        </motion.span>
+      ))}
+    </span>
+  );
+}
+
+// ─── Smoke Reveal: per-word (gradient applied inline per-span) ───────────
+function SmokeWords({ text, className = "" }: { text: string; className?: string }) {
+  return (
+    <span className={`inline-flex flex-wrap gap-x-[0.25em] ${className}`} aria-label={text}>
+      {text.split(" ").map((word, i) => (
+        <motion.span
+          key={i}
+          initial={{ opacity: 0, filter: "blur(8px)", y: 5 }}
+          animate={{ opacity: 1, filter: "blur(0px)", y: 0 }}
+          transition={{ delay: 0.3 + i * 0.08, duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+          className="inline-block bg-gradient-to-r from-[#f59e0b] via-[#ef4444] to-[#f59e0b] bg-clip-text text-transparent"
+        >
+          {word}
+        </motion.span>
+      ))}
+    </span>
+  );
+}
+
 export default function LentsPage() {
   const [lents, setLents] = useState<LentRecord[]>([]);
   const [currentUser, setCurrentUser] = useState<Profile | null>(null);
@@ -82,7 +121,8 @@ export default function LentsPage() {
   const [allCardAccess, setAllCardAccess] = useState<CardAccess[]>([]);
   const [accessibleCards, setAccessibleCards] = useState<CardData[]>([]); 
 
-  const [userCashMap, setUserCashMap] = useState<Record<string, number>>({});
+  // FIXED: user+card centric cash map — userCardCashMap[user_id][card_id] = balance
+  const [cardCashMap, setCardCashMap] = useState<Record<string, Record<string, number>>>({});
   const [cardAvailableMap, setCardAvailableMap] = useState<Record<string, number>>({});
 
   const [isLoading, setIsLoading] = useState(true);
@@ -96,7 +136,8 @@ export default function LentsPage() {
   const [borrowerName, setBorrowerName] = useState("");
   const [amount, setAmount] = useState("");
   const [fundSource, setFundSource] = useState<"cash_on_hand" | "credit_card">("cash_on_hand");
-  const [selectedCardId, setSelectedCardId] = useState("");
+  const [selectedCardId, setSelectedCardId] = useState(""); // credit card source
+  const [cashSourceCardId, setCashSourceCardId] = useState(""); // NEW: cash source card
   const [lentDate, setLentDate] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [remarks, setRemarks] = useState("");
@@ -108,7 +149,8 @@ export default function LentsPage() {
   const [collectType, setCollectType] = useState<"full" | "partial">("full");
   const [collectAmount, setCollectAmount] = useState<string>("");
   const [receiveMethod, setReceiveMethod] = useState<"cash" | "card">("cash");
-  const [receiveCardId, setReceiveCardId] = useState<string>("");
+  const [receiveCardId, setReceiveCardId] = useState<string>(""); // direct-to-card
+  const [receiveCashCardId, setReceiveCashCardId] = useState<string>(""); // NEW: cash-to-card
 
   useEffect(() => {
     fetchInitialData();
@@ -190,13 +232,20 @@ export default function LentsPage() {
     const { data: lData } = await lentsQuery;
     if (lData) setLents(lData as any);
 
-    // 2. Fetch Cash On Hand
-    const { data: coh } = await supabase.from('cash_on_hand').select('*');
-    const cashMap: Record<string, number> = {};
-    coh?.forEach(c => { cashMap[c.user_id] = (cashMap[c.user_id] || 0) + Number(c.current_balance); });
-    setUserCashMap(cashMap);
+    // 2. FIXED: Cash On Hand — user+card centric map
+    // Structure: userCardCashMap[user_id][card_id] = balance
+    // এভাবে current user-এর নির্দিষ্ট card family-র total cash বের করা যাবে
+    const { data: coh } = await supabase.from('cash_on_hand').select('user_id, card_id, current_balance');
+    const userCardCashMap: Record<string, Record<string, number>> = {};
+    coh?.forEach(c => {
+      if (c.user_id && c.card_id) {
+        if (!userCardCashMap[c.user_id]) userCardCashMap[c.user_id] = {};
+        userCardCashMap[c.user_id][c.card_id] = Number(c.current_balance);
+      }
+    });
+    setCardCashMap(userCardCashMap as any);
 
-    // 3. Exact Dashboard Logic for Card Available Limits
+    // 3. Card Available Limits
     const { data: txs } = await supabase.from('card_transactions').select('amount, type, payment_method, card_id, status');
     const { data: spends } = await supabase.from('spends').select('amount, payment_method, user_id, card_id');
 
@@ -220,12 +269,10 @@ export default function LentsPage() {
 
   // --- Cash Update using cash_on_hand_ledger ---
   const updateCashBalance = async (userId: string, cardId: string, amt: number, type: 'credit' | 'debit', note: string) => {
-     // 1. Get current balance
      const { data: coh } = await supabase.from('cash_on_hand').select('*').eq('user_id', userId).eq('card_id', cardId).maybeSingle();
      const currentBalance = coh ? Number(coh.current_balance) : 0;
      const newBalance = type === 'credit' ? currentBalance + amt : currentBalance - amt;
 
-     // 2. Update cash_on_hand table (Total tracking)
      const { data: updatedRows, error: cashUpdateError } = await supabase
        .from('cash_on_hand')
        .update({ current_balance: newBalance })
@@ -243,7 +290,6 @@ export default function LentsPage() {
        if (cashInsertError) throw cashInsertError;
      }
 
-     // 3. Insert into cash_on_hand_ledger (History tracking)
      const { error: cashLedgerError } = await supabase.from('cash_on_hand_ledger').insert({
         user_id: userId,
         card_id: cardId,
@@ -259,7 +305,10 @@ export default function LentsPage() {
   const handleSaveLent = async () => {
     if (!currentUser) return;
     const amtNum = Number(amount);
-    const actorCash = userCashMap[currentUser.id] || 0;
+
+    // FIXED: active cash card — modal-এ সিলেক্ট করা card-এ current user-এর balance
+    const activeCashCardId = cashSourceCardId;
+    const actorCashForCard = currentUser ? getUserCashForCard(currentUser.id, activeCashCardId) : 0;
 
     let activeLimit = 0;
     if (fundSource === 'credit_card' && selectedCardId) {
@@ -271,8 +320,8 @@ export default function LentsPage() {
       return;
     }
 
-    if (fundSource === 'cash_on_hand' && amtNum > actorCash) {
-       alert(`Insufficient Cash! You only have ₹${actorCash.toLocaleString()} available.`);
+    if (fundSource === 'cash_on_hand' && amtNum > actorCashForCard) {
+       alert(`Insufficient Cash! Selected card only has ₹${actorCashForCard.toLocaleString()} available.`);
        return;
     }
 
@@ -284,17 +333,11 @@ export default function LentsPage() {
     setIsSaving(true);
 
     try {
-      // Cash Update with Ledger History
       if (fundSource === 'cash_on_hand') {
-         const cashCardId =
-           globalSelectedCardId !== 'all'
-             ? globalSelectedCardId
-             : accessibleCards[0]?.id;
-         if (!cashCardId) throw new Error("No card selected for cash entry.");
-         await updateCashBalance(currentUser.id, cashCardId, amtNum, 'debit', `Lent given to ${borrowerName}`);
+         if (!activeCashCardId) throw new Error("No card selected for cash entry.");
+         await updateCashBalance(currentUser.id, activeCashCardId, amtNum, 'debit', `Lent given to ${borrowerName}`);
       }
 
-      // Card Transactions & Spends Update
       if (fundSource === 'credit_card') {
          await supabase.from('card_transactions').insert({
             card_id: selectedCardId,
@@ -317,7 +360,9 @@ export default function LentsPage() {
          });
       }
 
-      // Record in Lents Table
+      // FIXED: cash lent-এও card_id সেভ হবে (sub-card user-এর নিজের card)
+      const lentCardId = fundSource === 'credit_card' ? selectedCardId : activeCashCardId;
+
       const { error: lentError } = await supabase.from('short_term_lents').insert({
         borrower_name: borrowerName,
         amount: amtNum,
@@ -327,8 +372,8 @@ export default function LentsPage() {
         given_by: currentUser.id,
         funding_source: fundSource,
         remarks: remarks,
-        card_id: fundSource === 'credit_card' ? selectedCardId : null,
-        payment_history: [] // Start with empty JSON array
+        card_id: lentCardId || null,
+        payment_history: []
       });
 
       if (lentError) throw lentError;
@@ -355,18 +400,24 @@ export default function LentsPage() {
         return;
      }
 
+     if (receiveMethod === 'cash' && !receiveCashCardId) {
+        alert("Please select a card to credit the cash into.");
+        return;
+     }
+
      setIsSaving(true);
      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 
      try {
-        // Update Lent Table JSON History
         const currentHistory = collectingLent.payment_history || [];
         const newPayment: PaymentHistory = {
            id: crypto.randomUUID(),
            date: today,
            amount: amtNum,
            method: receiveMethod,
-           card_name: receiveMethod === 'card' ? accessibleCards.find(c=>c.id === receiveCardId)?.card_name : 'Cash'
+           card_name: receiveMethod === 'card'
+             ? accessibleCards.find(c => c.id === receiveCardId)?.card_name
+             : 'Cash'
         };
         const updatedHistory = [...currentHistory, newPayment];
         const newTotalPaid = updatedHistory.reduce((s, p) => s + p.amount, 0);
@@ -377,17 +428,11 @@ export default function LentsPage() {
            payment_history: updatedHistory
         }).eq('id', collectingLent.id);
 
-        // Process Received Funds
         if (receiveMethod === 'cash') {
-           // Receive to Cash (Already contains cash_on_hand_ledger entry in updateCashBalance function)
-           const cashCardId =
-             (globalSelectedCardId !== 'all' ? globalSelectedCardId : null) ||
-             collectingLent.card_id ||
-             accessibleCards[0]?.id;
-           if (!cashCardId) throw new Error("No card selected for cash collection.");
-           await updateCashBalance(currentUser.id, cashCardId, amtNum, 'credit', `Collected lent from ${collectingLent.borrower_name}`);
+           // FIXED: সবসময় modal-এ সিলেক্ট করা card-এ credit হবে
+           // sub-card user হলে তার নিজের sub-card-এ যাবে
+           await updateCashBalance(currentUser.id, receiveCashCardId, amtNum, 'credit', `Collected lent from ${collectingLent.borrower_name}`);
         } else if (receiveMethod === 'card') {
-           // --- NEW LOGIC: Check Billing Cycle for the current month ---
            let activeCycleId = null;
 
            const now = new Date();
@@ -402,7 +447,7 @@ export default function LentsPage() {
               .lte('billing_month', endOfMonth);
 
            if (cycles && cycles.length > 0) {
-              const cycle = cycles[0]; // Assuming one billing cycle per month
+              const cycle = cycles[0];
               const generatedAmt = Number(cycle.generated_amount);
               const paidAmt = Number(cycle.paid_amount);
 
@@ -422,7 +467,6 @@ export default function LentsPage() {
               }
            }
 
-           // Receive to Card (with billing_cycle_id if applicable)
            await supabase.from('card_transactions').insert({
               card_id: receiveCardId,
               amount: amtNum,
@@ -432,12 +476,10 @@ export default function LentsPage() {
               recorded_by: currentUser.id,
               payment_method: 'lent_recovery',
               remarks: `Collected lent from ${collectingLent.borrower_name}`,
-              billing_cycle_id: activeCycleId // If no unpaid bill, it stays null
+              billing_cycle_id: activeCycleId
            });
         }
 
-        // Negative Spends Entry (CRITICAL): ONLY if original lent was from a Credit Card
-        // This flawlessly offsets the Personal Due in Dashboard.
         if (collectingLent.funding_source === 'credit_card') {
            await supabase.from('spends').insert({
               user_id: currentUser.id,
@@ -467,10 +509,20 @@ export default function LentsPage() {
     setLentDate(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }));
     setDueDate(getDefaultDueDate());
 
+    // Credit card source default
     if (globalSelectedCardId !== 'all') {
        setSelectedCardId(globalSelectedCardId);
     } else if (accessibleCards.length > 0) {
        setSelectedCardId(accessibleCards[0].id);
+    }
+
+    // FIXED: Cash source card default
+    // vault-এ specific card → সেটাই default
+    // vault-এ "All" → first accessible card
+    if (globalSelectedCardId !== 'all') {
+       setCashSourceCardId(globalSelectedCardId);
+    } else if (accessibleCards.length > 0) {
+       setCashSourceCardId(accessibleCards[0].id);
     }
 
     setIsModalOpen(true);
@@ -482,11 +534,20 @@ export default function LentsPage() {
      setCollectAmount("");
      setReceiveMethod("cash");
 
+     // Card receive default
      if (globalSelectedCardId !== 'all') {
         setReceiveCardId(globalSelectedCardId);
      } else if (accessibleCards.length > 0) {
         setReceiveCardId(accessibleCards[0].id);
      }
+
+     // FIXED: Cash receive card default
+     // Priority: vault specific card → lent-এর original card → first accessible
+     const defaultCashCard =
+       globalSelectedCardId !== 'all'
+         ? globalSelectedCardId
+         : loan.card_id || accessibleCards[0]?.id || "";
+     setReceiveCashCardId(defaultCashCard);
 
      setIsCollectModalOpen(true);
   };
@@ -498,13 +559,31 @@ export default function LentsPage() {
   const activeLents = lents.filter(l => l.status !== "paid");
   const totalReceivable = activeLents.reduce((acc, curr) => acc + getRemainingAmount(curr), 0);
 
-  const actorCash = userCashMap[currentUser?.id || ""] || 0;
+  // FIXED: cash balance — current user-এর cash, card family অনুযায়ী
+  // cashSourceCardId সিলেক্ট করা থাকলে সেই card-এর জন্য current user-এর balance
+  const getUserCashForCard = (userId: string, cardId: string): number => {
+    const userMap = cardCashMap[userId] || {};
+    if (!cardId) {
+      // সব accessible card-এর total
+      return Object.values(userMap).reduce((s, v) => s + v, 0);
+    }
+    // সেই card family-র (primary + sub) সব card-এ এই user-এর balance sum
+    const card = allCards.find(c => c.id === cardId);
+    const primaryId = card?.is_primary ? card.id : card?.parent_card_id;
+    const familyIds = allCards
+      .filter(c => c.id === primaryId || c.parent_card_id === primaryId)
+      .map(c => c.id);
+    return familyIds.reduce((s, cid) => s + (userMap[cid] || 0), 0);
+  };
+
+  const actorCash = currentUser
+    ? getUserCashForCard(currentUser.id, cashSourceCardId)
+    : 0;
 
   const toggleExpand = (id: string) => {
      setExpandedId(expandedId === id ? null : id);
   };
 
-  // User's own accessible cards for entry modal
   const entryUserAccessibleCardIds = allCardAccess.filter(a => a.user_id === currentUser?.id).map(a => a.card_id);
   const entryUserCards = allCards.filter(c => entryUserAccessibleCardIds.includes(c.id)).sort((a,b) => (a.is_primary === b.is_primary ? 0 : a.is_primary ? -1 : 1));
 
@@ -547,17 +626,20 @@ export default function LentsPage() {
              </div>
            </Link>
            <div>
-             <motion.div 
-               animate={{ backgroundPosition: ['0% 50%', '100% 50%', '0% 50%'] }}
-               transition={{ duration: 5, ease: "linear", repeat: Infinity }}
-               className="bg-[length:200%_200%] bg-gradient-to-r from-[#f59e0b] via-[#ef4444] to-[#f59e0b] bg-clip-text"
-             >
-               <p className="text-[10px] font-black uppercase tracking-widest leading-none mb-0.5 text-transparent">
-                 Credit Extensions
-               </p>
-             </motion.div>
-             <h1 className="text-xl font-black tracking-tight bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent leading-none drop-shadow-[0_0_15px_rgba(255,255,255,0.3)]">
-               Micro-Lending
+             {/* ── SMOKE REVEAL subtitle ── */}
+             <div className="overflow-hidden">
+               <motion.div 
+                 animate={{ backgroundPosition: ['0% 50%', '100% 50%', '0% 50%'] }}
+                 transition={{ duration: 5, ease: "linear", repeat: Infinity }}
+               >
+                 <p className="text-[10px] font-black uppercase tracking-widest leading-none mb-0.5">
+                   <SmokeWords text="Credit Extensions" />
+                 </p>
+               </motion.div>
+             </div>
+             {/* ── SMOKE REVEAL title ── */}
+             <h1 className="text-xl font-black tracking-tight leading-none">
+               <SmokeText text="Micro-Lending" />
              </h1>
            </div>
         </div>
@@ -591,23 +673,45 @@ export default function LentsPage() {
           <div className="absolute inset-0 bg-gradient-to-br from-[#f59e0b]/10 to-[#ef4444]/5 z-0" />
 
           <div className="relative z-10 flex flex-col items-center text-center mt-2">
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-1">Total Due (Remaining)</span>
-            <div className="text-4xl font-black font-space tracking-tight bg-gradient-to-r from-[#f59e0b] via-[#fbbf24] to-[#ef4444] bg-clip-text text-transparent drop-shadow-[0_0_20px_rgba(245,158,11,0.5)]">
+            <motion.span
+              initial={{ opacity: 0, letterSpacing: "0.4em" }}
+              animate={{ opacity: 1, letterSpacing: "0.2em" }}
+              transition={{ duration: 0.7, delay: 0.2 }}
+              className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-1"
+            >
+              Total Due (Remaining)
+            </motion.span>
+            <motion.div
+              initial={{ opacity: 0, scale: 0.85, filter: "blur(10px)" }}
+              animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
+              transition={{ duration: 0.6, delay: 0.35, ease: [0.22, 1, 0.36, 1] }}
+              className="text-4xl font-black font-space tracking-tight bg-gradient-to-r from-[#f59e0b] via-[#fbbf24] to-[#ef4444] bg-clip-text text-transparent drop-shadow-[0_0_20px_rgba(245,158,11,0.5)]"
+            >
               ₹{totalReceivable.toLocaleString('en-IN')}
-            </div>
-            <div className="mt-4 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/5 border border-white/10 text-[10px] font-bold text-slate-300 shadow-inner">
+            </motion.div>
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5, delay: 0.5 }}
+              className="mt-4 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/5 border border-white/10 text-[10px] font-bold text-slate-300 shadow-inner"
+            >
               <AlertCircle className="w-3.5 h-3.5 text-[#f59e0b]" />
               <span>Track friends who owe you money</span>
-            </div>
+            </motion.div>
           </div>
         </motion.section>
 
         {/* ================= BORROWERS LIST ================= */}
         <section>
           <div className="flex items-center justify-between mb-4 px-1">
-            <h2 className="text-xs font-black text-transparent bg-clip-text bg-gradient-to-r from-[#f59e0b] to-[#fbbf24] uppercase tracking-wider flex items-center gap-2 drop-shadow-[0_0_15px_rgba(245,158,11,0.4)]">
+            <motion.h2
+              initial={{ opacity: 0, x: -12 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.5, delay: 0.4 }}
+              className="text-xs font-black text-transparent bg-clip-text bg-gradient-to-r from-[#f59e0b] to-[#fbbf24] uppercase tracking-wider flex items-center gap-2 drop-shadow-[0_0_15px_rgba(245,158,11,0.4)]"
+            >
                Full Lending Ledger
-            </h2>
+            </motion.h2>
           </div>
 
           {isLoading ? (
@@ -615,7 +719,12 @@ export default function LentsPage() {
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#f59e0b]"></div>
              </div>
           ) : (
-            <motion.div initial="hidden" animate="visible" className="space-y-3 pb-6">
+            <motion.div
+              initial="hidden"
+              animate="visible"
+              variants={{ hidden: {}, visible: { transition: { staggerChildren: 0.07 } } }}
+              className="space-y-3 pb-6"
+            >
               <AnimatePresence mode="popLayout">
                 {lents.map((loan) => {
                   const isExpanded = expandedId === loan.id;
@@ -630,20 +739,28 @@ export default function LentsPage() {
                     <motion.div
                       key={loan.id}
                       layout
-                      initial={{ opacity: 0, y: 15, scale: 0.98 }}
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      variants={{
+                        hidden: { opacity: 0, y: 18, scale: 0.97 },
+                        visible: { opacity: 1, y: 0, scale: 1, transition: { duration: 0.4, ease: [0.22, 1, 0.36, 1] } }
+                      }}
                       exit={{ opacity: 0, scale: 0.95 }}
-                      transition={{ duration: 0.3 }}
                       onClick={() => toggleExpand(loan.id)}
                       className={`group relative p-4 bg-white/[0.03] border rounded-[24px] backdrop-blur-xl flex flex-col hover:bg-white/[0.05] transition-all cursor-pointer overflow-hidden shadow-inner ${
                         isUrgent ? "border-[#ef4444]/40 shadow-[0_0_20px_rgba(239,68,68,0.1)]" : "border-white/5 hover:border-white/10"
                       } ${isPaid ? "opacity-60 grayscale-[30%] hover:grayscale-0 hover:opacity-100" : ""}`}
                     >
+                      {/* Shimmer */}
+                      <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500 bg-gradient-to-r from-transparent via-white/[0.02] to-transparent pointer-events-none" />
+
                       <div className="flex justify-between items-center relative z-10 w-full">
                         <div className="flex items-center gap-3 w-[65%]">
-                          <div className={`w-11 h-11 shrink-0 rounded-[14px] flex items-center justify-center border border-white/5 shadow-inner ${isPaid ? 'bg-emerald-500/10' : (isPartial ? 'bg-amber-500/10' : 'bg-[#f59e0b]/10')}`}>
+                          <motion.div
+                            whileHover={{ scale: 1.08, rotate: 3 }}
+                            transition={{ type: "spring", stiffness: 400, damping: 15 }}
+                            className={`w-11 h-11 shrink-0 rounded-[14px] flex items-center justify-center border border-white/5 shadow-inner ${isPaid ? 'bg-emerald-500/10' : (isPartial ? 'bg-amber-500/10' : 'bg-[#f59e0b]/10')}`}
+                          >
                             <User className={`w-5 h-5 ${isPaid ? 'text-emerald-400' : (isPartial ? 'text-amber-400' : 'text-[#f59e0b]')}`} />
-                          </div>
+                          </motion.div>
                           <div className="truncate">
                             <h3 className="text-sm font-bold text-slate-100 mb-0.5 truncate">{loan.borrower_name}</h3>
                             <div className="flex items-center gap-1.5 text-[10px] font-medium text-slate-400 truncate">
@@ -658,14 +775,23 @@ export default function LentsPage() {
                         <div className="flex flex-col items-end gap-1 relative z-10 shrink-0">
                           <div className="text-base font-black text-white tracking-tight flex items-center gap-1">
                             ₹{remainingAmount.toLocaleString('en-IN')}
-                            <ChevronDown className={`w-3.5 h-3.5 opacity-50 transition-transform duration-300 ${isExpanded ? 'rotate-180' : ''}`} />
+                            <motion.span
+                              animate={{ rotate: isExpanded ? 180 : 0 }}
+                              transition={{ duration: 0.3, ease: "easeInOut" }}
+                              className="inline-block"
+                            >
+                              <ChevronDown className="w-3.5 h-3.5 opacity-50" />
+                            </motion.span>
                           </div>
 
-                          {/* Dynamic Status Badges */}
                           {isPaid ? (
-                             <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider bg-[#10b981]/10 text-[#10b981] px-1.5 py-0.5 rounded border border-[#10b981]/20">
+                             <motion.span
+                               initial={{ scale: 0.8, opacity: 0 }}
+                               animate={{ scale: 1, opacity: 1 }}
+                               className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider bg-[#10b981]/10 text-[#10b981] px-1.5 py-0.5 rounded border border-[#10b981]/20"
+                             >
                                 <CheckCircle2 className="w-2.5 h-2.5" /> Paid
-                             </span>
+                             </motion.span>
                           ) : isPartial ? (
                              <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider bg-amber-500/10 text-amber-500 px-1.5 py-0.5 rounded border border-amber-500/20">
                                 Partial
@@ -684,63 +810,74 @@ export default function LentsPage() {
                                initial={{ height: 0, opacity: 0, marginTop: 0 }}
                                animate={{ height: "auto", opacity: 1, marginTop: 16 }}
                                exit={{ height: 0, opacity: 0, marginTop: 0 }}
+                               transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
                                className="relative z-10 border-t border-white/10 pt-4 overflow-hidden"
                             >
-                               {/* Loan Details */}
                                <div className="grid grid-cols-2 gap-y-4 gap-x-2 text-xs mb-4">
-                                  <div>
+                                  <motion.div initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.05 }}>
                                      <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Funded From</p>
                                      <p className="font-bold text-slate-200 flex items-center gap-1">
                                         {loan.funding_source === 'credit_card' ? <><CreditCard className="w-3.5 h-3.5 text-indigo-400"/> Card Swipe</> : <><Banknote className="w-3.5 h-3.5 text-amber-400"/> Held Cash</>}
                                      </p>
-                                  </div>
-                                  <div>
+                                  </motion.div>
+                                  <motion.div initial={{ opacity: 0, x: 8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.08 }}>
                                      <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Total Lent</p>
                                      <p className="font-bold text-slate-200">₹{loan.amount.toLocaleString()}</p>
-                                  </div>
+                                  </motion.div>
                                   {loan.funding_source === 'credit_card' && loan.cards && (
-                                     <div className="col-span-2">
+                                     <motion.div initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="col-span-2">
                                         <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Card Used</p>
                                         <p className="font-bold text-slate-300">{loan.cards.card_name} (**{loan.cards.last_4_digits})</p>
-                                     </div>
+                                     </motion.div>
                                   )}
-                                  <div>
+                                  <motion.div initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.11 }}>
                                      <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Lent On</p>
                                      <p className="font-bold text-slate-200">{new Date(displayDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</p>
-                                  </div>
-                                  <div className="col-span-2">
+                                  </motion.div>
+                                  <motion.div initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.13 }} className="col-span-2">
                                      <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Remarks</p>
                                      <p className="font-medium text-slate-300 bg-black/20 p-2 rounded-lg border border-white/5">{loan.remarks || "No remarks added."}</p>
-                                  </div>
+                                  </motion.div>
                                </div>
 
-                               {/* JSON Payment History Render */}
                                {loan.payment_history && loan.payment_history.length > 0 && (
-                                  <div className="mb-4 bg-black/30 rounded-xl p-3 border border-white/5">
+                                  <motion.div
+                                    initial={{ opacity: 0, y: 8 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    transition={{ delay: 0.15 }}
+                                    className="mb-4 bg-black/30 rounded-xl p-3 border border-white/5"
+                                  >
                                      <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-2 flex items-center gap-1"><History className="w-3 h-3" /> Recovery History</p>
                                      <div className="space-y-2">
                                         {loan.payment_history.map((ph, idx) => (
-                                           <div key={idx} className="flex justify-between items-center text-xs">
+                                           <motion.div
+                                             key={idx}
+                                             initial={{ opacity: 0, x: -6 }}
+                                             animate={{ opacity: 1, x: 0 }}
+                                             transition={{ delay: 0.17 + idx * 0.05 }}
+                                             className="flex justify-between items-center text-xs"
+                                           >
                                               <div className="flex items-center gap-2">
                                                  <div className="w-1.5 h-1.5 rounded-full bg-[#10b981]" />
                                                  <span className="text-slate-300">{new Date(ph.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>
                                                  <span className="text-[9px] bg-white/10 px-1.5 rounded text-slate-400">{ph.method === 'card' ? `Card (${ph.card_name})` : 'Cash'}</span>
                                               </div>
                                               <span className="font-bold text-[#10b981]">+₹{ph.amount.toLocaleString()}</span>
-                                           </div>
+                                           </motion.div>
                                         ))}
                                      </div>
-                                  </div>
+                                  </motion.div>
                                )}
 
-                               {/* Collection Button */}
                                {!isPaid && (
-                                  <Button 
-                                    onClick={(e) => { e.stopPropagation(); openCollectModal(loan); }}
-                                    className="w-full h-11 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-xl text-xs font-black transition-all shadow-[0_0_15px_rgba(16,185,129,0.1)]"
-                                  >
-                                     <HandCoins className="w-4 h-4 mr-2" /> Collect / Mark Received
-                                  </Button>
+                                  <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
+                                    <Button 
+                                      onClick={(e) => { e.stopPropagation(); openCollectModal(loan); }}
+                                      className="w-full h-11 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-xl text-xs font-black transition-all shadow-[0_0_15px_rgba(16,185,129,0.1)]"
+                                    >
+                                       <HandCoins className="w-4 h-4 mr-2" /> Collect / Mark Received
+                                    </Button>
+                                  </motion.div>
                                )}
                             </motion.div>
                          )}
@@ -752,10 +889,15 @@ export default function LentsPage() {
               </AnimatePresence>
 
               {lents.length === 0 && (
-                 <div className="text-center py-12 px-4 bg-white/[0.02] rounded-[28px] border border-white/10 border-dashed backdrop-blur-md">
+                 <motion.div
+                   initial={{ opacity: 0, scale: 0.96 }}
+                   animate={{ opacity: 1, scale: 1 }}
+                   transition={{ duration: 0.4 }}
+                   className="text-center py-12 px-4 bg-white/[0.02] rounded-[28px] border border-white/10 border-dashed backdrop-blur-md"
+                 >
                    <Users className="w-10 h-10 text-slate-500/40 mx-auto mb-3" />
                    <p className="text-slate-400 text-sm font-medium">No lending records found.</p>
-                 </div>
+                 </motion.div>
               )}
             </motion.div>
           )}
@@ -850,7 +992,42 @@ export default function LentsPage() {
                  </div>
               </div>
 
-              {/* Card Selector (If Credit Card) */}
+              {/* ─── NEW: Cash Source Card Selector ─────────────────────── */}
+              <AnimatePresence>
+                 {fundSource === 'cash_on_hand' && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: "auto" }}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={{ duration: 0.25 }}
+                      className="space-y-1.5"
+                    >
+                       <label className="text-[11px] font-bold text-[#f59e0b] uppercase ml-1 flex items-center gap-1.5">
+                         <Banknote className="w-3.5 h-3.5" /> Cash From Which Card?
+                       </label>
+                       <div className="relative">
+                          <select 
+                             value={cashSourceCardId} 
+                             onChange={(e) => setCashSourceCardId(e.target.value)}
+                             className="w-full h-14 bg-[#f59e0b]/10 border border-[#f59e0b]/30 rounded-2xl px-4 text-sm font-bold text-white outline-none focus:border-[#f59e0b] appearance-none shadow-[0_0_15px_rgba(245,158,11,0.1)]"
+                          >
+                             <option value="" disabled className="bg-black text-slate-500">Select a card...</option>
+                             {entryUserCards.map(c => {
+                                const cashBal = currentUser ? (cardCashMap[currentUser.id]?.[c.id] || 0) : 0;
+                                return (
+                                   <option key={c.id} value={c.id} className="bg-black">
+                                      {c.card_name} (**{c.last_4_digits}) — Cash: ₹{cashBal.toLocaleString()}
+                                   </option>
+                                );
+                             })}
+                          </select>
+                          <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-[#f59e0b] pointer-events-none" />
+                       </div>
+                    </motion.div>
+                 )}
+              </AnimatePresence>
+
+              {/* Card Selector (If Credit Card) — existing, untouched */}
               <AnimatePresence>
                  {fundSource === 'credit_card' && (
                     <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="space-y-1.5">
@@ -933,7 +1110,9 @@ export default function LentsPage() {
                       if (amtNum > avail) isInsufficient = true;
                    }
 
-                   const isDisabled = isSaving || !borrowerName || isNoAmount || !lentDate || !dueDate || isInsufficient || (fundSource === 'credit_card' && !selectedCardId);
+                   const isDisabled = isSaving || !borrowerName || isNoAmount || !lentDate || !dueDate || isInsufficient 
+                     || (fundSource === 'credit_card' && !selectedCardId)
+                     || (fundSource === 'cash_on_hand' && !cashSourceCardId);
 
                    return (
                       <Button 
@@ -1021,6 +1200,42 @@ export default function LentsPage() {
                  </div>
              </div>
 
+             {/* ─── NEW: Cash Receive → কোন card-এ credit হবে ─────────── */}
+             <AnimatePresence>
+                 {receiveMethod === 'cash' && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: "auto" }}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={{ duration: 0.25 }}
+                      className="space-y-1.5"
+                    >
+                       <label className="text-[11px] font-bold text-emerald-400 uppercase ml-1 flex items-center gap-1.5">
+                         <Banknote className="w-3.5 h-3.5" /> Add Cash to Which Card?
+                       </label>
+                       <div className="relative">
+                          <select 
+                             value={receiveCashCardId} 
+                             onChange={(e) => setReceiveCashCardId(e.target.value)}
+                             className="w-full h-14 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl px-4 text-sm font-bold text-white outline-none focus:border-emerald-500 appearance-none shadow-[0_0_15px_rgba(16,185,129,0.1)]"
+                          >
+                             <option value="" disabled className="bg-black text-slate-500">Select a card...</option>
+                             {accessibleCards.map(c => {
+                                const cashBal = currentUser ? (cardCashMap[currentUser.id]?.[c.id] || 0) : 0;
+                                return (
+                                   <option key={c.id} value={c.id} className="bg-black">
+                                      {c.card_name} (**{c.last_4_digits}) — Cash: ₹{cashBal.toLocaleString()}
+                                   </option>
+                                );
+                             })}
+                          </select>
+                          <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-emerald-400 pointer-events-none" />
+                       </div>
+                    </motion.div>
+                 )}
+             </AnimatePresence>
+
+             {/* Direct to Card selector — existing, untouched */}
              <AnimatePresence>
                  {receiveMethod === 'card' && (
                     <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="space-y-1.5 pt-2">
@@ -1046,7 +1261,12 @@ export default function LentsPage() {
               <div className="pt-2">
                 <Button 
                     onClick={handleCollectLent} 
-                    disabled={isSaving || (collectType === 'partial' && (!collectAmount || Number(collectAmount) <= 0 || Number(collectAmount) >= (collectingLent ? getRemainingAmount(collectingLent) : 0))) || (receiveMethod === 'card' && !receiveCardId)} 
+                    disabled={
+                      isSaving 
+                      || (collectType === 'partial' && (!collectAmount || Number(collectAmount) <= 0 || Number(collectAmount) >= (collectingLent ? getRemainingAmount(collectingLent) : 0))) 
+                      || (receiveMethod === 'card' && !receiveCardId)
+                      || (receiveMethod === 'cash' && !receiveCashCardId)
+                    } 
                     className="w-full h-14 rounded-2xl bg-gradient-to-r from-[#10b981] to-[#34d399] hover:opacity-90 text-black font-black text-lg border-0 disabled:opacity-50 shadow-[0_0_30px_rgba(16,185,129,0.3)] transition-all"
                 >
                   {isSaving ? "Processing..." : "Confirm Receipt"}
