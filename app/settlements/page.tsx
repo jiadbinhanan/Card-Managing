@@ -2,10 +2,9 @@
 
 import { useState, useEffect } from "react";
 import { useCardStore } from "@/store/cardStore";
-import { motion, AnimatePresence } from "motion/react";
+import { motion, AnimatePresence, type Variants } from "motion/react";
 import { 
   ArrowDownLeft, 
-  Banknote,
   CheckCircle2,
   ChevronDown,
   Clock,
@@ -58,6 +57,17 @@ interface QRData {
   merchant_name: string;
 }
 
+// Stagger Animation Variants (Shared for tabs)
+const listContainerVars: Variants = {
+  hidden: { opacity: 0, display: "none", transition: { duration: 0 } },
+  visible: { opacity: 1, display: "block", transition: { staggerChildren: 0.08 } }
+};
+
+const listItemVars: Variants = {
+  hidden: { opacity: 0, y: 20, scale: 0.95, filter: "blur(4px)" },
+  visible: { opacity: 1, y: 0, scale: 1, filter: "blur(0px)", transition: { type: "spring", stiffness: 300, damping: 24 } }
+};
+
 export default function SettlementsPage() {
   const [activeTab, setActiveTab] = useState<"vault" | "pending" | "history">("vault");
 
@@ -79,6 +89,7 @@ export default function SettlementsPage() {
   const [isSettleModalOpen, setIsSettleModalOpen] = useState(false);
   const [settleTx, setSettleTx] = useState<Transaction | null>(null);
   const [cashReceiverId, setCashReceiverId] = useState("");
+  const [settleTargetCardId, setSettleTargetCardId] = useState(""); 
   const [isSettling, setIsSettling] = useState(false);
   const [settlementType, setSettlementType] = useState<"full" | "partial">("full");
   const [partialAmount, setPartialAmount] = useState<number | "">("");
@@ -160,8 +171,6 @@ export default function SettlementsPage() {
         .eq('type', 'withdrawal')
         .not('remarks', 'ilike', 'Lent given to%')
         .order('transaction_date', { ascending: false });
-    // Remove the old select and eq
-
 
     if (globalSelectedCardId !== 'all' && targetCardIds.length > 0) {
        txQuery = txQuery.in('card_id', targetCardIds);
@@ -183,34 +192,30 @@ export default function SettlementsPage() {
   const openSettleModal = (tx: Transaction) => {
      setSettleTx(tx);
      setCashReceiverId(currentUser?.id || "");
+
+     const defaultCard = globalSelectedCardId !== 'all' ? globalSelectedCardId : (tx.card_id || accessibleCards[0]?.id || "");
+     setSettleTargetCardId(defaultCard);
+
      setSettlementType("full");
      setPartialAmount("");
      setIsSettleModalOpen(true);
   };
 
   const handleConfirmSettlement = async () => {
-     if (!settleTx || !cashReceiverId) return;
-     if (!settleTx.card_id) {
-        alert("Card তথ্য পাওয়া যায়নি। Settlement করা যাচ্ছে না।");
-        return;
-     }
-     setIsSettling(true);
+     if (!settleTx || !cashReceiverId || !settleTargetCardId) return;
 
+     setIsSettling(true);
      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
      const isPartial = settlementType === "partial" && Number(partialAmount) > 0 && Number(partialAmount) < settleTx.amount;
      const amtToSettle = isPartial ? Number(partialAmount) : settleTx.amount;
-     const settleCardId = settleTx.card_id;
 
      try {
         if (isPartial) {
             const newPendingBalance = settleTx.amount - amtToSettle;
-            const { error: pendingUpdateError } = await supabase.from('card_transactions').update({
-                amount: newPendingBalance
-            }).eq('id', settleTx.id);
-            if (pendingUpdateError) throw pendingUpdateError;
+            await supabase.from('card_transactions').update({ amount: newPendingBalance }).eq('id', settleTx.id);
 
-            const { error: settledInsertError } = await supabase.from('card_transactions').insert({
-                card_id: settleCardId,
+            await supabase.from('card_transactions').insert({
+                card_id: settleTargetCardId, 
                 qr_id: settleTx.qr_id, 
                 amount: amtToSettle,
                 transaction_date: settleTx.transaction_date, 
@@ -221,51 +226,46 @@ export default function SettlementsPage() {
                 recorded_by: currentUser?.id,
                 remarks: `Partial Settlement (Total was ₹${settleTx.amount})`
             });
-            if (settledInsertError) throw settledInsertError;
         } else {
-            const { error: settledUpdateError } = await supabase.from('card_transactions').update({
+            await supabase.from('card_transactions').update({
+                card_id: settleTargetCardId, 
                 status: 'settled',
                 settled_date: today,
                 settled_to_user: cashReceiverId
             }).eq('id', settleTx.id);
-            if (settledUpdateError) throw settledUpdateError;
         }
 
-        const { data: existingCashRow, error: existingCashError } = await supabase
+        const { data: existingCashRow } = await supabase
            .from('cash_on_hand')
            .select('current_balance')
            .eq('user_id', cashReceiverId)
-           .eq('card_id', settleCardId)
+           .eq('card_id', settleTargetCardId)
            .maybeSingle();
-        if (existingCashError) throw existingCashError;
 
         const newBalance = Number(existingCashRow?.current_balance || 0) + amtToSettle;
-        const { data: updatedRows, error: cashUpdateError } = await supabase
+        const { data: updatedRows } = await supabase
            .from('cash_on_hand')
            .update({ current_balance: newBalance })
            .eq('user_id', cashReceiverId)
-           .eq('card_id', settleCardId)
+           .eq('card_id', settleTargetCardId)
            .select('user_id');
-        if (cashUpdateError) throw cashUpdateError;
 
         if (!updatedRows || updatedRows.length === 0) {
-           const { error: cashInsertError } = await supabase.from('cash_on_hand').insert({
+           await supabase.from('cash_on_hand').insert({
               user_id: cashReceiverId,
-              card_id: settleCardId,
+              card_id: settleTargetCardId,
               current_balance: newBalance
            });
-           if (cashInsertError) throw cashInsertError;
         }
 
-        const { error: cashLedgerError } = await supabase.from('cash_on_hand_ledger').insert({
+        await supabase.from('cash_on_hand_ledger').insert({
            user_id: cashReceiverId,
-           card_id: settleCardId,
+           card_id: settleTargetCardId,
            amount: amtToSettle,
            transaction_type: 'credit',
            remarks: `Settlement received from ${settleTx.qrs?.merchant_name || 'Manual Entry'}`,
            transaction_date: new Date().toISOString()
         });
-        if (cashLedgerError) throw cashLedgerError;
 
         setIsSettleModalOpen(false);
         fetchLedgerData(accessibleCards);
@@ -286,7 +286,6 @@ export default function SettlementsPage() {
      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 
      try {
-         // ১. ট্রানজ্যাকশন এন্ট্রি
          await supabase.from('card_transactions').insert({
             card_id: manualCardId,
             qr_id: manualQrId || null, 
@@ -298,7 +297,6 @@ export default function SettlementsPage() {
             remarks: manualRemarks || "Manual Entry"
          });
 
-         // ২. QR সিলেক্ট করা থাকলে qrs টেবিলে last_used_date আপডেট করা
          if (manualQrId) {
              await supabase.from('qrs').update({
                  last_used_date: new Date().toISOString()
@@ -350,9 +348,15 @@ export default function SettlementsPage() {
              </div>
            </Link>
            <div>
-             <h1 className="text-xl font-black tracking-tight bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent leading-none">
+             {/* Smoke Reveal Animation */}
+             <motion.h1 
+               initial={{ filter: "blur(10px)", opacity: 0, y: -5 }} 
+               animate={{ filter: "blur(0px)", opacity: 1, y: 0 }} 
+               transition={{ duration: 0.8, ease: "easeOut" }}
+               className="text-xl font-black tracking-tight bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent leading-none"
+             >
                QR & Settlements
-             </h1>
+             </motion.h1>
            </div>
         </div>
 
@@ -373,7 +377,7 @@ export default function SettlementsPage() {
 
       <main className="relative z-10 px-4 pt-5 max-w-md mx-auto space-y-5">
 
-        <div className="bg-white/[0.03] p-1.5 rounded-2xl border border-white/10 flex items-center justify-between backdrop-blur-xl shadow-inner">
+        <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-white/[0.03] p-1.5 rounded-2xl border border-white/10 flex items-center justify-between backdrop-blur-xl shadow-inner">
            {[
              { id: "vault", label: "QR Vault" },
              { id: "pending", label: "In Transit" },
@@ -396,7 +400,7 @@ export default function SettlementsPage() {
                <span className="relative z-10">{tab.label}</span>
              </button>
            ))}
-        </div>
+        </motion.div>
 
         {isLoading ? (
           <div className="flex justify-center items-center py-20">
@@ -404,145 +408,152 @@ export default function SettlementsPage() {
           </div>
         ) : (
            <>
-              {activeTab === "vault" && (
-                  <QRTab 
-                     accessibleCards={accessibleCards}
-                     globalSelectedCardId={globalSelectedCardId}
-                     currentUser={currentUser}
-                     firstName={firstName}
-                  />
-              )}
+              {/* Vault Tab Container controlled internally in QRTab via isActive prop */}
+              <QRTab 
+                  accessibleCards={accessibleCards}
+                  globalSelectedCardId={globalSelectedCardId}
+                  currentUser={currentUser}
+                  firstName={firstName}
+                  isActive={activeTab === "vault"}
+              />
 
-              {activeTab === "pending" && (
-                 <motion.div initial="hidden" animate="visible" className="space-y-4">
-                    <div className="flex gap-3">
-                        <div className="flex-1 p-4 rounded-[24px] bg-gradient-to-br from-amber-500/10 to-rose-500/5 border border-amber-500/20 backdrop-blur-md shadow-inner flex justify-between items-center">
-                            <div>
-                                <p className="text-[10px] font-bold text-amber-500 uppercase tracking-widest mb-1 flex items-center gap-1.5"><Clock className="w-3.5 h-3.5"/> Total Due</p>
-                                <p className="text-2xl font-black text-amber-400">₹{totalPendingAmount.toLocaleString()}</p>
-                            </div>
-                        </div>
+              {/* Pending Tab Container with Staggered Animation */}
+              <motion.div 
+                 variants={listContainerVars}
+                 initial="hidden"
+                 animate={activeTab === "pending" ? "visible" : "hidden"}
+                 className="space-y-4"
+              >
+                 <motion.div variants={listItemVars} className="flex gap-3">
+                     <div className="flex-1 p-4 rounded-[24px] bg-gradient-to-br from-amber-500/10 to-rose-500/5 border border-amber-500/20 backdrop-blur-md shadow-inner flex justify-between items-center">
+                         <div>
+                             <p className="text-[10px] font-bold text-amber-500 uppercase tracking-widest mb-1 flex items-center gap-1.5"><Clock className="w-3.5 h-3.5"/> Total Due</p>
+                             <p className="text-2xl font-black text-amber-400">₹{totalPendingAmount.toLocaleString()}</p>
+                         </div>
+                     </div>
 
-                        <button onClick={() => setIsManualEntryOpen(true)} className="relative group w-[80px] bg-white/[0.03] border border-white/10 hover:border-[#10b981]/50 hover:bg-white/[0.05] rounded-[24px] flex flex-col items-center justify-center gap-1.5 transition-all overflow-hidden shadow-inner">
-                           <div className="absolute inset-0 bg-[#10b981]/0 group-hover:bg-[#10b981]/10 transition-colors duration-500 blur-xl" />
-                           <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[#10b981] to-[#0ea5e9] p-[1px] shadow-[0_0_15px_rgba(16,185,129,0.4)] group-hover:shadow-[0_0_25px_rgba(16,185,129,0.6)] transition-all">
-                             <div className="w-full h-full bg-black/50 rounded-full flex items-center justify-center backdrop-blur-sm">
-                                <Plus className="w-4 h-4 text-white" />
-                             </div>
-                           </div>
-                           <span className="text-[10px] font-bold text-slate-300 group-hover:text-white relative z-10">New Entry</span>
-                        </button>
-                    </div>
-
-                    <div className="space-y-3">
-                       <AnimatePresence mode="popLayout">
-                          {pendingTxs.map(tx => (
-                             <motion.div
-                                key={tx.id}
-                                layout
-                                initial={{ opacity: 0, scale: 0.95 }}
-                                animate={{ opacity: 1, scale: 1 }}
-                                exit={{ opacity: 0, scale: 0.9 }}
-                                onClick={() => openSettleModal(tx)}
-                                className="group relative p-4 rounded-[20px] bg-white/[0.03] border border-white/5 hover:bg-white/[0.05] hover:border-amber-500/30 transition-all cursor-pointer overflow-hidden shadow-inner"
-                             >
-                                <div className="absolute -inset-4 opacity-0 group-hover:opacity-20 transition-opacity duration-500 blur-2xl bg-amber-500/20" />
-
-                                <div className="flex justify-between items-start relative z-10 mb-3">
-                                   <div className="flex items-center gap-3 w-[70%]">
-                                      <div className="w-10 h-10 shrink-0 rounded-xl bg-amber-500/10 flex items-center justify-center border border-amber-500/20">
-                                         <Clock className="w-5 h-5 text-amber-400" />
-                                      </div>
-                                      <div className="truncate">
-                                         <h3 className="text-sm font-bold text-white truncate">{tx.qrs?.merchant_name || tx.remarks || 'Manual Entry'}</h3>
-                                         <p className="text-[10px] text-slate-400 font-medium">Rotated on {new Date(tx.transaction_date).toLocaleDateString('en-GB')}</p>
-                                      </div>
-                                   </div>
-                                   <div className="text-right shrink-0">
-                                      <p className="text-base font-black text-amber-400">₹{tx.amount.toLocaleString()}</p>
-                                   </div>
-                                </div>
-
-                                <div className="flex items-center justify-between pt-3 border-t border-white/5 relative z-10">
-                                   <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500">
-                                      <CreditCard className="w-3.5 h-3.5" />
-                                      {tx.cards ? `${tx.cards.card_name} (**${tx.cards.last_4_digits})` : 'Card not linked'}
-                                   </div>
-                                   <Button size="sm" className="h-7 px-2.5 text-[10px] bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-lg">
-                                      <CheckCircle2 className="w-3 h-3 mr-1" /> Settle
-                                   </Button>
-                                </div>
-                             </motion.div>
-                          ))}
-                       </AnimatePresence>
-                       {pendingTxs.length === 0 && (
-                          <div className="text-center py-10 bg-white/[0.02] rounded-[24px] border border-white/5 border-dashed">
-                             <ShieldCheck className="w-10 h-10 text-emerald-500/40 mx-auto mb-2" />
-                             <p className="text-xs font-bold text-slate-400">All funds have been successfully settled.</p>
+                     <button onClick={() => setIsManualEntryOpen(true)} className="relative group w-[80px] bg-white/[0.03] border border-white/10 hover:border-[#10b981]/50 hover:bg-white/[0.05] rounded-[24px] flex flex-col items-center justify-center gap-1.5 transition-all overflow-hidden shadow-inner">
+                        <div className="absolute inset-0 bg-[#10b981]/0 group-hover:bg-[#10b981]/10 transition-colors duration-500 blur-xl" />
+                        <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[#10b981] to-[#0ea5e9] p-[1px] shadow-[0_0_15px_rgba(16,185,129,0.4)] group-hover:shadow-[0_0_25px_rgba(16,185,129,0.6)] transition-all">
+                          <div className="w-full h-full bg-black/50 rounded-full flex items-center justify-center backdrop-blur-sm">
+                             <Plus className="w-4 h-4 text-white" />
                           </div>
-                       )}
-                    </div>
+                        </div>
+                        <span className="text-[10px] font-bold text-slate-300 group-hover:text-white relative z-10">New Entry</span>
+                     </button>
                  </motion.div>
-              )}
 
-              {activeTab === "history" && (
-                 <motion.div initial="hidden" animate="visible" className="space-y-6 pb-6">
-                    {Object.keys(groupedHistory).length === 0 ? (
-                       <div className="text-center py-12 bg-white/[0.02] rounded-[24px] border border-white/5 border-dashed shadow-inner">
-                          <ShieldCheck className="w-12 h-12 text-slate-600 mx-auto mb-3" />
-                          <p className="text-xs font-bold text-slate-400">No settled history found.</p>
-                       </div>
-                    ) : (
-                      <AnimatePresence mode="popLayout">
-                        {Object.entries(groupedHistory).map(([date, items]) => (
-                           <div key={date} className="space-y-3">
-                              <div className="sticky top-20 z-20 flex items-center gap-3">
-                                 <span className="px-3 py-1 bg-black/80 backdrop-blur-md border border-white/10 rounded-full text-[10px] font-black uppercase tracking-widest text-[#10b981] shadow-[0_0_10px_rgba(16,185,129,0.2)]">
-                                    {date}
-                                 </span>
-                                 <div className="flex-1 h-px bg-gradient-to-r from-white/10 to-transparent" />
-                              </div>
+                 <div className="space-y-3">
+                    <AnimatePresence mode="popLayout">
+                       {pendingTxs.map(tx => (
+                          <motion.div
+                             key={tx.id}
+                             layout
+                             variants={listItemVars}
+                             exit={{ opacity: 0, scale: 0.9 }}
+                             onClick={() => openSettleModal(tx)}
+                             className="group relative p-4 rounded-[20px] bg-white/[0.03] border border-white/5 hover:bg-white/[0.05] hover:border-amber-500/30 transition-all cursor-pointer overflow-hidden shadow-inner"
+                          >
+                             <div className="absolute -inset-4 opacity-0 group-hover:opacity-20 transition-opacity duration-500 blur-2xl bg-amber-500/20" />
 
-                              {items.map((item) => (
-                                <motion.div
-                                  key={item.id}
-                                  layout
-                                  initial={{ opacity: 0, y: 15 }}
-                                  animate={{ opacity: 1, y: 0 }}
-                                  className="group p-4 bg-white/[0.02] border border-white/5 rounded-[24px] backdrop-blur-xl flex flex-col shadow-inner ml-2 border-l-2 border-l-[#10b981]/50 hover:bg-white/[0.04] transition-all"
-                                >
-                                  <div className="flex items-center justify-between mb-2">
-                                     <div className="flex items-center gap-3 w-[70%]">
-                                       <div className="w-9 h-9 shrink-0 rounded-[10px] flex items-center justify-center border border-emerald-500/20 bg-emerald-500/10">
-                                         <ArrowDownLeft className="w-4 h-4 text-emerald-400" />
-                                       </div>
-                                       <div className="truncate">
-                                         <h3 className="text-sm font-bold text-slate-100 truncate">{item.qrs?.merchant_name || item.remarks || 'Manual Entry'}</h3>
-                                         <p className="text-[10px] font-medium text-slate-400 flex items-center gap-1">
-                                            Rotated: {new Date(item.transaction_date).toLocaleDateString('en-GB', {day: '2-digit', month: 'short'})}
-                                         </p>
-                                       </div>
-                                     </div>
-                                     <div className="text-right shrink-0">
-                                       <span className="text-sm font-black text-emerald-400">+₹{item.amount.toLocaleString()}</span>
-                                     </div>
-                                  </div>
-                                  <div className="pt-2 border-t border-white/5 flex items-center justify-between text-[9px] font-bold text-slate-500 uppercase tracking-wider">
-                                     <div className="flex items-center gap-1"><CreditCard className="w-3 h-3"/> {item.cards?.card_name || 'Card'}</div>
-                                     <div className="flex items-center gap-1 text-[#0ea5e9]"><User className="w-3 h-3"/> By: {item.settled_to_profile?.name.split(' ')[0] || 'Unknown'}</div>
-                                  </div>
-                                </motion.div>
-                              ))}
-                           </div>
-                        ))}
-                      </AnimatePresence>
+                             <div className="flex justify-between items-start relative z-10 mb-3">
+                                <div className="flex items-center gap-3 w-[70%]">
+                                   <div className="w-10 h-10 shrink-0 rounded-xl bg-amber-500/10 flex items-center justify-center border border-amber-500/20">
+                                      <Clock className="w-5 h-5 text-amber-400" />
+                                   </div>
+                                   <div className="truncate">
+                                      <h3 className="text-sm font-bold text-white truncate">{tx.qrs?.merchant_name || tx.remarks || 'Manual Entry'}</h3>
+                                      <p className="text-[10px] text-slate-400 font-medium">Rotated on {new Date(tx.transaction_date).toLocaleDateString('en-GB')}</p>
+                                   </div>
+                                </div>
+                                <div className="text-right shrink-0">
+                                   <p className="text-base font-black text-amber-400">₹{tx.amount.toLocaleString()}</p>
+                                </div>
+                             </div>
+
+                             <div className="flex items-center justify-between pt-3 border-t border-white/5 relative z-10">
+                                <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500">
+                                   <CreditCard className="w-3.5 h-3.5" />
+                                   {tx.cards ? `${tx.cards.card_name} (**${tx.cards.last_4_digits})` : 'Card not linked'}
+                                </div>
+                                <Button size="sm" className="h-7 px-2.5 text-[10px] bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-lg">
+                                   <CheckCircle2 className="w-3 h-3 mr-1" /> Settle
+                                </Button>
+                             </div>
+                          </motion.div>
+                       ))}
+                    </AnimatePresence>
+                    {pendingTxs.length === 0 && (
+                       <motion.div variants={listItemVars} className="text-center py-10 bg-white/[0.02] rounded-[24px] border border-white/5 border-dashed">
+                          <ShieldCheck className="w-10 h-10 text-emerald-500/40 mx-auto mb-2" />
+                          <p className="text-xs font-bold text-slate-400">All funds have been successfully settled.</p>
+                       </motion.div>
                     )}
-                 </motion.div>
-              )}
+                 </div>
+              </motion.div>
+
+              {/* History Tab Container with Staggered Animation */}
+              <motion.div 
+                 variants={listContainerVars}
+                 initial="hidden"
+                 animate={activeTab === "history" ? "visible" : "hidden"}
+                 className="space-y-6 pb-6"
+              >
+                 {Object.keys(groupedHistory).length === 0 ? (
+                    <motion.div variants={listItemVars} className="text-center py-12 bg-white/[0.02] rounded-[24px] border border-white/5 border-dashed shadow-inner">
+                       <ShieldCheck className="w-12 h-12 text-slate-600 mx-auto mb-3" />
+                       <p className="text-xs font-bold text-slate-400">No settled history found.</p>
+                    </motion.div>
+                 ) : (
+                   <AnimatePresence mode="popLayout">
+                     {Object.entries(groupedHistory).map(([date, items]) => (
+                        <div key={date} className="space-y-3">
+                           <motion.div variants={listItemVars} className="sticky top-20 z-20 flex items-center gap-3">
+                              <span className="px-3 py-1 bg-black/80 backdrop-blur-md border border-white/10 rounded-full text-[10px] font-black uppercase tracking-widest text-[#10b981] shadow-[0_0_10px_rgba(16,185,129,0.2)]">
+                                 {date}
+                              </span>
+                              <div className="flex-1 h-px bg-gradient-to-r from-white/10 to-transparent" />
+                           </motion.div>
+
+                           {items.map((item) => (
+                             <motion.div
+                               key={item.id}
+                               layout
+                               variants={listItemVars}
+                               className="group p-4 bg-white/[0.02] border border-white/5 rounded-[24px] backdrop-blur-xl flex flex-col shadow-inner ml-2 border-l-2 border-l-[#10b981]/50 hover:bg-white/[0.04] transition-all"
+                             >
+                               <div className="flex items-center justify-between mb-2">
+                                  <div className="flex items-center gap-3 w-[70%]">
+                                    <div className="w-9 h-9 shrink-0 rounded-[10px] flex items-center justify-center border border-emerald-500/20 bg-emerald-500/10">
+                                      <ArrowDownLeft className="w-4 h-4 text-emerald-400" />
+                                    </div>
+                                    <div className="truncate">
+                                      <h3 className="text-sm font-bold text-slate-100 truncate">{item.qrs?.merchant_name || item.remarks || 'Manual Entry'}</h3>
+                                      <p className="text-[10px] font-medium text-slate-400 flex items-center gap-1">
+                                         Rotated: {new Date(item.transaction_date).toLocaleDateString('en-GB', {day: '2-digit', month: 'short'})}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <div className="text-right shrink-0">
+                                    <span className="text-sm font-black text-emerald-400">+₹{item.amount.toLocaleString()}</span>
+                                  </div>
+                               </div>
+                               <div className="pt-2 border-t border-white/5 flex items-center justify-between text-[9px] font-bold text-slate-500 uppercase tracking-wider">
+                                  <div className="flex items-center gap-1"><CreditCard className="w-3 h-3"/> {item.cards?.card_name || 'Card'}</div>
+                                  <div className="flex items-center gap-1 text-[#0ea5e9]"><User className="w-3 h-3"/> By: {item.settled_to_profile?.name.split(' ')[0] || 'Unknown'}</div>
+                               </div>
+                             </motion.div>
+                           ))}
+                        </div>
+                     ))}
+                   </AnimatePresence>
+                 )}
+              </motion.div>
            </>
         )}
       </main>
 
+      {/* Manual Entry Dialog */}
       <Dialog open={isManualEntryOpen} onOpenChange={setIsManualEntryOpen}>
         <DialogContent className="bg-[#050505]/95 backdrop-blur-3xl border border-white/10 text-slate-50 rounded-[40px] w-[95vw] max-w-md p-6 shadow-[0_0_80px_rgba(0,0,0,0.9)] overflow-hidden">
           <DialogHeader className="mb-4">
@@ -582,6 +593,7 @@ export default function SettlementsPage() {
         </DialogContent>
       </Dialog>
 
+      {/* Settle Dialog */}
       <Dialog open={isSettleModalOpen} onOpenChange={setIsSettleModalOpen}>
         <DialogContent className="bg-[#050505]/95 backdrop-blur-3xl border border-white/10 text-slate-50 rounded-[40px] w-[95vw] max-w-md p-6 shadow-[0_0_80px_rgba(0,0,0,0.9)] overflow-hidden">
           <div className="absolute top-0 right-0 w-40 h-40 bg-[#10b981]/20 rounded-full blur-[50px] pointer-events-none" />
@@ -621,6 +633,18 @@ export default function SettlementsPage() {
                     )}
                  </div>
              )}
+
+             <div className="space-y-2">
+                <label className="text-[11px] font-bold text-slate-400 uppercase ml-1 flex items-center gap-1.5">
+                   <CreditCard className="w-3.5 h-3.5 text-[#10b981]" /> Card to Settle Into
+                </label>
+                <div className="relative">
+                   <select value={settleTargetCardId} onChange={(e) => setSettleTargetCardId(e.target.value)} className="w-full h-14 bg-white/[0.05] border border-[#10b981]/30 rounded-2xl px-4 text-sm font-bold text-white outline-none appearance-none focus:border-[#10b981]">
+                      {accessibleCards.map(c => <option key={c.id} value={c.id} className="bg-black">{c.card_name} (**{c.last_4_digits})</option>)}
+                   </select>
+                   <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-[#10b981] pointer-events-none" />
+                </div>
+             </div>
 
              <div className="space-y-2">
                 <label className="text-[11px] font-bold text-slate-400 uppercase ml-1 flex items-center gap-1.5">

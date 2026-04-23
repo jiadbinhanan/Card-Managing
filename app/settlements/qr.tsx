@@ -8,15 +8,13 @@ import {
   CheckCircle2,
   ChevronDown,
   Sparkles,
-  AlertTriangle,
   Upload,
   Edit3,
   LayoutGrid,
-  Clock,
   Timer,
   ArrowRight,
   CreditCard,
-  History
+  Link as LinkIcon
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
@@ -32,6 +30,7 @@ interface QR {
   upi_id: string;
   settlement_time: string;
   last_used_date: string | null;
+  base_payment_link?: string | null; 
 }
 
 interface CardData {
@@ -57,15 +56,26 @@ interface QRTabProps {
   globalSelectedCardId: string;
   currentUser: Profile | null;
   firstName: string;
+  isActive: boolean; // Added for triggering animations on tab switch
 }
 
-export default function QRTab({ accessibleCards, globalSelectedCardId, currentUser, firstName }: QRTabProps) {
+// Stagger & Card Animations
+const containerVars = {
+  hidden: { opacity: 0, display: "none", transition: { duration: 0 } },
+  visible: { opacity: 1, display: "block", transition: { staggerChildren: 0.08 } }
+};
+
+const itemVars = {
+  hidden: { opacity: 0, y: 20, scale: 0.95, filter: "blur(4px)" },
+  visible: { opacity: 1, y: 0, scale: 1, filter: "blur(0px)", transition: { type: "spring", stiffness: 300, damping: 24 } }
+};
+
+export default function QRTab({ accessibleCards, globalSelectedCardId, currentUser, firstName, isActive }: QRTabProps) {
   const [qrs, setQrs] = useState<QR[]>([]);
   const [recommendedQrs, setRecommendedQrs] = useState<QR[]>([]);
   const [dynamicQrs, setDynamicQrs] = useState<QR[]>([]);
   const [staticQrs, setStaticQrs] = useState<QR[]>([]);
 
-  // Personal Cooldown States
   const [activeCooldowns, setActiveCooldowns] = useState<ActiveCooldown[]>([]);
   const [now, setNow] = useState(Date.now());
 
@@ -79,6 +89,7 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
   const [newUpiId, setNewUpiId] = useState("");
   const [newPlatform, setNewPlatform] = useState("PhonePe");
   const [newSettlementTime, setNewSettlementTime] = useState("T+1");
+  const [newBaseLink, setNewBaseLink] = useState(""); 
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
 
@@ -107,7 +118,6 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
     const { data: qrData } = await supabase.from('qrs').select('*');
     if (!qrData) return;
 
-    // Fetch personal transaction history for the last 5 days
     const fiveDaysAgo = new Date();
     fiveDaysAgo.setDate(fiveDaysAgo.getDate() - 5);
 
@@ -132,7 +142,7 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
             const isBharatPe = qrInfo.platform.toLowerCase().includes('bharatpe') || qrInfo.merchant_name.toLowerCase().includes('bharatpe');
             const txTime = new Date(tx.created_at).getTime();
 
-            let expiresAt = txTime + (24 * 60 * 60 * 1000); // 24 hours for all
+            let expiresAt = txTime + (24 * 60 * 60 * 1000); 
 
             if (expiresAt > Date.now()) {
                 cooldownList.push({
@@ -158,37 +168,40 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
 
     const operational = qrData.filter(q => q.status !== 'static');
 
-    operational.sort((a, b) => {
-      let scoreA = 0; let scoreB = 0;
-      const nameA = a.merchant_name.toLowerCase();
-      const nameB = b.merchant_name.toLowerCase();
+    const activeOperational = operational.filter(q => {
+        if (q.status !== 'active') return false;
 
-      if (firstName && nameA.includes(firstName)) scoreA += 10000;
-      if (firstName && nameB.includes(firstName)) scoreB += 10000;
+        const nameLower = q.merchant_name.toLowerCase();
+        const firstWord = nameLower.split(/\s+/)[0];
 
-      const isAOnCooldown = cooldownList.some(c => c.qrId === a.id);
-      const isBOnCooldown = cooldownList.some(c => c.qrId === b.id);
+        if (firstName && firstWord === firstName.toLowerCase()) return false;
 
-      if (isAOnCooldown) scoreA += 5000;
-      if (isBOnCooldown) scoreB += 5000;
+        const isBharatPe = nameLower.includes('bharatpe') || q.platform.toLowerCase().includes('bharatpe');
+        if (isBharatPe && q.last_used_date) {
+            const daysSinceUsed = (Date.now() - new Date(q.last_used_date).getTime()) / (1000 * 60 * 60 * 24);
+            if (daysSinceUsed < 5) return false;
+        }
 
-      const timeA = a.last_used_date ? new Date(a.last_used_date).getTime() : 0;
-      const timeB = b.last_used_date ? new Date(b.last_used_date).getTime() : 0;
+        if (cooldownList.some(c => c.qrId === q.id)) return false;
 
-      if (!a.last_used_date) scoreA -= 100;
-      if (!b.last_used_date) scoreB -= 100;
-
-      scoreA += timeA / 100000000000;
-      scoreB += timeB / 100000000000;
-
-      return scoreA - scoreB;
+        return true;
     });
 
-    const activeOperational = operational.filter(q => q.status === 'active');
-    const recommended = activeOperational.slice(0, 4);
+    activeOperational.sort((a, b) => {
+        const timeA = a.last_used_date ? new Date(a.last_used_date).getTime() : 0;
+        const timeB = b.last_used_date ? new Date(b.last_used_date).getTime() : 0;
+        return timeA - timeB; 
+    });
 
+    const dynamicSorted = [...operational].sort((a, b) => {
+        const timeA = a.last_used_date ? new Date(a.last_used_date).getTime() : 0;
+        const timeB = b.last_used_date ? new Date(b.last_used_date).getTime() : 0;
+        return timeA - timeB;
+    });
+
+    const recommended = activeOperational.slice(0, 4);
     setRecommendedQrs(recommended);
-    setDynamicQrs(operational);
+    setDynamicQrs(dynamicSorted);
   };
 
   const openAddQrModal = (isStatic = false) => {
@@ -197,6 +210,7 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
     setNewUpiId("");
     setNewPlatform("PhonePe");
     setNewSettlementTime("T+1");
+    setNewBaseLink("");
     setFile(null);
     setIsAddingStatic(isStatic);
     setIsQrModalOpen(true);
@@ -208,6 +222,7 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
     setNewUpiId(qr.upi_id);
     setNewPlatform(qr.platform);
     setNewSettlementTime(qr.settlement_time || "T+1");
+    setNewBaseLink(qr.base_payment_link || "");
     setIsAddingStatic(qr.status === 'static');
     setFile(null);
     setIsQrModalOpen(true);
@@ -243,6 +258,7 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
         platform: isAddingStatic ? "Static" : newPlatform,
         settlement_time: isAddingStatic ? "N/A" : newSettlementTime,
         qr_image_url: publicUrl,
+        base_payment_link: newBaseLink || null, 
         status: isAddingStatic ? 'static' : (editingQr ? editingQr.status : 'active')
       };
 
@@ -276,6 +292,15 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
         setGeneratedAmounts(amounts);
       }
     }
+  };
+
+  const getPaymentLink = (qr: QR | null, amt: number) => {
+     if (!qr) return "#";
+     if (qr.base_payment_link) {
+         const separator = qr.base_payment_link.includes('?') ? '&' : '?';
+         return `${qr.base_payment_link}${separator}am=${amt}`;
+     }
+     return `upi://pay?pa=${qr.upi_id || ''}&pn=${encodeURIComponent(qr.merchant_name || '')}&am=${amt}&cu=INR`;
   };
 
   const markQrAsUsedToday = async () => {
@@ -320,10 +345,14 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
   const currentCooldowns = activeCooldowns.filter(c => c.expiresAt > now);
 
   return (
-    <motion.div initial="hidden" animate="visible" className="space-y-6 pb-6">
-
+    <motion.div 
+      variants={containerVars}
+      initial="hidden"
+      animate={isActive ? "visible" : "hidden"}
+      className="space-y-6 pb-6"
+    >
       {/* ================= 24H / MULTIPLE COOLING COUNTDOWN TIMERS ================= */}
-      <div className="bg-white/[0.03] border border-white/10 rounded-2xl p-4 backdrop-blur-xl shadow-inner relative overflow-hidden">
+      <motion.div variants={itemVars} className="bg-white/[0.03] border border-white/10 rounded-2xl p-4 backdrop-blur-xl shadow-inner relative overflow-hidden">
         <div className="absolute -right-10 -top-10 w-32 h-32 bg-[#0ea5e9]/10 rounded-full blur-[40px] pointer-events-none" />
         <div className="flex items-center gap-3 mb-1">
           <div className={`w-10 h-10 rounded-xl flex items-center justify-center border ${currentCooldowns.length > 0 ? 'bg-amber-500/10 border-amber-500/20' : 'bg-emerald-500/10 border-emerald-500/20'}`}>
@@ -343,7 +372,6 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
            <div className="space-y-2 mt-4 pt-3 border-t border-white/5 relative z-10">
               {currentCooldowns.map((c) => {
                  const timeLeft = Math.max(0, c.expiresAt - now);
-                 const days = Math.floor(timeLeft / (1000 * 60 * 60 * 24));
                  const hours = Math.floor((timeLeft / (1000 * 60 * 60)) % 24);
                  const minutes = Math.floor((timeLeft / 1000 / 60) % 60);
                  const seconds = Math.floor((timeLeft / 1000) % 60);
@@ -351,70 +379,70 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
                  const timeString = `${hours.toString().padStart(2, '0')}h ${minutes.toString().padStart(2, '0')}m ${seconds.toString().padStart(2, '0')}s`;
 
                  return (
-                    <div key={c.qrId} className="flex justify-between items-center bg-black/40 p-2.5 rounded-xl border border-white/5 shadow-inner">
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} key={c.qrId} className="flex justify-between items-center bg-black/40 p-2.5 rounded-xl border border-white/5 shadow-inner">
                        <span className="text-xs font-bold text-slate-200">{c.merchantName}</span>
                        <span className="text-[11px] font-mono font-bold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">{timeString} remaining</span>
-                    </div>
+                    </motion.div>
                  );
               })}
            </div>
         )}
-      </div>
+      </motion.div>
 
       {/* ================= SECTION 1: RECOMMENDED TODAY ================= */}
       {recommendedQrs.length > 0 && (
         <section>
-          <h2 className="text-sm font-black text-transparent bg-clip-text bg-gradient-to-r from-[#10b981] to-[#34d399] uppercase tracking-wider flex items-center gap-2 mb-3">
+          <motion.h2 variants={itemVars} className="text-sm font-black text-transparent bg-clip-text bg-gradient-to-r from-[#10b981] to-[#34d399] uppercase tracking-wider flex items-center gap-2 mb-3">
             <Sparkles className="w-4 h-4 text-[#10b981]" /> Recommended
-          </h2>
+          </motion.h2>
           <div className="grid grid-cols-2 gap-3">
-            {recommendedQrs.map((qr) => {
-                const isDanger = firstName && qr.merchant_name.toLowerCase().includes(firstName);
-                return (
-                  <motion.div 
-                      key={`rec-${qr.id}`} 
-                      onClick={() => { 
-                        setSelectedQr(qr); setIsViewModalOpen(true); setGeneratedAmounts([]);
-                        setSelectedPaymentCardId(globalSelectedCardId !== 'all' ? globalSelectedCardId : (accessibleCards[0]?.id || ""));
-                      }}
-                      whileHover={{ scale: 1.02 }}
-                      whileTap={{ scale: 0.98 }}
-                      className={`flex flex-col bg-gradient-to-br from-white/[0.05] to-transparent border rounded-2xl overflow-hidden cursor-pointer shadow-inner backdrop-blur-md transition-all ${
-                        isDanger ? "border-red-500/50" : "border-[#10b981]/40"
-                      }`}
-                  >
-                      <div className="h-24 w-full relative bg-black/40 flex flex-col items-center justify-center overflow-hidden">
-                        {qr.qr_image_url ? (
-                            <img src={qr.qr_image_url} alt="QR" className="w-full h-full object-cover opacity-80" />
-                        ) : (
-                            <QrCode className="w-8 h-8 text-slate-600" />
-                        )}
-                        <span className="absolute top-1 right-1 text-[8px] font-black uppercase bg-[#10b981] text-black px-1.5 py-0.5 rounded">Best Pick</span>
-                      </div>
-                      <div className="p-3 flex-1 flex flex-col justify-between border-t border-white/5 relative">
-                        <h3 className={`text-xs font-bold truncate ${isDanger ? 'text-red-400' : 'text-white'}`}>{qr.merchant_name}</h3>
-                        <p className="text-[9px] text-slate-400 font-medium truncate mt-0.5">{qr.platform} • {qr.settlement_time}</p>
-                        <p className="text-[8px] font-bold text-emerald-500/80 mt-1.5 bg-emerald-500/10 inline-block px-1.5 py-0.5 rounded w-fit">Last Paid: {getFormattedDate(qr.last_used_date)}</p>
-                      </div>
-                  </motion.div>
-                );
-            })}
+            {recommendedQrs.map((qr) => (
+                <motion.div 
+                    key={`rec-${qr.id}`} 
+                    variants={itemVars}
+                    onClick={() => { 
+                      setSelectedQr(qr); setIsViewModalOpen(true); setGeneratedAmounts([]);
+                      setSelectedPaymentCardId(globalSelectedCardId !== 'all' ? globalSelectedCardId : (accessibleCards[0]?.id || ""));
+                    }}
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    className="flex flex-col bg-gradient-to-br from-white/[0.05] to-transparent border border-[#10b981]/40 rounded-2xl overflow-hidden cursor-pointer shadow-inner backdrop-blur-md transition-all"
+                >
+                    <div className="h-24 w-full relative bg-black/40 flex flex-col items-center justify-center overflow-hidden">
+                      {qr.qr_image_url ? (
+                          <img src={qr.qr_image_url} alt="QR" className="w-full h-full object-cover opacity-80" />
+                      ) : (
+                          <QrCode className="w-8 h-8 text-slate-600" />
+                      )}
+                      <span className="absolute top-1 right-1 text-[8px] font-black uppercase bg-[#10b981] text-black px-1.5 py-0.5 rounded shadow-sm">Best Pick</span>
+                    </div>
+                    <div className="p-3 flex-1 flex flex-col justify-between border-t border-white/5 relative">
+                      <h3 className="text-xs font-bold text-white truncate">{qr.merchant_name}</h3>
+                      <p className="text-[9px] text-slate-400 font-medium truncate mt-0.5">{qr.platform} • {qr.settlement_time}</p>
+                      <p className="text-[8px] font-bold text-emerald-500/80 mt-1.5 bg-emerald-500/10 inline-block px-1.5 py-0.5 rounded w-fit">Last Paid: {getFormattedDate(qr.last_used_date)}</p>
+                    </div>
+                </motion.div>
+            ))}
           </div>
         </section>
       )}
 
       {/* ================= SECTION 2: DYNAMIC VAULT ================= */}
       <section>
-        <div className="flex items-center justify-between mb-3">
+        <motion.div variants={itemVars} className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-black text-transparent bg-clip-text bg-gradient-to-r from-[#0ea5e9] to-[#38bdf8] uppercase tracking-wider flex items-center gap-2">
             <QrCode className="w-4 h-4 text-[#0ea5e9]" /> Dynamic Vault
           </h2>
-        </div>
+        </motion.div>
         <div className="space-y-3">
           {dynamicQrs.map((qr) => {
-            const isDanger = firstName && qr.merchant_name.toLowerCase().includes(firstName);
+            const firstWord = qr.merchant_name.toLowerCase().split(/\s+/)[0];
+            const isDanger = firstName && firstWord === firstName.toLowerCase();
+
             return (
-              <motion.div key={qr.id}
+              <motion.div 
+                key={qr.id}
+                variants={itemVars}
                 onClick={() => { 
                   setSelectedQr(qr); setIsViewModalOpen(true); setGeneratedAmounts([]);
                   setSelectedPaymentCardId(globalSelectedCardId !== 'all' ? globalSelectedCardId : (accessibleCards[0]?.id || ""));
@@ -454,23 +482,23 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
 
       {/* ================= SECTION 3: STATIC VAULT ================= */}
       <section className="pt-2 border-t border-white/5">
-        <div className="flex items-center justify-between mb-3">
+        <motion.div variants={itemVars} className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-black text-slate-300 uppercase tracking-wider flex items-center gap-2">
             <LayoutGrid className="w-4 h-4 text-slate-400" /> Static Vault
           </h2>
           <Button onClick={() => openAddQrModal(true)} size="sm" className="h-7 px-3 bg-white/5 text-slate-300 border border-white/10 hover:bg-white/10 text-[10px] font-bold rounded-lg shadow-inner">
             <Plus className="w-3 h-3 mr-1" /> Add Static
           </Button>
-        </div>
+        </motion.div>
 
         {staticQrs.length === 0 ? (
-          <div className="text-center py-6 bg-white/[0.02] border border-white/5 rounded-2xl border-dashed">
+          <motion.div variants={itemVars} className="text-center py-6 bg-white/[0.02] border border-white/5 rounded-2xl border-dashed">
              <p className="text-xs text-slate-500 font-bold">No static QR saved.</p>
-          </div>
+          </motion.div>
         ) : (
           <div className="grid grid-cols-2 gap-3">
             {staticQrs.map((qr) => (
-              <div key={qr.id} onClick={() => { setSelectedQr(qr); setIsViewModalOpen(true); }} className="p-3 bg-white/[0.02] border border-white/10 rounded-[20px] backdrop-blur-md relative group cursor-pointer hover:bg-white/[0.05] transition-all">
+              <motion.div variants={itemVars} whileHover={{ scale: 1.02 }} key={qr.id} onClick={() => { setSelectedQr(qr); setIsViewModalOpen(true); }} className="p-3 bg-white/[0.02] border border-white/10 rounded-[20px] backdrop-blur-md relative group cursor-pointer hover:bg-white/[0.05] transition-all">
                 <button onClick={(e) => { e.stopPropagation(); openEditQrModal(qr); }} className="absolute top-2 right-2 p-2 bg-black/60 rounded-xl border border-white/10 z-10 hover:bg-white/20">
                   <Edit3 className="w-3.5 h-3.5 text-white" />
                 </button>
@@ -483,14 +511,15 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
                 </div>
                 <h3 className="text-xs font-bold text-slate-200 truncate">{qr.merchant_name}</h3>
                 <p className="text-[9px] font-bold text-slate-500 mt-1 uppercase bg-white/5 inline-block px-1.5 py-0.5 rounded">Static QR</p>
-              </div>
+              </motion.div>
             ))}
           </div>
         )}
       </section>
 
-      {/* ================= FLOATING ACTION BUTTON (ADD DYNAMIC QR) ================= */}
+      {/* ================= FLOATING ACTION BUTTON ================= */}
       <motion.button
+        variants={itemVars}
         onClick={() => openAddQrModal(false)}
         whileHover={{ scale: 1.05 }}
         whileTap={{ scale: 0.95 }}
@@ -520,11 +549,25 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
              {!isAddingStatic && (
                <>
                  <div className="space-y-1.5">
-                    <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider ml-1">UPI ID</label>
+                    <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider ml-1 flex justify-between">
+                       <span>UPI ID</span>
+                    </label>
                     <div className="relative flex items-center bg-white/[0.03] border border-white/10 rounded-2xl h-12 px-4 focus-within:border-[#0ea5e9]">
                        <input type="text" value={newUpiId} onChange={(e) => setNewUpiId(e.target.value)} placeholder="merchant@upi" className="bg-transparent border-none outline-none w-full text-sm font-bold text-white" />
                     </div>
                  </div>
+
+                 {/* Custom Payment Link Field */}
+                 <div className="space-y-1.5 bg-indigo-500/5 p-3 rounded-2xl border border-indigo-500/20">
+                    <label className="text-[11px] font-bold text-indigo-300 uppercase tracking-wider ml-1 flex items-center gap-1.5">
+                       <LinkIcon className="w-3.5 h-3.5" /> Actual QR Link (Optional)
+                    </label>
+                    <p className="text-[9px] text-indigo-400/70 ml-1 mb-2">Paste original Paytm/Gpay link if normal UPI fails.</p>
+                    <div className="relative flex items-center bg-black/40 border border-white/5 rounded-xl h-12 px-4 focus-within:border-indigo-500">
+                       <input type="text" value={newBaseLink} onChange={(e) => setNewBaseLink(e.target.value)} placeholder="upi://pay?pa=..." className="bg-transparent border-none outline-none w-full text-xs font-medium text-white placeholder-slate-600" />
+                    </div>
+                 </div>
+
                  <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1.5">
                        <label className="text-[11px] font-bold text-slate-400 uppercase ml-1">Platform</label>
@@ -573,12 +616,12 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
                 {selectedQr?.merchant_name}
               </DialogTitle>
               <DialogDescription className="hidden">QR View</DialogDescription>
-              {selectedQr?.status !== 'static' && <p className="text-xs text-[#0ea5e9] font-bold">{selectedQr?.upi_id}</p>}
+              {selectedQr?.status !== 'static' && <p className="text-[10px] text-[#0ea5e9] font-bold mt-1 truncate">{selectedQr?.upi_id}</p>}
             </DialogHeader>
           </div>
 
           <div className="p-5 max-h-[60vh] overflow-y-auto space-y-5 custom-scrollbar">
-            <div className="w-44 h-44 mx-auto bg-white rounded-[24px] p-2 shadow-[0_0_50px_rgba(255,255,255,0.15)] relative overflow-hidden border-4 border-white/10">
+            <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} className="w-44 h-44 mx-auto bg-white rounded-[24px] p-2 shadow-[0_0_50px_rgba(255,255,255,0.15)] relative overflow-hidden border-4 border-white/10">
               {selectedQr?.qr_image_url ? (
                 <img src={selectedQr.qr_image_url} alt="QR" className="w-full h-full object-cover rounded-[16px]" referrerPolicy="no-referrer" />
               ) : (
@@ -586,7 +629,7 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
                   <QrCode className="w-12 h-12 text-slate-300" />
                 </div>
               )}
-            </div>
+            </motion.div>
 
             {selectedQr?.status !== 'static' && (
               <div className="space-y-4 bg-white/[0.02] p-4 rounded-[20px] border border-white/5 shadow-inner">
@@ -630,10 +673,15 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
                 {generatedAmounts.length > 0 && (
                   <div className="pt-3 space-y-2 border-t border-white/10">
                     {generatedAmounts.map((amt, i) => (
-                      <a key={i} href={`upi://pay?pa=${selectedQr?.upi_id || ''}&pn=${encodeURIComponent(selectedQr?.merchant_name || '')}&am=${amt}&cu=INR`} className="flex items-center justify-between w-full p-3 bg-gradient-to-r from-[#10b981]/15 to-transparent border border-[#10b981]/30 rounded-xl hover:border-[#10b981]/60 transition-all group">
+                      <motion.a 
+                        initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.1 }}
+                        key={i} 
+                        href={getPaymentLink(selectedQr, amt)} 
+                        className="flex items-center justify-between w-full p-3 bg-gradient-to-r from-[#10b981]/15 to-transparent border border-[#10b981]/30 rounded-xl hover:border-[#10b981]/60 transition-all group"
+                      >
                         <span className="text-xs font-black text-emerald-400 group-hover:text-emerald-300">Pay ₹{amt}</span>
                         <ArrowRight className="w-4 h-4 text-emerald-500/50 group-hover:text-emerald-400 group-hover:translate-x-1 transition-all" />
-                      </a>
+                      </motion.a>
                     ))}
                   </div>
                 )}
