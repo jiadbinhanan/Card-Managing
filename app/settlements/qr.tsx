@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { motion, AnimatePresence } from "motion/react";
+import { motion, AnimatePresence, type Variants } from "motion/react";
 import { 
   Plus, 
   QrCode,
@@ -60,12 +60,12 @@ interface QRTabProps {
 }
 
 // Stagger & Card Animations
-const containerVars = {
+const containerVars: Variants = {
   hidden: { opacity: 0, display: "none", transition: { duration: 0 } },
   visible: { opacity: 1, display: "block", transition: { staggerChildren: 0.08 } }
 };
 
-const itemVars = {
+const itemVars: Variants = {
   hidden: { opacity: 0, y: 20, scale: 0.95, filter: "blur(4px)" },
   visible: { opacity: 1, y: 0, scale: 1, filter: "blur(0px)", transition: { type: "spring", stiffness: 300, damping: 24 } }
 };
