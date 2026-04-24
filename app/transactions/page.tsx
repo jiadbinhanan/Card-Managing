@@ -373,9 +373,9 @@ export default function TransactionsPage() {
            cardSplitAmt = amtNum;
         }
      } else { 
-        if (amtNum > currentActorCash && currentActorCash > 0) {
-           cashSplitAmt = currentActorCash;
-           cardSplitAmt = amtNum - currentActorCash;
+        if (amtNum > currentActorCardCash && currentActorCardCash > 0) {
+           cashSplitAmt = currentActorCardCash;
+           cardSplitAmt = amtNum - currentActorCardCash;
            isSplitting = true;
         } else {
            cashSplitAmt = amtNum;
@@ -383,9 +383,9 @@ export default function TransactionsPage() {
      }
   } else if (txType === 'bill') {
      if (billMethod === 'cash_on_hand') {
-        if (amtNum > currentActorCash && currentActorCash > 0) {
-           cashSplitAmt = currentActorCash;
-           pocketSplitAmt = amtNum - currentActorCash;
+        if (amtNum > currentActorCardCash && currentActorCardCash > 0) {
+           cashSplitAmt = currentActorCardCash;
+           pocketSplitAmt = amtNum - currentActorCardCash;
            isSplitting = true;
         } else {
            cashSplitAmt = amtNum;
@@ -1113,7 +1113,7 @@ export default function TransactionsPage() {
                           {isSplitting ? (
                              <span className="text-sm font-black text-white">₹{cashSplitAmt.toLocaleString()}</span>
                           ) : (
-                             <span className="text-[9px] font-black opacity-70">Bal: ₹{currentActorCash.toLocaleString()}</span>
+                             <span className="text-[9px] font-black opacity-70">Bal: ₹{currentActorCardCash.toLocaleString()}</span>
                           )}
                         </button>
                       </div>
