@@ -132,6 +132,7 @@ export default function TransactionsPage() {
   // Balances
   const [familyLimitsMap, setFamilyLimitsMap] = useState<Record<string, number>>({});
   const [userCashMap, setUserCashMap] = useState<Record<string, number>>({});
+  const [userCardCashMap, setUserCardCashMap] = useState<Record<string, Record<string, number>>>({});
 
   // Form States
   const [amount, setAmount] = useState("");
@@ -223,7 +224,8 @@ export default function TransactionsPage() {
     if (txs) setTransactions(txs as any);
     if (spnds) setSpends(spnds as any);
 
-    const allTxsRes = await supabase.from('card_transactions').select('card_id, amount, type, payment_method');
+    const allTxsRes = await supabase.from('card_transactions')
+      .select('card_id, amount, type, payment_method, status, qr_id, settled_to_user, remarks');
     const allSpndsRes = await supabase.from('spends').select('card_id, amount, payment_method');
 
     const limitsMap: Record<string, number> = {};
@@ -235,7 +237,14 @@ export default function TransactionsPage() {
        const famTxs = allTxsRes.data?.filter(t => familyIds.includes(t.card_id || '')) || [];
        const famSpnds = allSpndsRes.data?.filter(s => familyIds.includes(s.card_id || '')) || [];
 
-       const w = famTxs.filter(t => t.type === 'withdrawal').reduce((s, t) => s + Number(t.amount), 0);
+       // Dashboard logic: rotation-related withdrawals always count, non-rotation only if pending_settlement
+       const w = famTxs.filter(t => {
+          if (t.type !== 'withdrawal') return false;
+          const isRotation = t.qr_id || t.settled_to_user || (t.remarks || '').toLowerCase().includes('rotation');
+          if (isRotation) return true;
+          return t.status === 'pending_settlement';
+       }).reduce((s, t) => s + Number(t.amount), 0);
+
        const b = famTxs.filter(t => t.type === 'bill_payment').reduce((s, t) => s + Number(t.amount), 0);
        const s = famSpnds.filter(sp => sp.payment_method === 'credit_card').reduce((sum, sp) => sum + Number(sp.amount), 0);
 
@@ -244,8 +253,16 @@ export default function TransactionsPage() {
     setFamilyLimitsMap(limitsMap);
 
     const cashMap: Record<string, number> = {};
-    coh?.forEach(c => { cashMap[c.user_id] = (cashMap[c.user_id] || 0) + Number(c.current_balance); });
+    const cardCashMap: Record<string, Record<string, number>> = {};
+    coh?.forEach(c => {
+       cashMap[c.user_id] = (cashMap[c.user_id] || 0) + Number(c.current_balance);
+       if (c.user_id && c.card_id) {
+          if (!cardCashMap[c.user_id]) cardCashMap[c.user_id] = {};
+          cardCashMap[c.user_id][c.card_id] = Number(c.current_balance);
+       }
+    });
     setUserCashMap(cashMap);
+    setUserCardCashMap(cardCashMap);
   };
 
   // --- ENTRY MODAL DYNAMIC CARD LIST ---
@@ -334,6 +351,13 @@ export default function TransactionsPage() {
   const entryPrimaryId = selectedEntryCardObj?.is_primary ? selectedEntryCardObj.id : selectedEntryCardObj?.parent_card_id;
   const currentFamilyLimit = familyLimitsMap[entryPrimaryId || ''] || 0;
 
+  // Per-(user, card-family) cash for the selected actor + entry card
+  const entryFamilyCardIds = entryPrimaryId
+     ? allCards.filter(c => c.id === entryPrimaryId || c.parent_card_id === entryPrimaryId).map(c => c.id)
+     : [];
+  const actorCashByCard = userCardCashMap[selectedUserId || (currentUser?.id as string)] || {};
+  const currentActorCardCash = entryFamilyCardIds.reduce((sum, id) => sum + (actorCashByCard[id] || 0), 0);
+
   let cardSplitAmt = 0;
   let cashSplitAmt = 0;
   let pocketSplitAmt = 0;
@@ -410,6 +434,7 @@ export default function TransactionsPage() {
               const tempCash: any = { id: `temp-h-${Date.now()}`, user_id: actingUserId, amount: cashSplitAmt, payment_method: 'cash_on_hand', remarks: remarks + " (Auto-Split)", spend_date: finalDate, profiles: profileData, card_id: entryCardId, cards: cardDataPayload };
               setSpends(prev => [tempCash, ...prev]);
               setUserCashMap(prev => ({ ...prev, [actingUserId]: (prev[actingUserId]||0) - cashSplitAmt }));
+              setUserCardCashMap(prev => ({ ...prev, [actingUserId]: { ...(prev[actingUserId]||{}), [entryCardId]: ((prev[actingUserId]||{})[entryCardId]||0) - cashSplitAmt } }));
            }
         } else {
            const tempSpend: any = { id: `temp-${Date.now()}`, user_id: actingUserId, amount: amtNum, payment_method: spendMethod, remarks: remarks, spend_date: finalDate, profiles: profileData, card_id: entryCardId, cards: cardDataPayload };
@@ -417,7 +442,10 @@ export default function TransactionsPage() {
            if (spendMethod === "credit_card" && entryPrimaryId) {
                setFamilyLimitsMap(prev => ({...prev, [entryPrimaryId]: prev[entryPrimaryId] - amtNum}));
            }
-           else setUserCashMap(prev => ({ ...prev, [actingUserId]: (prev[actingUserId]||0) - amtNum }));
+           else {
+              setUserCashMap(prev => ({ ...prev, [actingUserId]: (prev[actingUserId]||0) - amtNum }));
+              setUserCardCashMap(prev => ({ ...prev, [actingUserId]: { ...(prev[actingUserId]||{}), [entryCardId]: ((prev[actingUserId]||{})[entryCardId]||0) - amtNum } }));
+           }
         }
     } 
     else if (txType === "bill") {
@@ -431,6 +459,7 @@ export default function TransactionsPage() {
               const tempCash: any = { id: `temp-cb-${Date.now()}`, type: 'bill_payment', amount: cashSplitAmt, status: 'settled', transaction_date: finalDate, payment_method: 'cash_on_hand', profiles: profileData, remarks: remarks, card_id: entryCardId, cards: cardDataPayload };
               setTransactions(prev => [tempCash, ...prev]);
               setUserCashMap(prev => ({ ...prev, [actingUserId]: (prev[actingUserId]||0) - cashSplitAmt }));
+              setUserCardCashMap(prev => ({ ...prev, [actingUserId]: { ...(prev[actingUserId]||{}), [entryCardId]: ((prev[actingUserId]||{})[entryCardId]||0) - cashSplitAmt } }));
            }
            if (pocketSplitAmt > 0) {
               const tempPocket: any = { id: `temp-pb-${Date.now()}`, type: 'bill_payment', amount: pocketSplitAmt, status: 'settled', transaction_date: finalDate, payment_method: 'own_pocket', profiles: profileData, remarks: remarks, card_id: entryCardId, cards: cardDataPayload };
@@ -439,7 +468,10 @@ export default function TransactionsPage() {
         } else {
            const tempBill: any = { id: `temp-b-${Date.now()}`, type: 'bill_payment', amount: amtNum, status: 'settled', transaction_date: finalDate, payment_method: billMethod, profiles: profileData, remarks: remarks, card_id: entryCardId, cards: cardDataPayload };
            setTransactions(prev => [tempBill, ...prev]);
-           if (billMethod === "cash_on_hand") setUserCashMap(prev => ({ ...prev, [actingUserId]: (prev[actingUserId]||0) - amtNum }));
+           if (billMethod === "cash_on_hand") {
+              setUserCashMap(prev => ({ ...prev, [actingUserId]: (prev[actingUserId]||0) - amtNum }));
+              setUserCardCashMap(prev => ({ ...prev, [actingUserId]: { ...(prev[actingUserId]||{}), [entryCardId]: ((prev[actingUserId]||{})[entryCardId]||0) - amtNum } }));
+           }
         }
         if (entryPrimaryId) setFamilyLimitsMap(prev => ({...prev, [entryPrimaryId]: prev[entryPrimaryId] + amtNum})); 
     }
@@ -1017,6 +1049,15 @@ export default function TransactionsPage() {
                 {/* 1. ROTATE */}
                 {txType === "rotate" && (
                   <motion.div key="rotate" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="space-y-5">
+                    {/* Card Available Balance */}
+                    <div className="p-4 rounded-2xl bg-gradient-to-br from-[#0ea5e9]/10 to-[#38bdf8]/5 border border-[#0ea5e9]/30 shadow-[0_0_15px_rgba(14,165,233,0.1)] flex items-center justify-between">
+                       <div className="flex items-center gap-2">
+                          <CreditCard className="w-4 h-4 text-[#0ea5e9]" />
+                          <span className="text-[10px] font-black text-[#0ea5e9] uppercase tracking-widest">Card Available</span>
+                       </div>
+                       <span className="text-base font-black text-white">₹{currentFamilyLimit.toLocaleString()}</span>
+                    </div>
+
                     <div className="space-y-1.5">
                       <label className="text-[11px] font-bold text-slate-400 uppercase ml-1">Destination QR</label>
                       <div className="relative">
@@ -1119,7 +1160,7 @@ export default function TransactionsPage() {
                           {isSplitting ? (
                              <span className="text-sm font-black text-white">₹{cashSplitAmt.toLocaleString()}</span>
                           ) : (
-                             <span className="text-[9px] font-black opacity-70">Bal: ₹{currentActorCash.toLocaleString()}</span>
+                             <span className="text-[9px] font-black opacity-70">Bal: ₹{currentActorCardCash.toLocaleString()}</span>
                           )}
                         </button>
                         <button 
