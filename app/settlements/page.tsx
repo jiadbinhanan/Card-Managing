@@ -50,6 +50,7 @@ interface CardData {
   last_4_digits: string;
   is_primary: boolean;
   parent_card_id?: string;
+  total_limit?: number;
 }
 
 interface QRData {
@@ -76,6 +77,7 @@ export default function SettlementsPage() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [accessibleCards, setAccessibleCards] = useState<CardData[]>([]);
   const [userCashMap, setUserCashMap] = useState<Record<string, number>>({});
+  const [cardAvailableMap, setCardAvailableMap] = useState<Record<string, number>>({});
 
   const [activeQrs, setActiveQrs] = useState<QRData[]>([]);
 
@@ -187,6 +189,35 @@ export default function SettlementsPage() {
     const cashMap: Record<string, number> = {};
     coh?.forEach(c => { cashMap[c.user_id] = (cashMap[c.user_id] || 0) + Number(c.current_balance); });
     setUserCashMap(cashMap);
+
+    // Card Available Limits — using dashboard/page.tsx logic
+    const { data: allTxs } = await supabase.from('card_transactions')
+      .select('amount, type, payment_method, card_id, status, qr_id, settled_to_user, remarks');
+    const { data: allSpends } = await supabase.from('spends').select('amount, payment_method, user_id, card_id');
+
+    const availableMap: Record<string, number> = {};
+
+    currentCards.filter(c => c.is_primary).forEach(primaryCard => {
+       const familyCardIds = currentCards.filter(c => c.id === primaryCard.id || c.parent_card_id === primaryCard.id).map(c => c.id);
+
+       const withdrawals = allTxs?.filter(t => {
+         if (t.type !== 'withdrawal') return false;
+         if (!t.card_id || !familyCardIds.includes(t.card_id)) return false;
+         const isRotation = t.qr_id || t.settled_to_user || (t.remarks || '').toLowerCase().includes('rotation');
+         if (isRotation) return true;
+         return t.status === 'pending_settlement';
+       }).reduce((sum, t) => sum + Number(t.amount), 0) || 0;
+
+       const billPayments = allTxs?.filter(t => t.type === 'bill_payment' && t.card_id && familyCardIds.includes(t.card_id)).reduce((sum, t) => sum + Number(t.amount), 0) || 0;
+       const ccSpends = allSpends?.filter(s => s.payment_method === 'credit_card' && s.card_id && familyCardIds.includes(s.card_id)).reduce((sum, s) => sum + Number(s.amount), 0) || 0;
+
+       const available = Number(primaryCard.total_limit) - withdrawals - ccSpends + billPayments;
+
+       familyCardIds.forEach(id => {
+           availableMap[id] = available;
+       });
+    });
+    setCardAvailableMap(availableMap);
   };
 
   const openSettleModal = (tx: Transaction) => {
@@ -572,7 +603,14 @@ export default function SettlementsPage() {
              <div className="space-y-1.5 relative">
                 <label className="text-[11px] font-bold text-slate-400 uppercase ml-1">Select Card</label>
                 <select value={manualCardId} onChange={(e) => setManualCardId(e.target.value)} className="w-full h-12 bg-white/[0.05] border border-white/10 rounded-xl px-4 text-xs font-bold text-white outline-none appearance-none focus:border-[#10b981]">
-                   {accessibleCards.map(c => <option key={c.id} value={c.id} className="bg-[#050505]">{c.card_name} (**{c.last_4_digits})</option>)}
+                   {accessibleCards.map(c => {
+                      const avail = cardAvailableMap[c.id] || 0;
+                      return (
+                         <option key={c.id} value={c.id} className="bg-[#050505]">
+                            {c.card_name} (**{c.last_4_digits}) - Avail: ₹{avail.toLocaleString()}
+                         </option>
+                      );
+                   })}
                 </select>
                 <ChevronDown className="absolute right-3 top-[38px] w-4 h-4 text-slate-500 pointer-events-none" />
              </div>
