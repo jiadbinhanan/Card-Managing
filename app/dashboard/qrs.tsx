@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { QrCode, Sparkles, ArrowRight, CheckCircle2, AlertTriangle, ChevronDown, CreditCard } from "lucide-react";
+import { QrCode, Sparkles, ArrowRight, CheckCircle2, ChevronDown, CreditCard, Timer, Link as LinkIcon } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase";
@@ -17,6 +17,7 @@ interface QR {
   last_used_date: string | null;
   status: string;
   upi_id: string;
+  base_payment_link?: string | null; // Added custom link support
 }
 
 interface CardData {
@@ -32,34 +33,56 @@ interface QrsProps {
   globalSelectedCardId: string;
 }
 
+interface ActiveCooldown {
+  qrId: string;
+  merchantName: string;
+  expiresAt: number;
+  isBharatPe: boolean;
+}
+
+// Stagger Animation Variants
+const containerVars = {
+  hidden: { opacity: 0 },
+  visible: { opacity: 1, transition: { staggerChildren: 0.1 } }
+};
+
+const itemVars = {
+  hidden: { opacity: 0, x: -20 },
+  visible: { opacity: 1, x: 0, transition: { type: "spring", stiffness: 300, damping: 24 } }
+};
+
 export default function DashboardQRs({ firstName, currentUser, accessibleCards, globalSelectedCardId }: QrsProps) {
   const [suggestedQrs, setSuggestedQrs] = useState<QR[]>([]);
   const [selectedQr, setSelectedQr] = useState<QR | null>(null);
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
+
+  const [activeCooldowns, setActiveCooldowns] = useState<ActiveCooldown[]>([]);
+  const [now, setNow] = useState(Date.now());
 
   const [paymentMode, setPaymentMode] = useState<"once" | "multiple">("once");
   const [splitCount, setSplitCount] = useState<number>(2);
   const [generatedAmounts, setGeneratedAmounts] = useState<number[]>([]);
   const [selectedPaymentCardId, setSelectedPaymentCardId] = useState<string>("");
 
-  /* eslint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     fetchQRs();
     const channel = supabase.channel('qrs_dashboard_changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'qrs' }, () => fetchQRs())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'card_transactions' }, () => fetchQRs())
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [firstName]);
+  }, [firstName, currentUser]);
 
-    async function fetchQRs() {
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  async function fetchQRs() {
     if (!currentUser) return;
 
-    let qrsQuery = supabase.from('qrs').select('*').eq('status', 'active');
-    if (globalSelectedCardId !== 'all') {
-      qrsQuery = qrsQuery.eq('card_id', globalSelectedCardId);
-    }
-    const { data: qrData } = await qrsQuery;
-
+    // Fetch all active QRs
+    const { data: qrData } = await supabase.from('qrs').select('*').eq('status', 'active');
     if (!qrData) return;
 
     // Fetch personal transaction history for the last 5 days
@@ -74,9 +97,8 @@ export default function DashboardQRs({ firstName, currentUser, accessibleCards, 
       .gte('created_at', fiveDaysAgo.toISOString())
       .order('created_at', { ascending: false });
 
+    const cooldownList: ActiveCooldown[] = [];
     const processedQrIds = new Set<string>();
-    const activeCooldowns: any[] = [];
-    const nowTime = Date.now();
 
     if (recentTxs) {
         recentTxs.forEach(tx => {
@@ -85,45 +107,55 @@ export default function DashboardQRs({ firstName, currentUser, accessibleCards, 
             const qrInfo = qrData.find(q => q.id === tx.qr_id);
             if (!qrInfo) return;
 
+            const isBharatPe = qrInfo.platform.toLowerCase().includes('bharatpe') || qrInfo.merchant_name.toLowerCase().includes('bharatpe');
             const txTime = new Date(tx.created_at).getTime();
-            const cooldownMs = 24 * 60 * 60 * 1000;
-            const expiresAt = txTime + cooldownMs;
 
-            if (nowTime < expiresAt) {
-                activeCooldowns.push({ qrId: tx.qr_id, expiresAt });
+            let expiresAt = txTime + (24 * 60 * 60 * 1000); // 24 hours cooling for all
+
+            if (expiresAt > Date.now()) {
+                cooldownList.push({
+                    qrId: tx.qr_id,
+                    merchantName: qrInfo.merchant_name,
+                    expiresAt,
+                    isBharatPe
+                });
             }
+
             processedQrIds.add(tx.qr_id);
         });
     }
 
-    let usable = qrData.filter(q => {
-       const cd = activeCooldowns.find(c => c.qrId === q.id);
-       return !cd || cd.expiresAt < nowTime;
+    setActiveCooldowns(cooldownList);
+
+    // Filter logic identical to settlements/qr.tsx
+    const activeOperational = qrData.filter(q => {
+        const nameLower = q.merchant_name.toLowerCase();
+        const firstWord = nameLower.split(/\s+/)[0];
+
+        // Block if first word matches first name
+        if (firstName && firstWord === firstName.toLowerCase()) return false;
+
+        // Block BharatPe if used within 5 days
+        const isBharatPe = nameLower.includes('bharatpe') || q.platform.toLowerCase().includes('bharatpe');
+        if (isBharatPe && q.last_used_date) {
+            const daysSinceUsed = (Date.now() - new Date(q.last_used_date).getTime()) / (1000 * 60 * 60 * 24);
+            if (daysSinceUsed < 5) return false;
+        }
+
+        // Standard 24h cooldown block
+        if (cooldownList.some(c => c.qrId === q.id)) return false;
+
+        return true;
     });
 
-    usable.sort((a, b) => {
-        let scoreA = 0; let scoreB = 0;
-        const nameA = a.merchant_name.toLowerCase();
-        const nameB = b.merchant_name.toLowerCase();
-
-        if (firstName && nameA.includes(firstName)) scoreA += 10000;
-        if (firstName && nameB.includes(firstName)) scoreB += 10000;
-        if (a.platform.toLowerCase().includes('bharatpe')) scoreA += 1000;
-        if (b.platform.toLowerCase().includes('bharatpe')) scoreB += 1000;
-
+    // Sort by oldest last_used_date first
+    activeOperational.sort((a, b) => {
         const timeA = a.last_used_date ? new Date(a.last_used_date).getTime() : 0;
         const timeB = b.last_used_date ? new Date(b.last_used_date).getTime() : 0;
-
-        if (!a.last_used_date) scoreA -= 100;
-        if (!b.last_used_date) scoreB -= 100;
-
-        scoreA += timeA / 100000000000;
-        scoreB += timeB / 100000000000;
-
-        return scoreA - scoreB;
+        return timeA - timeB; 
     });
 
-    setSuggestedQrs(usable.slice(0, 3));
+    setSuggestedQrs(activeOperational.slice(0, 3)); // Pick top 3 for Dashboard
   }
 
   const generatePaymentAmounts = () => {
@@ -142,6 +174,15 @@ export default function DashboardQRs({ firstName, currentUser, accessibleCards, 
         setGeneratedAmounts(amounts);
       }
     }
+  };
+
+  const getPaymentLink = (qr: QR | null, amt: number) => {
+    if (!qr) return "#";
+    if (qr.base_payment_link) {
+        const separator = qr.base_payment_link.includes('?') ? '&' : '?';
+        return `${qr.base_payment_link}${separator}am=${amt}`;
+    }
+    return `upi://pay?pa=${qr.upi_id || ''}&pn=${encodeURIComponent(qr.merchant_name || '')}&am=${amt}&cu=INR`;
   };
 
   const markQrAsUsedToday = async () => {
@@ -171,76 +212,125 @@ export default function DashboardQRs({ firstName, currentUser, accessibleCards, 
     }
   };
 
+  const getFormattedDate = (isoString: string | null) => {
+    if (!isoString) return 'Never Used';
+    return new Date(isoString).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+  };
+
+  const currentCooldowns = activeCooldowns.filter(c => c.expiresAt > now);
+
   return (
-    <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.4 }} className="pb-8">
-      <div className="flex items-center gap-2 mb-4 px-1">
-        <Sparkles className="w-4 h-4 text-[#0ea5e9]" />
-        <h2 className="text-xs font-black text-slate-300 uppercase tracking-widest drop-shadow-[0_0_10px_rgba(14,165,233,0.3)]">
-          Dynamic Suggestion Engine
-        </h2>
-      </div>
+    <motion.section 
+       variants={containerVars}
+       initial="hidden" 
+       animate="visible" 
+       className="pb-8 space-y-5"
+    >
 
-      <div className="space-y-3">
-        {suggestedQrs.length > 0 ? (
-          suggestedQrs.map((qr, idx) => {
-            const isDanger = firstName && qr.merchant_name.toLowerCase().includes(firstName);
-            const isTop = idx === 0 && !isDanger;
+      {/* ================= STYLISH COMPACT COOLING CARD (Different Design) ================= */}
+      {currentCooldowns.length > 0 && (
+        <motion.div variants={itemVars} className="relative bg-white/[0.02] backdrop-blur-xl border border-white/5 rounded-2xl overflow-hidden shadow-inner">
+          <div className="absolute top-0 left-0 bottom-0 w-1 bg-gradient-to-b from-[#0ea5e9] to-[#38bdf8] shadow-[0_0_15px_#0ea5e9]" />
 
-            return (
-              <motion.div 
-                key={qr.id}
-                initial={{ opacity: 0, x: -20 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: idx * 0.1 }}
-                onClick={() => { 
-                    setSelectedQr(qr); 
-                    setIsViewModalOpen(true); 
-                    setGeneratedAmounts([]); 
-                    setSelectedPaymentCardId(globalSelectedCardId !== 'all' ? globalSelectedCardId : (accessibleCards[0]?.id || ""));
-                }}
-                className={`relative p-3.5 rounded-[20px] backdrop-blur-lg flex items-center justify-between cursor-pointer transition-all ${
-                  isDanger ? "bg-red-500/5 border border-red-500/30 shadow-[0_0_15px_rgba(239,68,68,0.1)]" : 
-                  isTop ? "bg-gradient-to-r from-[#0ea5e9]/10 to-transparent border border-[#0ea5e9]/40 shadow-[0_0_20px_rgba(14,165,233,0.15)]" : 
-                  "bg-white/[0.02] border border-white/5 hover:bg-white/[0.05] hover:border-white/10"
-                }`}
-              >
-                <div className="flex items-center gap-4">
-                  <div className={`w-12 h-12 rounded-[14px] flex items-center justify-center overflow-hidden relative border ${
-                    isDanger ? "border-red-500/40 bg-red-500/10" : "border-white/10 bg-black/40"
-                  }`}>
-                    {qr.qr_image_url ? (
-                      <Image src={qr.qr_image_url} alt="QR" fill className="object-cover" />
-                    ) : (
-                      <QrCode className="w-5 h-5 text-slate-500" />
-                    )}
+          <div className="p-3.5 border-b border-white/5 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+               <Timer className="w-4 h-4 text-[#0ea5e9] animate-pulse" />
+               <h3 className="text-xs font-black text-white uppercase tracking-wider">Active Cooling</h3>
+            </div>
+            <span className="text-[10px] font-bold text-[#0ea5e9] bg-[#0ea5e9]/10 px-2 py-0.5 rounded-full">{currentCooldowns.length} QR Rotating</span>
+          </div>
+
+          <div className="p-2 space-y-1.5 max-h-[140px] overflow-y-auto custom-scrollbar">
+            {currentCooldowns.map((c) => {
+               const timeLeft = Math.max(0, c.expiresAt - now);
+               const hours = Math.floor((timeLeft / (1000 * 60 * 60)) % 24);
+               const minutes = Math.floor((timeLeft / 1000 / 60) % 60);
+
+               const timeString = `${hours.toString().padStart(2, '0')}h ${minutes.toString().padStart(2, '0')}m left`;
+
+               return (
+                  <div key={c.qrId} className="flex justify-between items-center bg-black/30 p-2 rounded-xl border border-white/5">
+                     <span className="text-[11px] font-bold text-slate-300 truncate w-2/3 flex items-center gap-1.5">
+                       <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />
+                       {c.merchantName}
+                     </span>
+                     <span className="text-[10px] font-mono font-bold text-slate-400 shrink-0">{timeString}</span>
                   </div>
-                  <div>
-                    <div className="flex items-center gap-2 mb-1">
-                      <h3 className={`text-sm font-bold ${isDanger ? "text-red-400" : "text-white"}`}>{qr.merchant_name}</h3>
-                      {isTop && (
-                        <span className="flex items-center gap-1 text-[9px] font-black uppercase bg-gradient-to-r from-[#0ea5e9] to-[#38bdf8] text-black px-1.5 py-0.5 rounded shadow-[0_0_10px_#0ea5e9]">
-                          <Sparkles className="w-2.5 h-2.5" /> Best
-                        </span>
+               );
+            })}
+          </div>
+        </motion.div>
+      )}
+
+      {/* ================= RECOMMENDATION ENGINE HEADER ================= */}
+      <motion.div variants={itemVars} className="flex items-center gap-2 px-1">
+        <Sparkles className="w-4 h-4 text-[#10b981]" />
+        <h2 className="text-xs font-black text-slate-300 uppercase tracking-widest drop-shadow-[0_0_10px_rgba(16,185,129,0.3)]">
+          Smart Suggestions
+        </h2>
+      </motion.div>
+
+      {/* ================= RECOMMENDATIONS LIST VIEW ================= */}
+      <div className="space-y-3">
+        <AnimatePresence mode="popLayout">
+          {suggestedQrs.length > 0 ? (
+            suggestedQrs.map((qr, idx) => {
+              const isTop = idx === 0;
+
+              return (
+                <motion.div 
+                  key={qr.id}
+                  layout
+                  variants={itemVars}
+                  exit={{ opacity: 0, scale: 0.9 }}
+                  onClick={() => { 
+                      setSelectedQr(qr); 
+                      setIsViewModalOpen(true); 
+                      setGeneratedAmounts([]); 
+                      setSelectedPaymentCardId(globalSelectedCardId !== 'all' ? globalSelectedCardId : (accessibleCards[0]?.id || ""));
+                  }}
+                  className={`relative p-3.5 rounded-[20px] backdrop-blur-lg flex items-center justify-between cursor-pointer transition-all ${
+                    isTop ? "bg-gradient-to-r from-[#10b981]/10 to-transparent border border-[#10b981]/40 shadow-[0_0_20px_rgba(16,185,129,0.15)]" : 
+                    "bg-white/[0.02] border border-white/5 hover:bg-white/[0.05] hover:border-white/10"
+                  }`}
+                >
+                  <div className="flex items-center gap-4 w-[85%]">
+                    <div className="w-12 h-12 shrink-0 rounded-[14px] flex items-center justify-center overflow-hidden relative border border-white/10 bg-black/40 shadow-inner">
+                      {qr.qr_image_url ? (
+                        <Image src={qr.qr_image_url} alt="QR" fill className="object-cover" />
+                      ) : (
+                        <QrCode className="w-5 h-5 text-slate-500" />
                       )}
                     </div>
-                    <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500">
-                      <span className={qr.platform.includes('BharatPe') ? "text-amber-500/80" : "text-slate-400"}>{qr.platform.split('|')[0]}</span>
-                      <span className="w-1 h-1 rounded-full bg-slate-700" />
-                      <span className="text-slate-400">{qr.settlement_time || qr.platform.split('|')[1] || 'T+1'}</span>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <h3 className="text-sm font-bold text-white truncate">{qr.merchant_name}</h3>
+                        {isTop && (
+                          <span className="shrink-0 flex items-center gap-1 text-[8px] font-black uppercase bg-gradient-to-r from-[#10b981] to-[#34d399] text-black px-1.5 py-0.5 rounded shadow-[0_0_10px_#10b981]">
+                            <Sparkles className="w-2.5 h-2.5" /> Best
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500">
+                        <span className="text-slate-400">{qr.platform.split('|')[0]}</span>
+                        <span className="w-1 h-1 rounded-full bg-slate-700" />
+                        <span className="text-[#0ea5e9]">Last: {getFormattedDate(qr.last_used_date)}</span>
+                      </div>
                     </div>
                   </div>
-                </div>
-                <div className="h-8 w-8 rounded-full bg-white/5 flex items-center justify-center border border-white/10">
-                  <ArrowRight className="w-4 h-4 text-slate-400" />
-                </div>
-              </motion.div>
-            )
-          })
-        ) : (
-          <div className="text-center py-6 bg-white/[0.02] rounded-[24px] border border-white/10 border-dashed backdrop-blur-sm">
-            <p className="text-xs font-bold text-slate-500">All caught up! No active suggestions.</p>
-          </div>
-        )}
+                  <div className="w-8 h-8 shrink-0 rounded-full bg-white/5 flex items-center justify-center border border-white/10 group-hover:bg-white/10 transition-colors">
+                    <ArrowRight className="w-4 h-4 text-slate-400" />
+                  </div>
+                </motion.div>
+              )
+            })
+          ) : (
+            <motion.div variants={itemVars} className="text-center py-8 bg-white/[0.02] rounded-[24px] border border-white/10 border-dashed backdrop-blur-sm">
+              <CheckCircle2 className="w-10 h-10 text-emerald-500/40 mx-auto mb-2" />
+              <p className="text-xs font-bold text-slate-500">All caught up! No active suggestions.</p>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
       {/* ================= PAYMENT MODAL ================= */}
@@ -253,15 +343,12 @@ export default function DashboardQRs({ firstName, currentUser, accessibleCards, 
                 {selectedQr?.merchant_name}
               </DialogTitle>
               <DialogDescription className="hidden">QR View</DialogDescription>
-              <p className="text-sm text-[#0ea5e9] font-bold">{selectedQr?.upi_id}</p>
+              {selectedQr?.base_payment_link ? (
+                 <p className="text-[10px] text-indigo-400 font-bold mt-1 flex items-center gap-1"><LinkIcon className="w-3 h-3"/> Custom Payment Link Attached</p>
+              ) : (
+                 <p className="text-xs text-[#0ea5e9] font-bold mt-1 truncate">{selectedQr?.upi_id}</p>
+              )}
             </DialogHeader>
-
-            {firstName && selectedQr?.merchant_name.toLowerCase().includes(firstName) && (
-              <div className="mt-4 flex items-start gap-3 bg-red-500/10 border border-red-500/30 p-3.5 rounded-2xl text-red-400 text-xs font-bold leading-relaxed shadow-[0_0_20px_rgba(239,68,68,0.1)]">
-                <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" />
-                This QR matches your name. Paying here has high risk of rotation block. Avoid if possible!
-              </div>
-            )}
           </div>
 
           <div className="p-6 max-h-[60vh] overflow-y-auto space-y-6 custom-scrollbar">
@@ -316,7 +403,7 @@ export default function DashboardQRs({ firstName, currentUser, accessibleCards, 
               {generatedAmounts.length > 0 && (
                 <div className="pt-3 space-y-2 border-t border-white/10">
                   {generatedAmounts.map((amt, i) => (
-                    <a key={i} href={`upi://pay?pa=${selectedQr?.upi_id || ''}&pn=${encodeURIComponent(selectedQr?.merchant_name || '')}&am=${amt}&cu=INR`} className="flex items-center justify-between w-full p-4 bg-gradient-to-r from-[#10b981]/15 to-transparent border border-[#10b981]/30 rounded-xl hover:border-[#10b981]/60 transition-all group shadow-[0_0_10px_rgba(16,185,129,0.1)]">
+                    <a key={i} href={getPaymentLink(selectedQr, amt)} className="flex items-center justify-between w-full p-4 bg-gradient-to-r from-[#10b981]/15 to-transparent border border-[#10b981]/30 rounded-xl hover:border-[#10b981]/60 transition-all group shadow-[0_0_10px_rgba(16,185,129,0.1)]">
                       <span className="text-sm font-black text-emerald-400 group-hover:text-emerald-300">Pay ₹{amt}</span>
                       <ArrowRight className="w-5 h-5 text-emerald-500/50 group-hover:text-emerald-400 group-hover:translate-x-1 transition-all" />
                     </a>

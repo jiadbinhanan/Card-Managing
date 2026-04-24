@@ -263,7 +263,7 @@ export default function SettlementsPage() {
            card_id: settleTargetCardId,
            amount: amtToSettle,
            transaction_type: 'credit',
-           remarks: `Settlement received from ${settleTx.qrs?.merchant_name || 'Manual Entry'}`,
+           remarks: `Settlement received from ${settleTx.qrs?.merchant_name || 'Manual Rotation Entry'}`,
            transaction_date: new Date().toISOString()
         });
 
@@ -294,7 +294,7 @@ export default function SettlementsPage() {
             type: 'withdrawal',
             status: 'pending_settlement',
             recorded_by: currentUser?.id,
-            remarks: manualRemarks || "Manual Entry"
+            remarks: manualRemarks || "Manual Rotation Entry"
          });
 
          if (manualQrId) {
@@ -462,7 +462,7 @@ export default function SettlementsPage() {
                                       <Clock className="w-5 h-5 text-amber-400" />
                                    </div>
                                    <div className="truncate">
-                                      <h3 className="text-sm font-bold text-white truncate">{tx.qrs?.merchant_name || tx.remarks || 'Manual Entry'}</h3>
+                                      <h3 className="text-sm font-bold text-white truncate">{tx.qrs?.merchant_name || tx.remarks || 'Manual Rotation Entry'}</h3>
                                       <p className="text-[10px] text-slate-400 font-medium">Rotated on {new Date(tx.transaction_date).toLocaleDateString('en-GB')}</p>
                                    </div>
                                 </div>

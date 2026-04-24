@@ -5,11 +5,12 @@ import { useCardStore } from "@/store/cardStore";
 import { motion } from "motion/react";
 import { 
   Wallet, 
-  ArrowRight,
   CalendarClock,
   ChevronDown,
   CheckCircle2,
-  Plus
+  Plus,
+  Layers,
+  Users
 } from "lucide-react";
 import { BottomNav } from "@/components/BottomNav";
 import Link from "next/link";
@@ -47,28 +48,46 @@ interface BillingCycle {
   status: string;
 }
 
+// ─── Smoke Reveal: per-character ─────────────────────────────────────────
+function SmokeText({ text, className = "" }: { text: string; className?: string }) {
+  return (
+    <span className={`inline-flex ${className}`} aria-label={text}>
+      {text.split("").map((char, i) => (
+        <motion.span
+          key={i}
+          initial={{ opacity: 0, filter: "blur(10px)", y: 6 }}
+          animate={{ opacity: 1, filter: "blur(0px)", y: 0 }}
+          transition={{ delay: i * 0.04, duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+          className="inline-block bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent"
+          style={{ whiteSpace: char === " " ? "pre" : "normal" }}
+        >
+          {char}
+        </motion.span>
+      ))}
+    </span>
+  );
+}
+
 export default function Dashboard() {
   const [userName, setUserName] = useState<string>("Loading...");
   const [firstName, setFirstName] = useState<string>("");
   const [userAvatar, setUserAvatar] = useState<string>("");
   const [currentUser, setCurrentUser] = useState<any>(null);
-  const [imgError, setImgError] = useState(false); 
+  const [imgError, setImgError] = useState(false);
 
-  // Card Context States
   const [accessibleCards, setAccessibleCards] = useState<CardData[]>([]);
   const { globalSelectedCardId: selectedCardId, setGlobalSelectedCardId: setSelectedCardId } = useCardStore();
 
-  // Financial States
-  const [totalLimit, setTotalLimit] = useState(0); 
+  const [totalLimit, setTotalLimit] = useState(0);
   const [availableLimit, setAvailableLimit] = useState(0);
+  const [inTransit, setInTransit] = useState(0);        
+  const [usersCash, setUsersCash] = useState(0);      // NEW: Users Cash from cash_on_hand
   const [userStats, setUserStats] = useState<UserStat[]>([]);
 
-  // Billing States
   const [daysToBill, setDaysToBill] = useState(0);
   const [nextBillDate, setNextBillDate] = useState<string>("");
   const [activeBills, setActiveBills] = useState<BillingCycle[]>([]);
 
-  // Bill Modal States
   const [isBillModalOpen, setIsBillModalOpen] = useState(false);
   const [billFormCardId, setBillFormCardId] = useState("");
   const [billFormMonth, setBillFormMonth] = useState("");
@@ -95,7 +114,7 @@ export default function Dashboard() {
   };
 
   const calculateBillDays = (cards: CardData[], selectedId: string) => {
-    let targetDay = 26; 
+    let targetDay = 26;
     if (selectedId !== 'all') {
        const card = cards.find(c => c.id === selectedId);
        if (card && card.bill_due_day) targetDay = card.bill_due_day;
@@ -105,27 +124,19 @@ export default function Dashboard() {
 
     const now = new Date();
     let target = new Date(now.getFullYear(), now.getMonth(), targetDay);
-    if (now > target) {
-      target = new Date(now.getFullYear(), now.getMonth() + 1, targetDay);
-    }
+    if (now > target) target = new Date(now.getFullYear(), now.getMonth() + 1, targetDay);
     const diff = Math.ceil((target.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
     setDaysToBill(diff);
 
     const nth = (d: number) => {
       if (d > 3 && d < 21) return 'th';
-      switch (d % 10) {
-        case 1:  return "st";
-        case 2:  return "nd";
-        case 3:  return "rd";
-        default: return "th";
-      }
+      switch (d % 10) { case 1: return "st"; case 2: return "nd"; case 3: return "rd"; default: return "th"; }
     };
     const month = target.toLocaleString('default', { month: 'short' });
     setNextBillDate(`${targetDay}${nth(targetDay)} ${month}`);
   };
 
   const fetchDashboardData = async () => {
-    // 1. Get User
     const { data: { user } } = await supabase.auth.getUser();
     let currentFName = "";
     if (user) {
@@ -135,26 +146,18 @@ export default function Dashboard() {
         setUserName(profile.name);
         currentFName = profile.name.split(' ')[0];
         setFirstName(currentFName.toLowerCase());
-        if (profile.avatar_url) {
-           setUserAvatar(cleanUrl(profile.avatar_url));
-           setImgError(false); 
-        }
+        if (profile.avatar_url) { setUserAvatar(cleanUrl(profile.avatar_url)); setImgError(false); }
       }
 
-      // Fetch Accessible Cards
       const { data: accessData } = await supabase.from('card_access').select('card_id').eq('user_id', user.id);
       let myCards: CardData[] = [];
       if (accessData && accessData.length > 0) {
          const cardIds = accessData.map(a => a.card_id);
          const { data: cardData } = await supabase.from('cards').select('*').in('id', cardIds).order('is_primary', { ascending: false });
-         if (cardData) {
-            myCards = cardData;
-            setAccessibleCards(cardData);
-         }
+         if (cardData) { myCards = cardData; setAccessibleCards(cardData); }
       }
       calculateBillDays(myCards, selectedCardId);
 
-      // 2. Dynamic Limit Calculations
       let currentLimit = 0;
       let activeCardIds: string[] = [];
 
@@ -166,15 +169,15 @@ export default function Dashboard() {
             const primaryId = selected.is_primary ? selected.id : selected.parent_card_id;
             const primaryCard = myCards.find(c => c.id === primaryId);
             currentLimit = primaryCard ? Number(primaryCard.total_limit) : Number(selected.total_limit);
-
             const familyCards = myCards.filter(c => c.id === primaryId || c.parent_card_id === primaryId);
             activeCardIds = familyCards.map(c => c.id);
          }
       }
-      if (currentLimit === 0) currentLimit = 180000; 
+      if (currentLimit === 0) currentLimit = 180000;
       setTotalLimit(currentLimit);
 
-      let txQuery = supabase.from('card_transactions').select('amount, type, payment_method, card_id, status');
+      let txQuery = supabase.from('card_transactions')
+        .select('amount, type, payment_method, card_id, status, qr_id, settled_to_user, remarks');
       let spendsQuery = supabase.from('spends').select('amount, payment_method, user_id, card_id');
       let billsQuery = supabase.from('billing_cycles').select('*').neq('status', 'paid');
 
@@ -190,17 +193,35 @@ export default function Dashboard() {
 
       if (bills) setActiveBills(bills);
 
-      const withdrawals = txs?.filter(t => t.type === 'withdrawal' && t.status === 'pending_settlement').reduce((sum, t) => sum + Number(t.amount), 0) || 0;
+      const withdrawals = txs?.filter(t => {
+        if (t.type !== 'withdrawal') return false;
+        const isRotation = t.qr_id || t.settled_to_user || (t.remarks || '').toLowerCase().includes('rotation');
+        if (isRotation) return true;
+        return t.status === 'pending_settlement';
+      }).reduce((sum, t) => sum + Number(t.amount), 0) || 0;
+
       const billPayments = txs?.filter(t => t.type === 'bill_payment').reduce((sum, t) => sum + Number(t.amount), 0) || 0;
       const ccSpends = spends?.filter(s => s.payment_method === 'credit_card').reduce((sum, s) => sum + Number(s.amount), 0) || 0;
 
       setAvailableLimit(currentLimit - withdrawals - ccSpends + billPayments);
 
-      // 3. Advanced User Stats
+      const inTransitAmt = txs?.filter(t =>
+        t.type === 'withdrawal' &&
+        (t.qr_id || (t.remarks || '').toLowerCase().includes('rotation')) &&
+        !t.settled_to_user
+      ).reduce((sum, t) => sum + Number(t.amount), 0) || 0;
+      setInTransit(inTransitAmt);
+
+      // User Stats & Cash on Hand
       const { data: profiles } = await supabase.from('profiles').select('id, name, avatar_url');
       let cohQuery = supabase.from('cash_on_hand').select('*');
       if (activeCardIds.length > 0) cohQuery = cohQuery.in('card_id', activeCardIds);
       const { data: coh } = await cohQuery;
+
+      // Calculate Total Users Cash based on selection (all, family, or individual)
+      const totalCoh = coh?.reduce((sum, c) => sum + Number(c.current_balance), 0) || 0;
+      setUsersCash(totalCoh);
+
       let allSpendsQuery = supabase.from('spends').select('user_id, amount, payment_method, card_id');
       if (activeCardIds.length > 0) allSpendsQuery = allSpendsQuery.in('card_id', activeCardIds);
       const { data: allSpends } = await allSpendsQuery;
@@ -214,7 +235,6 @@ export default function Dashboard() {
           const totalPersonalSpends = allSpends?.filter(s => s.user_id === p.id && s.payment_method === 'credit_card').reduce((sum, s) => sum + Number(s.amount), 0) || 0;
           const totalRepayments = allTxs?.filter(t => t.recorded_by === p.id && t.type === 'bill_payment' && t.payment_method === 'own_pocket').reduce((sum, t) => sum + Number(t.amount), 0) || 0;
           const due = Math.max(0, totalPersonalSpends - totalRepayments);
-
           return { id: p.id, name: p.name.split(' ')[0], cash, due, avatar_url: cleanUrl(p.avatar_url) };
         });
         setUserStats(stats);
@@ -224,23 +244,18 @@ export default function Dashboard() {
 
   const openBillModal = () => {
      setBillFormCardId(selectedCardId !== 'all' ? selectedCardId : (accessibleCards[0]?.id || ""));
-     setBillFormMonth(new Date().toISOString().slice(0, 7)); // YYYY-MM
+     setBillFormMonth(new Date().toISOString().slice(0, 7));
      setBillFormGenAmount("");
      setBillFormPaidAmount("");
      setIsBillModalOpen(true);
   };
 
   const handleSaveBill = async () => {
-     if (!billFormCardId || !billFormMonth || !billFormGenAmount) {
-         alert("Please fill required fields.");
-         return;
-     }
-
+     if (!billFormCardId || !billFormMonth || !billFormGenAmount) { alert("Please fill required fields."); return; }
      setIsSavingBill(true);
      const generated = Number(billFormGenAmount);
      const paid = Number(billFormPaidAmount) || 0;
      const status = paid >= generated ? 'paid' : (paid > 0 ? 'partially_paid' : 'unpaid');
-
      try {
          await supabase.from('billing_cycles').insert({
              card_id: billFormCardId,
@@ -251,27 +266,26 @@ export default function Dashboard() {
          });
          setIsBillModalOpen(false);
          fetchDashboardData();
-     } catch (err: any) {
-         alert("Error: " + err.message);
-     } finally {
-         setIsSavingBill(false);
-     }
+     } catch (err: any) { alert("Error: " + err.message); }
+     finally { setIsSavingBill(false); }
   };
 
-  // Ring Calculation based on AVAILABLE limit
+  // Adjusted Ring Calculation for smaller SVG
   const percentage = totalLimit > 0 ? Math.max(0, Math.min(100, (availableLimit / totalLimit) * 100)) : 0;
-  const radius = 65; 
+  const radius = 54;
   const circumference = 2 * Math.PI * radius;
   const strokeDashoffset = circumference - (percentage / 100) * circumference;
+  const utilized = totalLimit - availableLimit;
 
   const totalGenerated = activeBills.reduce((acc, b) => acc + Number(b.generated_amount), 0);
   const totalPaid = activeBills.reduce((acc, b) => acc + Number(b.paid_amount), 0);
   const totalDue = totalGenerated - totalPaid;
 
+
   return (
     <div className="min-h-screen bg-[#030014] text-slate-50 font-sans pb-28 overflow-x-hidden selection:bg-[#0ea5e9]/30">
 
-      {/* ================= ULTRA HIGH-FIDELITY GLOWING BACKGROUND ================= */}
+      {/* ── BACKGROUND ── */}
       <div className="fixed inset-0 z-0 overflow-hidden pointer-events-none">
         <div className="absolute inset-0 bg-[linear-gradient(to_right,#4f46e51a_1px,transparent_1px),linear-gradient(to_bottom,#4f46e51a_1px,transparent_1px)] bg-[size:32px_32px] [mask-image:radial-gradient(ellipse_80%_80%_at_50%_50%,#000_10%,transparent_100%)]" />
         <motion.div animate={{ x: [0, 40, -40, 0], y: [0, -50, 50, 0] }} transition={{ duration: 25, repeat: Infinity, ease: "linear" }} className="absolute top-[-15%] left-[-15%] w-[80vw] h-[80vw] rounded-full bg-[#0ea5e9] opacity-[0.15] blur-[100px] mix-blend-screen" />
@@ -279,7 +293,7 @@ export default function Dashboard() {
         <motion.div animate={{ scale: [1, 1.2, 1], opacity: [0.08, 0.15, 0.08] }} transition={{ duration: 8, repeat: Infinity }} className="absolute top-[40%] left-[20%] w-[50vw] h-[50vw] rounded-full bg-[#38bdf8] opacity-10 blur-[90px] mix-blend-screen" />
       </div>
 
-      {/* ================= THIN & PREMIUM HEADER ================= */}
+      {/* ── HEADER ── */}
       <header className="relative z-10 px-5 pt-8 pb-3 sticky top-0 bg-[#030014]/60 backdrop-blur-3xl border-b border-white/5 shadow-[0_15px_40px_rgba(0,0,0,0.6)]">
         <div className="max-w-md mx-auto flex justify-between items-center">
           <div className="flex items-center gap-3">
@@ -287,12 +301,7 @@ export default function Dashboard() {
               <div className="h-10 w-10 rounded-full bg-gradient-to-tr from-[#0ea5e9] to-[#a855f7] p-0.5 shadow-[0_0_20px_rgba(168,85,247,0.4)] cursor-pointer hover:scale-105 transition-transform overflow-hidden">
                 <div className="w-full h-full bg-[#030014] rounded-full flex items-center justify-center relative overflow-hidden">
                   {userAvatar && !imgError ? (
-                    <img 
-                       src={userAvatar} 
-                       alt="Profile" 
-                       className="w-full h-full object-cover rounded-full" 
-                       onError={() => setImgError(true)} 
-                    />
+                    <img src={userAvatar} alt="Profile" className="w-full h-full object-cover rounded-full" onError={() => setImgError(true)} />
                   ) : (
                     <span className="text-sm font-black text-white">{userName.charAt(0) || 'U'}</span>
                   )}
@@ -300,17 +309,23 @@ export default function Dashboard() {
               </div>
             </Link>
             <div>
-              <motion.div 
-                animate={{ backgroundPosition: ['0% 50%', '100% 50%', '0% 50%'] }}
-                transition={{ duration: 5, ease: "linear", repeat: Infinity }}
-                className="bg-[length:200%_200%] bg-gradient-to-r from-emerald-400 via-cyan-400 to-emerald-400 bg-clip-text"
-              >
-                <p className="text-[10px] font-black uppercase tracking-widest leading-none mb-0.5 text-transparent">
-                  Live Status • Active
+              <div className="overflow-hidden mb-0.5">
+                <p className="text-[10px] font-black uppercase tracking-widest leading-none">
+                  {["Live", "Status", "•", "Active"].map((word, i) => (
+                    <motion.span
+                      key={i}
+                      initial={{ opacity: 0, filter: "blur(6px)", y: 4 }}
+                      animate={{ opacity: 1, filter: "blur(0px)", y: 0 }}
+                      transition={{ delay: 0.2 + i * 0.07, duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+                      className="inline-block mr-[0.25em] bg-gradient-to-r from-emerald-400 via-cyan-400 to-emerald-400 bg-clip-text text-transparent"
+                    >
+                      {word}
+                    </motion.span>
+                  ))}
                 </p>
-              </motion.div>
-              <h1 className="text-xl font-black tracking-tight bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent leading-none drop-shadow-[0_0_15px_rgba(255,255,255,0.2)]">
-                Hey, {firstName || userName.split(' ')[0]}
+              </div>
+              <h1 className="text-xl font-black tracking-tight leading-none">
+                <SmokeText text={`Hey, ${firstName || userName.split(' ')[0]}`} />
               </h1>
             </div>
           </div>
@@ -333,76 +348,155 @@ export default function Dashboard() {
 
       <main className="relative z-10 px-5 pt-6 max-w-md mx-auto space-y-7">
 
-        {/* ================= FIXED LIMIT RING ================= */}
-        <section className="relative p-6 bg-gradient-to-b from-white/[0.06] to-transparent border border-white/10 rounded-[36px] backdrop-blur-xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] flex flex-col items-center overflow-hidden">
+        {/* ================= LIMIT RING & STATS (Split Layout) ================= */}
+        <motion.section
+          initial={{ opacity: 0, y: 24 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
+          className="relative p-5 bg-gradient-to-b from-white/[0.06] to-transparent border border-white/10 rounded-[36px] backdrop-blur-xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] flex flex-col justify-between overflow-hidden"
+          style={{ aspectRatio: '1/1' }}
+        >
+          {/* Top Edge Glow */}
           <div className="absolute top-0 left-1/2 -translate-x-1/2 w-40 h-1 bg-gradient-to-r from-transparent via-[#0ea5e9] to-transparent opacity-50 blur-[2px]" />
 
-          <div className="relative flex justify-center items-center mt-2 mb-4">
-            <svg className="w-52 h-52 transform -rotate-90 drop-shadow-[0_0_20px_rgba(14,165,233,0.3)]">
-              <circle cx="104" cy="104" r={radius} stroke="currentColor" strokeWidth="14" fill="transparent" className="text-white/5" />
-              <motion.circle
-                initial={{ strokeDashoffset: circumference }}
-                animate={{ strokeDashoffset }}
-                transition={{ duration: 2, ease: "easeOut" }}
-                cx="104"
-                cy="104"
-                r={radius}
-                stroke="url(#gradient)"
-                strokeWidth="14"
-                fill="transparent"
-                strokeDasharray={circumference}
-                strokeLinecap="round"
-                className="drop-shadow-[0_0_15px_rgba(14,165,233,0.6)]"
-              />
-              <defs>
-                <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                  <stop offset="0%" stopColor="#0ea5e9" />
-                  <stop offset="100%" stopColor="#a855f7" />
-                </linearGradient>
-              </defs>
-            </svg>
+          <div className="flex w-full flex-1 items-center justify-between pb-2">
 
-            <div className="absolute flex flex-col items-center justify-center text-center">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Total Limit</span>
-              <span className="text-xl font-black text-white tracking-tight drop-shadow-[0_0_10px_rgba(255,255,255,0.4)]">
-                ₹{totalLimit.toLocaleString('en-IN')}
-              </span>
+            {/* LEFT COLUMN: Ring + Available */}
+            <div className="w-[50%] flex flex-col items-center justify-center">
+              <div className="relative flex justify-center items-center mb-2">
+                <svg className="w-36 h-36 transform -rotate-90 drop-shadow-[0_0_20px_rgba(14,165,233,0.3)]">
+                  <circle cx="72" cy="72" r={radius} stroke="currentColor" strokeWidth="10" fill="transparent" className="text-white/5" />
+                  <motion.circle
+                    initial={{ strokeDashoffset: circumference }}
+                    animate={{ strokeDashoffset }}
+                    transition={{ duration: 2, ease: "easeOut" }}
+                    cx="72"
+                    cy="72"
+                    r={radius}
+                    stroke="url(#gradient)"
+                    strokeWidth="10"
+                    fill="transparent"
+                    strokeDasharray={circumference}
+                    strokeLinecap="round"
+                    className="drop-shadow-[0_0_15px_rgba(14,165,233,0.6)]"
+                  />
+                  <defs>
+                    <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                      <stop offset="0%" stopColor="#0ea5e9" />
+                      <stop offset="100%" stopColor="#a855f7" />
+                    </linearGradient>
+                  </defs>
+                </svg>
+
+                <div className="absolute flex flex-col items-center justify-center text-center">
+                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Total Limit</span>
+                  <motion.span
+                    initial={{ opacity: 0, filter: "blur(8px)" }}
+                    animate={{ opacity: 1, filter: "blur(0px)" }}
+                    transition={{ delay: 0.4, duration: 0.5 }}
+                    className="text-sm font-black text-white tracking-tight drop-shadow-[0_0_10px_rgba(255,255,255,0.4)]"
+                  >
+                    ₹{(totalLimit / 1000).toFixed(0)}k
+                  </motion.span>
+                </div>
+              </div>
+
+              <div className="text-center mt-0">
+                 <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5 block">Available Now</span>
+                 <motion.div
+                   initial={{ opacity: 0, scale: 0.9, filter: "blur(8px)" }}
+                   animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
+                   transition={{ delay: 0.5, duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+                   className="text-2xl font-black tracking-tight bg-gradient-to-r from-[#0ea5e9] via-[#38bdf8] to-[#a855f7] bg-clip-text text-transparent drop-shadow-[0_0_20px_rgba(14,165,233,0.5)]"
+                 >
+                   ₹{availableLimit.toLocaleString('en-IN')}
+                 </motion.div>
+              </div>
             </div>
+
+            {/* GLOWING VERTICAL DIVIDER */}
+            <div className="w-[1px] h-[85%] bg-gradient-to-b from-transparent via-[#0ea5e9]/50 to-transparent shadow-[0_0_10px_rgba(14,165,233,0.6)]" />
+
+            {/* RIGHT COLUMN: In Transit + Users Cash */}
+            <div className="w-[45%] flex flex-col justify-center gap-5 pl-3">
+
+               {/* Transit */}
+               <motion.div initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.6 }} className="flex flex-col">
+                  <div className="flex items-center gap-1.5 mb-1">
+                     <Layers className="w-3.5 h-3.5 text-[#38bdf8]" />
+                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">In Transit</span>
+                  </div>
+                  <p className="text-lg font-black text-[#38bdf8] drop-shadow-[0_0_8px_rgba(56,189,248,0.4)]">
+                    ₹{inTransit.toLocaleString('en-IN')}
+                  </p>
+               </motion.div>
+
+               {/* Users Cash */}
+               <motion.div initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.7 }} className="flex flex-col">
+                  <div className="flex items-center gap-1.5 mb-1">
+                     <Users className="w-3.5 h-3.5 text-emerald-400" />
+                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Users Cash</span>
+                  </div>
+                  <p className="text-lg font-black text-emerald-400 drop-shadow-[0_0_8px_rgba(16,185,129,0.4)]">
+                    ₹{usersCash.toLocaleString('en-IN')}
+                  </p>
+               </motion.div>
+            </div>
+
           </div>
 
-          <div className="text-center mt-1 mb-6">
-             <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-1 block">Available Now</span>
-             <div className="text-3xl font-black tracking-tight bg-gradient-to-r from-[#0ea5e9] via-[#38bdf8] to-[#a855f7] bg-clip-text text-transparent drop-shadow-[0_0_20px_rgba(14,165,233,0.5)]">
-               ₹{availableLimit.toLocaleString('en-IN')}
-             </div>
-          </div>
+          {/* BOTTOM ROW: Settled / Utilized */}
+          <div className="flex w-full justify-between items-center pt-3 mt-auto relative">
 
-          <div className="flex w-full justify-between items-center pt-5 border-t border-white/5">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-emerald-500/10 flex items-center justify-center border border-emerald-500/20 shadow-inner">
+            {/* GLOWING HORIZONTAL DIVIDER */}
+            <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[90%] h-[1px] bg-gradient-to-r from-transparent via-white/30 to-transparent shadow-[0_0_10px_rgba(255,255,255,0.4)]" />
+
+            {/* Settled */}
+            <motion.div
+              initial={{ opacity: 0, x: -12 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: 0.55, duration: 0.45 }}
+              className="flex items-center gap-2.5"
+            >
+              <div className="w-9 h-9 rounded-xl bg-emerald-500/10 flex items-center justify-center border border-emerald-500/20 shadow-inner">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400" />
               </div>
               <div>
-                <p className="text-[9px] font-bold text-slate-500 uppercase tracking-wider">Settled (Avail)</p>
-                <p className="text-sm font-black text-emerald-400 drop-shadow-[0_0_10px_rgba(16,185,129,0.3)]">₹{(availableLimit / 1000).toFixed(1)}k</p>
+                <p className="text-[9px] font-bold text-slate-500 uppercase tracking-wider">Settled</p>
+                <p className="text-sm font-black text-emerald-400 drop-shadow-[0_0_10px_rgba(16,185,129,0.3)]">
+                  ₹{(availableLimit / 1000).toFixed(1)}k
+                </p>
               </div>
-            </div>
-            <div className="flex items-center gap-3">
+            </motion.div>
+
+            {/* Utilized */}
+            <motion.div
+              initial={{ opacity: 0, x: 12 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: 0.55, duration: 0.45 }}
+              className="flex items-center gap-2.5"
+            >
               <div className="text-right">
                 <p className="text-[9px] font-bold text-slate-500 uppercase tracking-wider">Utilized</p>
-                <p className="text-sm font-black text-rose-400 drop-shadow-[0_0_10px_rgba(244,63,94,0.3)]">₹{((totalLimit - availableLimit) / 1000).toFixed(1)}k</p>
+                <p className="text-sm font-black text-rose-400 drop-shadow-[0_0_10px_rgba(244,63,94,0.3)]">
+                  ₹{(utilized / 1000).toFixed(1)}k
+                </p>
               </div>
-              <div className="w-10 h-10 rounded-xl bg-rose-500/10 flex items-center justify-center border border-rose-500/20 shadow-inner">
+              <div className="w-9 h-9 rounded-xl bg-rose-500/10 flex items-center justify-center border border-rose-500/20 shadow-inner">
                 <Wallet className="w-4 h-4 text-rose-400" />
               </div>
-            </div>
+            </motion.div>
+
           </div>
-        </section>
+        </motion.section>
 
-        {/* ================= ADVANCED BILLING CYCLES ================= */}
-
-        {/* ================= ADVANCED BILLING CYCLES ================= */}
-        <section className="bg-gradient-to-br from-[#10b981]/10 to-[#0ea5e9]/5 border border-[#10b981]/20 rounded-[28px] p-5 backdrop-blur-2xl shadow-[0_10px_30px_rgba(16,185,129,0.15)] relative overflow-hidden">
+        {/* ================= BILLING CYCLES ================= */}
+        <motion.section
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1, duration: 0.5 }}
+          className="bg-gradient-to-br from-[#10b981]/10 to-[#0ea5e9]/5 border border-[#10b981]/20 rounded-[28px] p-5 backdrop-blur-2xl shadow-[0_10px_30px_rgba(16,185,129,0.15)] relative overflow-hidden"
+        >
           <div className="absolute top-0 right-0 w-32 h-32 bg-[#10b981]/20 rounded-full blur-[30px] pointer-events-none" />
 
           <div className="flex items-center justify-between relative z-10 mb-4">
@@ -421,22 +515,37 @@ export default function Dashboard() {
           </div>
 
           {selectedCardId === 'all' ? (
-             <div className="space-y-3 relative z-10 border-t border-white/10 pt-4 max-h-48 overflow-y-auto custom-scrollbar">
-                {activeBills.length > 0 ? activeBills.map(bill => {
+             <div className="space-y-3 relative z-10 border-t border-white/10 pt-4 max-h-56 overflow-y-auto custom-scrollbar">
+                {activeBills.length > 0 ? activeBills.map((bill, idx) => {
                    const card = accessibleCards.find(c => c.id === bill.card_id);
-                   const due = bill.generated_amount - bill.paid_amount;
+                   const due = Number(bill.generated_amount) - Number(bill.paid_amount);
                    return (
-                      <div key={bill.id} className="flex items-center justify-between bg-white/[0.02] border border-white/5 p-3 rounded-xl">
-                         <div>
-                            <p className="text-[10px] font-bold text-slate-400 uppercase">{card?.card_name || 'Card'} {card ? '(**'+card.last_4_digits+')' : ''}</p>
-                            <p className="text-xs font-black text-slate-300">{bill.billing_month}</p>
-                         </div>
-                         <div className="text-right">
-                            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-0.5">Due</p>
-                            <p className="text-sm font-black text-rose-400">₹{due.toLocaleString()}</p>
-                         </div>
-                      </div>
-                   )
+                      <motion.div
+                        key={bill.id}
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: idx * 0.06 }}
+                        className="bg-white/[0.03] border border-white/5 rounded-2xl p-3"
+                      >
+                        <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-2">
+                          {card?.card_name || 'Card'} {card ? `(**${card.last_4_digits})` : ''}
+                        </p>
+                        <div className="grid grid-cols-3 gap-2">
+                          <div className="text-center">
+                            <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Generated</p>
+                            <p className="text-xs font-black text-slate-300">₹{Number(bill.generated_amount).toLocaleString()}</p>
+                          </div>
+                          <div className="text-center border-l border-white/5">
+                            <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Paid</p>
+                            <p className="text-xs font-black text-emerald-400">₹{Number(bill.paid_amount).toLocaleString()}</p>
+                          </div>
+                          <div className="text-center border-l border-white/5">
+                            <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Due</p>
+                            <p className="text-xs font-black text-rose-400">₹{due.toLocaleString()}</p>
+                          </div>
+                        </div>
+                      </motion.div>
+                   );
                 }) : (
                    <p className="text-xs text-center text-slate-500 font-bold py-2">No active bills found.</p>
                 )}
@@ -457,11 +566,10 @@ export default function Dashboard() {
                 </div>
              </div>
           )}
-        </section>
-
+        </motion.section>
 
         {/* ================= ANALYTICS MODULE ================= */}
-        <DashboardAnalytics userStats={userStats} />
+        <DashboardAnalytics userStats={userStats} selectedCardId={selectedCardId} accessibleCards={accessibleCards} />
 
         {/* ================= QR SUGGESTION MODULE ================= */}
         <DashboardQRs firstName={firstName} currentUser={currentUser} accessibleCards={accessibleCards} globalSelectedCardId={selectedCardId} />

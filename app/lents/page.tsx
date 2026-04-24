@@ -245,8 +245,9 @@ export default function LentsPage() {
     });
     setCardCashMap(userCardCashMap as any);
 
-    // 3. Card Available Limits
-    const { data: txs } = await supabase.from('card_transactions').select('amount, type, payment_method, card_id, status');
+    // 3. Card Available Limits — using dashboard/page.tsx logic
+    const { data: txs } = await supabase.from('card_transactions')
+      .select('amount, type, payment_method, card_id, status, qr_id, settled_to_user, remarks');
     const { data: spends } = await supabase.from('spends').select('amount, payment_method, user_id, card_id');
 
     const availableMap: Record<string, number> = {};
@@ -254,7 +255,14 @@ export default function LentsPage() {
     currentCards.filter(c => c.is_primary).forEach(primaryCard => {
        const familyCardIds = currentCards.filter(c => c.id === primaryCard.id || c.parent_card_id === primaryCard.id).map(c => c.id);
 
-       const withdrawals = txs?.filter(t => t.type === 'withdrawal' && t.status === 'pending_settlement' && t.card_id && familyCardIds.includes(t.card_id)).reduce((sum, t) => sum + Number(t.amount), 0) || 0;
+       const withdrawals = txs?.filter(t => {
+         if (t.type !== 'withdrawal') return false;
+         if (!t.card_id || !familyCardIds.includes(t.card_id)) return false;
+         const isRotation = t.qr_id || t.settled_to_user || (t.remarks || '').toLowerCase().includes('rotation');
+         if (isRotation) return true;
+         return t.status === 'pending_settlement';
+       }).reduce((sum, t) => sum + Number(t.amount), 0) || 0;
+
        const billPayments = txs?.filter(t => t.type === 'bill_payment' && t.card_id && familyCardIds.includes(t.card_id)).reduce((sum, t) => sum + Number(t.amount), 0) || 0;
        const ccSpends = spends?.filter(s => s.payment_method === 'credit_card' && s.card_id && familyCardIds.includes(s.card_id)).reduce((sum, s) => sum + Number(s.amount), 0) || 0;
 
