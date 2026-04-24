@@ -361,7 +361,7 @@ export default function LentsPage() {
             user_id: currentUser.id,
             amount: amtNum,
             spend_type: 'personal',
-            payment_method: 'credit_card',
+            payment_method: 'from_card_limit',
             spend_date: lentDate,
             card_id: selectedCardId,
             remarks: `Lent to ${borrowerName} from card`
@@ -493,7 +493,7 @@ export default function LentsPage() {
               user_id: currentUser.id,
               amount: -amtNum,
               spend_type: 'personal',
-              payment_method: 'credit_card', 
+              payment_method: 'lent_recovery', 
               spend_date: today,
               card_id: receiveMethod === 'card' ? receiveCardId : collectingLent.card_id,
               remarks: `Lent recovery from ${collectingLent.borrower_name}`
