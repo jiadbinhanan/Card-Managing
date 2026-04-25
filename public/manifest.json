@@ -1,0 +1,21 @@
+{
+  "name": "Credics by Jiad",
+  "short_name": "Credics",
+  "description": "Your ultimate card and spend tracking dashboard",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#050505",
+  "theme_color": "#050505",
+  "icons": [
+    {
+      "src": "/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

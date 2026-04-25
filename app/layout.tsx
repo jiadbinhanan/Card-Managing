@@ -1,4 +1,4 @@
-import type {Metadata} from 'next';
+import type {Metadata, Viewport} from 'next';
 import './globals.css';
 import { Geist, Space_Grotesk } from "next/font/google";
 import { cn } from "@/lib/utils";
@@ -8,12 +8,18 @@ import { SpeedInsights } from '@vercel/speed-insights/next';
 const geist = Geist({subsets:['latin'],variable:'--font-sans'});
 const spaceGrotesk = Space_Grotesk({subsets:['latin'],variable:'--font-space'});
 
+export const viewport: Viewport = {
+  themeColor: "#050505",
+};
+
 export const metadata: Metadata = {
   title: 'Credics: Your Complete Credit Management Ecosystem',
   description: 'Manage shared card limits, track personal dues, and effortlessly coordinate card rotations within your financial community.',
-icons: {
+  manifest: '/manifest.json',
+  icons: {
     icon: '/favicon.ico',
     shortcut: '/favicon.ico',
+    apple: '/icon-192x192.png',
   },
   openGraph: {
     title: 'Credics: Your Complete Credit Management Ecosystem',
