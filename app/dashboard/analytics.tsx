@@ -128,8 +128,9 @@ export default function DashboardAnalytics({ userStats, selectedCardId, accessib
     }
 
     // 3. Due Ledger Fetch: Spends (with card filter)
+    // FIX: Added payment_method to select query
     let spendsQuery = supabase.from('spends')
-      .select('id, amount, spend_date, remarks')
+      .select('id, amount, spend_date, remarks, payment_method')
       .eq('user_id', userId)
       .gte('spend_date', startDate)
       .lte('spend_date', endDate);
@@ -155,8 +156,32 @@ export default function DashboardAnalytics({ userStats, selectedCardId, accessib
 
     // Combine due ledgers
     const combinedDue: DueTransaction[] = [];
-    if (spends) spends.forEach(s => combinedDue.push({ id: `s-${s.id}`, type: 'spend', amount: s.amount, date: s.spend_date, remarks: s.remarks || 'Personal Spend' }));
-    if (txsData) txsData.forEach(t => combinedDue.push({ id: `t-${t.id}`, type: 'repayment', amount: t.amount, date: t.transaction_date, remarks: t.remarks || 'Bill Paid (Repayment)' }));
+
+    // FIX: Custom logic to handle lent_recovery and negative values as repayments
+    if (spends) {
+      spends.forEach(s => {
+        const isRepayment = s.payment_method === 'lent_recovery' || Number(s.amount) < 0;
+        combinedDue.push({ 
+          id: `s-${s.id}`, 
+          type: isRepayment ? 'repayment' : 'spend', 
+          amount: Math.abs(Number(s.amount)), // absolute value so UI logic works correctly
+          date: s.spend_date, 
+          remarks: s.remarks || (isRepayment ? 'Lent Recovery' : 'Personal Spend') 
+        });
+      });
+    }
+
+    if (txsData) {
+      txsData.forEach(t => {
+        combinedDue.push({ 
+          id: `t-${t.id}`, 
+          type: 'repayment', 
+          amount: Math.abs(Number(t.amount)), 
+          date: t.transaction_date, 
+          remarks: t.remarks || 'Bill Paid (Repayment)' 
+        });
+      });
+    }
 
     combinedDue.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
     setDueLedger(combinedDue);
@@ -433,8 +458,8 @@ export default function DashboardAnalytics({ userStats, selectedCardId, accessib
                                              {tx.type === 'spend' ? <Receipt className="w-5 h-5" /> : <ArrowDownLeft className="w-5 h-5" />}
                                           </div>
                                           <div className="w-[160px] sm:w-[200px]">
-                                             <p className="text-sm font-bold text-white truncate">{tx.remarks}</p>
-                                             <p className="text-[10px] text-slate-500 font-bold uppercase mt-0.5">{new Date(tx.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</p>
+                                             <p className="text-sm font-bold text-white truncate">{tx.remarks || 'Due Transaction'}</p>
+                                             <p className="text-[10px] text-slate-500 font-bold uppercase mt-0.5">{new Date(tx.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} • {new Date(tx.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</p>
                                           </div>
                                        </div>
                                        <div className="flex items-center gap-2">
@@ -455,10 +480,8 @@ export default function DashboardAnalytics({ userStats, selectedCardId, accessib
                                           >
                                              <div className="bg-black/40 rounded-xl p-3 space-y-2 text-xs">
                                                 <div className="flex justify-between">
-                                                   <span className="text-slate-500 font-medium">Record Type:</span>
-                                                   <span className={tx.type === 'spend' ? 'text-rose-400 font-bold uppercase' : 'text-emerald-400 font-bold uppercase'}>
-                                                      {tx.type === 'spend' ? 'Added Due' : 'Paid Back'}
-                                                   </span>
+                                                   <span className="text-slate-500 font-medium">Type:</span>
+                                                   <span className={tx.type === 'spend' ? 'text-rose-400 font-bold uppercase' : 'text-emerald-400 font-bold uppercase'}>{tx.type === 'spend' ? 'Added to Due' : 'Repaid/Recovered'}</span>
                                                 </div>
                                                 <div className="flex justify-between">
                                                    <span className="text-slate-500 font-medium">Amount:</span>

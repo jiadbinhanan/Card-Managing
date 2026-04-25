@@ -232,7 +232,7 @@ export default function Dashboard() {
       if (profiles) {
         const stats = profiles.map(p => {
           const cash = coh?.find(c => c.user_id === p.id)?.current_balance || 0;
-          const totalPersonalSpends = allSpends?.filter(s => s.user_id === p.id && s.payment_method === 'credit_card').reduce((sum, s) => sum + Number(s.amount), 0) || 0;
+          const totalPersonalSpends = allSpends?.filter(s => s.user_id === p.id && ['credit_card', 'from_card_limit', 'lent_recovery'].includes(s.payment_method)).reduce((sum, s) => sum + Number(s.amount), 0) || 0;
           const totalRepayments = allTxs?.filter(t => t.recorded_by === p.id && t.type === 'bill_payment' && t.payment_method === 'own_pocket').reduce((sum, t) => sum + Number(t.amount), 0) || 0;
           const due = Math.max(0, totalPersonalSpends - totalRepayments);
           return { id: p.id, name: p.name.split(' ')[0], cash, due, avatar_url: cleanUrl(p.avatar_url) };
