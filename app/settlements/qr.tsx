@@ -14,7 +14,8 @@ import {
   Timer,
   ArrowRight,
   CreditCard,
-  Link as LinkIcon
+  Link as LinkIcon,
+  Download
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
@@ -254,7 +255,7 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
 
       const payload = {
         merchant_name: newQrName,
-        upi_id: isAddingStatic ? "static@saved" : newUpiId,
+        upi_id: isAddingStatic ? `static_${Date.now()}` : newUpiId,
         platform: isAddingStatic ? "Static" : newPlatform,
         settlement_time: isAddingStatic ? "N/A" : newSettlementTime,
         qr_image_url: publicUrl,
@@ -334,6 +335,24 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
         window.dispatchEvent(new CustomEvent('switch-tab-to-pending'));
     } catch (error: any) {
         alert("Failed to record transaction: " + error.message);
+    }
+  };
+
+  const downloadQrImage = async () => {
+    if (!selectedQr?.qr_image_url) return;
+    try {
+      const response = await fetch(selectedQr.qr_image_url);
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${selectedQr.merchant_name.replace(/\s+/g, '_')}_QR.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      alert("Download failed. Try again.");
     }
   };
 
@@ -621,15 +640,25 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
           </div>
 
           <div className="p-5 max-h-[60vh] overflow-y-auto space-y-5 custom-scrollbar">
-            <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} className="w-44 h-44 mx-auto bg-white rounded-[24px] p-2 shadow-[0_0_50px_rgba(255,255,255,0.15)] relative overflow-hidden border-4 border-white/10">
-              {selectedQr?.qr_image_url ? (
-                <img src={selectedQr.qr_image_url} alt="QR" className="w-full h-full object-cover rounded-[16px]" referrerPolicy="no-referrer" />
-              ) : (
-                <div className="w-full h-full bg-slate-100 rounded-[16px] flex items-center justify-center">
-                  <QrCode className="w-12 h-12 text-slate-300" />
-                </div>
+            <div className="flex flex-col items-center gap-2">
+              <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} className="w-44 h-44 mx-auto bg-white rounded-[24px] p-2 shadow-[0_0_50px_rgba(255,255,255,0.15)] relative overflow-hidden border-4 border-white/10">
+                {selectedQr?.qr_image_url ? (
+                  <img src={selectedQr.qr_image_url} alt="QR" className="w-full h-full object-cover rounded-[16px]" referrerPolicy="no-referrer" />
+                ) : (
+                  <div className="w-full h-full bg-slate-100 rounded-[16px] flex items-center justify-center">
+                    <QrCode className="w-12 h-12 text-slate-300" />
+                  </div>
+                )}
+              </motion.div>
+              {selectedQr?.qr_image_url && (
+                <button
+                  onClick={downloadQrImage}
+                  className="flex items-center gap-1.5 px-4 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-[11px] font-bold text-slate-300 hover:text-white transition-all"
+                >
+                  <Download className="w-3.5 h-3.5" /> Download QR
+                </button>
               )}
-            </motion.div>
+            </div>
 
             {selectedQr?.status !== 'static' && (
               <div className="space-y-4 bg-white/[0.02] p-4 rounded-[20px] border border-white/5 shadow-inner">
