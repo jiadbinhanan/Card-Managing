@@ -57,7 +57,7 @@ interface QRTabProps {
   globalSelectedCardId: string;
   currentUser: Profile | null;
   firstName: string;
-  isActive: boolean; // Added for triggering animations on tab switch
+  isActive: boolean;
 }
 
 // Stagger & Card Animations
@@ -235,8 +235,18 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
   };
 
   const handleSaveQR = async () => {
+    // Static QR needs only name; dynamic needs name + UPI ID
     if (!newQrName || (!newUpiId && !isAddingStatic)) {
       alert("Name and UPI ID are required.");
+      return;
+    }
+
+    // ── FIX: For new QRs (not editing), we need a card_id to satisfy RLS.
+    // We use the first accessible card as the "owning" card for the QR.
+    // If no card is available at all, we can't save (RLS would block anyway).
+    const cardIdForQr = accessibleCards[0]?.id;
+    if (!editingQr && !cardIdForQr) {
+      alert("No accessible card found. Please add a card first before saving a QR.");
       return;
     }
 
@@ -253,21 +263,36 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
         publicUrl = data.publicUrl;
       }
 
-      const payload = {
+      // ── FIX: Static QR upi_id — use gen_random_uuid pattern to avoid UNIQUE conflict.
+      // For static, we don't need a real UPI ID, but the column is UNIQUE so we generate a truly unique value.
+      const staticUpiId = isAddingStatic
+        ? `static_${newQrName.replace(/\s+/g, '_').toLowerCase()}_${Date.now()}`
+        : newUpiId;
+
+      const payload: Record<string, unknown> = {
         merchant_name: newQrName,
-        upi_id: isAddingStatic ? `static_${Date.now()}` : newUpiId,
+        upi_id: isAddingStatic ? staticUpiId : newUpiId,
         platform: isAddingStatic ? "Static" : newPlatform,
         settlement_time: isAddingStatic ? "N/A" : newSettlementTime,
         qr_image_url: publicUrl,
         base_payment_link: newBaseLink || null, 
-        status: isAddingStatic ? 'static' : (editingQr ? editingQr.status : 'active')
+        status: isAddingStatic ? 'static' : (editingQr ? editingQr.status : 'active'),
       };
 
-      if (editingQr) {
-        await supabase.from('qrs').update(payload).eq('id', editingQr.id);
-      } else {
-        await supabase.from('qrs').insert(payload);
+      // ── FIX: Include card_id on insert so RLS policy passes.
+      // On edit, card_id is already set in DB — don't overwrite it.
+      if (!editingQr) {
+        payload.card_id = cardIdForQr;
       }
+
+      if (editingQr) {
+        const { error } = await supabase.from('qrs').update(payload).eq('id', editingQr.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from('qrs').insert(payload);
+        if (error) throw error;
+      }
+
       setIsQrModalOpen(false);
       fetchQRs();
     } catch (error: any) {
@@ -295,13 +320,14 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
     }
   };
 
-  const getPaymentLink = (qr: QR | null, amt: number) => {
+  // ── FIX: Pay button always uses the stored base_payment_link (or raw upi_id link).
+  // Amount is shown for reference only — user enters it manually in their payment app.
+  const getPaymentLink = (qr: QR | null) => {
      if (!qr) return "#";
-     if (qr.base_payment_link) {
-         const separator = qr.base_payment_link.includes('?') ? '&' : '?';
-         return `${qr.base_payment_link}${separator}am=${amt}`;
-     }
-     return `upi://pay?pa=${qr.upi_id || ''}&pn=${encodeURIComponent(qr.merchant_name || '')}&am=${amt}&cu=INR`;
+     // Prefer the stored base link exactly as saved in DB
+     if (qr.base_payment_link) return qr.base_payment_link;
+     // Fallback: construct a basic UPI intent without amount
+     return `upi://pay?pa=${qr.upi_id || ''}&pn=${encodeURIComponent(qr.merchant_name || '')}&cu=INR`;
   };
 
   const markQrAsUsedToday = async () => {
@@ -696,22 +722,45 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
                 )}
 
                 <Button onClick={generatePaymentAmounts} className="w-full h-10 rounded-xl bg-[#0ea5e9]/10 text-[#0ea5e9] border border-[#0ea5e9]/30 hover:bg-[#0ea5e9] hover:text-black transition-all font-black text-xs mt-1">
-                  <Sparkles className="w-3.5 h-3.5 mr-1.5" /> Generate Links
+                  <Sparkles className="w-3.5 h-3.5 mr-1.5" /> Generate Amount
                 </Button>
 
+                {/* ── Generated amounts: shown as highlighted display + single pay button ── */}
                 {generatedAmounts.length > 0 && (
-                  <div className="pt-3 space-y-2 border-t border-white/10">
-                    {generatedAmounts.map((amt, i) => (
-                      <motion.a 
-                        initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.1 }}
-                        key={i} 
-                        href={getPaymentLink(selectedQr, amt)} 
-                        className="flex items-center justify-between w-full p-3 bg-gradient-to-r from-[#10b981]/15 to-transparent border border-[#10b981]/30 rounded-xl hover:border-[#10b981]/60 transition-all group"
-                      >
-                        <span className="text-xs font-black text-emerald-400 group-hover:text-emerald-300">Pay ₹{amt}</span>
-                        <ArrowRight className="w-4 h-4 text-emerald-500/50 group-hover:text-emerald-400 group-hover:translate-x-1 transition-all" />
-                      </motion.a>
-                    ))}
+                  <div className="pt-3 space-y-3 border-t border-white/10">
+                    {/* Amount display — bold & highlighted, for reference only */}
+                    <div className="space-y-2">
+                      {generatedAmounts.map((amt, i) => (
+                        <motion.div
+                          key={i}
+                          initial={{ opacity: 0, x: -10 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{ delay: i * 0.08 }}
+                          className="flex items-center justify-between w-full p-3 bg-gradient-to-r from-[#0ea5e9]/10 to-transparent border border-[#0ea5e9]/20 rounded-xl"
+                        >
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                            {generatedAmounts.length > 1 ? `Swipe ${i + 1}` : "Amount"}
+                          </span>
+                          <span className="text-lg font-black text-white tracking-tight">
+                            ₹{amt.toLocaleString('en-IN')}
+                          </span>
+                        </motion.div>
+                      ))}
+                    </div>
+
+                    {/* Single Pay button — uses stored QR link, user enters amount manually */}
+                    <motion.a
+                      initial={{ opacity: 0, y: 6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      href={getPaymentLink(selectedQr)}
+                      className="flex items-center justify-center gap-2 w-full p-3.5 bg-gradient-to-r from-[#10b981] to-[#0ea5e9] rounded-xl shadow-[0_0_20px_rgba(16,185,129,0.3)] hover:opacity-90 transition-opacity"
+                    >
+                      <span className="text-sm font-black text-white">Pay Now</span>
+                      <ArrowRight className="w-4 h-4 text-white" />
+                    </motion.a>
+                    <p className="text-center text-[9px] text-slate-500 font-medium">
+                      Enter the amount manually in your payment app
+                    </p>
                   </div>
                 )}
               </div>
