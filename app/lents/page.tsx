@@ -24,6 +24,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Button } from "@/components/ui/button";
 import { BottomNav } from "@/components/BottomNav";
 import { supabase } from "@/lib/supabase";
+import { sendWhatsAppAlert } from "@/lib/whatsapp";
 import Link from "next/link";
 
 // --- Interfaces ---
@@ -56,6 +57,7 @@ interface Profile {
   id: string;
   name: string;
   avatar_url?: string;
+  phone?: string;
 }
 
 interface CardData {
@@ -180,7 +182,7 @@ export default function LentsPage() {
     setIsLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
 
-    const { data: profData } = await supabase.from('profiles').select('id, name, avatar_url');
+    const { data: profData } = await supabase.from('profiles').select('id, name, avatar_url, phone');
     const { data: cData } = await supabase.from('cards').select('*');
     const { data: aData } = await supabase.from('card_access').select('*');
 
@@ -388,6 +390,33 @@ export default function LentsPage() {
 
       setIsModalOpen(false);
       fetchLentsData(allCards);
+
+      if (currentUser.phone) {
+        const nowTime = new Date();
+        const timeStr = nowTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }).toLowerCase();
+        const sourceName = fundSource === 'credit_card'
+          ? (allCards.find(c => c.id === selectedCardId)?.card_name || "Card")
+          : "Cash on Hand";
+        const remainingBalance = fundSource === 'credit_card'
+          ? (activeLimit - amtNum)
+          : (actorCashForCard - amtNum);
+        const prevActiveLents = lents.filter(l => l.status !== "paid");
+        const prevTotalReceivable = prevActiveLents.reduce((acc, curr) => {
+          const paid = (curr.payment_history || []).reduce((s, p) => s + p.amount, 0);
+          return acc + (curr.amount - paid);
+        }, 0);
+        const totalDue = prevTotalReceivable + amtNum;
+        await sendWhatsAppAlert(currentUser.phone, "lent_issue_alert", [
+          currentUser.name,
+          currentUser.name,
+          timeStr,
+          borrowerName,
+          amtNum.toString(),
+          sourceName,
+          remainingBalance.toString(),
+          totalDue.toString()
+        ]);
+      }
     } catch (error: any) {
       alert("Error: " + error.message);
     } finally {
@@ -502,6 +531,34 @@ export default function LentsPage() {
 
         setIsCollectModalOpen(false);
         fetchLentsData(allCards);
+
+        if (currentUser.phone) {
+          const nowTime = new Date();
+          const timeStr = nowTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }).toLowerCase();
+          const fullOrPartial = collectType === 'full' ? "সম্পূর্ণ" : "আংশিক";
+          const fullAmmount = collectType === 'partial'
+            ? `, মোট ₹${collectingLent.amount} এর মধ্যে থেকে`
+            : "";
+          const receivedOn = receiveMethod === 'card'
+            ? (accessibleCards.find(c => c.id === receiveCardId)?.card_name || "Card")
+            : "Cash on hand";
+          const currentBal = receiveMethod === 'card'
+            ? ((cardAvailableMap[receiveCardId] || 0) + amtNum)
+            : (getUserCashForCard(currentUser.id, receiveCashCardId) + amtNum);
+          const remainingDue = collectingLent.amount - totalPaidBefore - amtNum;
+          await sendWhatsAppAlert(currentUser.phone, "lent_recovery_alert", [
+            currentUser.name,
+            currentUser.name,
+            timeStr,
+            collectingLent.borrower_name,
+            fullOrPartial,
+            amtNum.toString(),
+            fullAmmount,
+            receivedOn,
+            currentBal.toString(),
+            remainingDue.toString()
+          ]);
+        }
      } catch (err: any) {
         alert("Error during collection: " + err.message);
      } finally {
