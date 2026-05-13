@@ -18,7 +18,7 @@ export const sendWhatsAppAlert = async (
       })
     });
 
-    const result = await res.json();
+    const result = await res.json() as { success: boolean; error?: string };
     if (!result.success) {
       console.error("WhatsApp Alert Failed:", result.error);
       return false;
