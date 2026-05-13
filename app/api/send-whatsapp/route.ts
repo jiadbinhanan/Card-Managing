@@ -8,10 +8,12 @@ export async function POST(req: Request) {
     const META_TOKEN = process.env.META_WA_TOKEN;
     const PHONE_ID = process.env.META_WA_PHONE_ID;
 
-    // Meta-র রিকোয়ারমেন্ট অনুযায়ী ভেরিয়েবলগুলোকে অবজেক্ট অ্যারেতে কনভার্ট করা
-    const parameters = variables.map((val: string) => ({
+    // Object থেকে Meta-র রিকোয়ারমেন্ট অনুযায়ী parameter_name যুক্ত করা
+    const parameters = Object.entries(variables).map(([key, value]) => ({
       type: "text",
-      text: val.toString()
+      parameter_name: key,
+      // invisible spaces এবং newlines রিমুভ করে সেফটি দেওয়া হলো
+      text: String(value).replace(/[\u202F\u00A0]/g, ' ').replace(/[\r\n\t]+/g, ' ').trim() || "-"
     }));
 
     const payload = {
@@ -21,7 +23,7 @@ export async function POST(req: Request) {
       template: {
         name: templateName,
         language: {
-          code: "bn" // যেহেতু টেমপ্লেটগুলো বাংলায়
+          code: "bn"
         },
         components: [
           {

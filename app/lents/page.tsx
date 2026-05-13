@@ -407,16 +407,17 @@ export default function LentsPage() {
       const totalDue = prevTotalReceivable + amtNum;
       allProfiles.forEach(async (profile) => {
         if (profile.phone) {
-          await sendWhatsAppAlert(profile.phone, "lent_issue_alert", [
-            profile.name,
-            currentUser.name,
-            timeStr,
-            borrowerName,
-            amtNum.toString(),
-            sourceName,
-            remainingBalance.toString(),
-            totalDue.toString()
-          ]);
+          const alertVars = {
+            greeting_user: profile.name,
+            entry_user: currentUser.name,
+            time: timeStr,
+            borrower_name: borrowerName,
+            amount: String(amtNum),
+            source_name: sourceName,
+            remaining_balance: String(remainingBalance),
+            total_due_lent: String(totalDue)
+          };
+          await sendWhatsAppAlert(profile.phone, "lent_issue_alert", alertVars);
         }
       });
     } catch (error: any) {
@@ -549,18 +550,19 @@ export default function LentsPage() {
         const remainingDue = collectingLent.amount - totalPaidBefore - amtNum;
         allProfiles.forEach(async (profile) => {
           if (profile.phone) {
-            await sendWhatsAppAlert(profile.phone, "lent_recovery_alert", [
-              profile.name,
-              currentUser.name,
-              timeStr,
-              collectingLent.borrower_name,
-              fullOrPartial,
-              amtNum.toString(),
-              fullAmmount,
-              receivedOn,
-              currentBal.toString(),
-              remainingDue.toString()
-            ]);
+            const alertVars = {
+              greeting_user: profile.name,
+              entry_user: currentUser.name,
+              time: timeStr,
+              borrower_name: collectingLent.borrower_name,
+              full_or_partial: fullOrPartial,
+              amount: String(amtNum),
+              full_ammount: fullAmmount,
+              received_on: receivedOn,
+              current_bal: String(currentBal),
+              remaining_due: String(remainingDue)
+            };
+            await sendWhatsAppAlert(profile.phone, "lent_recovery_alert", alertVars);
           }
         });
      } catch (err: any) {
