@@ -392,7 +392,6 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
         // 2. SCHEDULE COOLING PERIOD ALERT (24h 5m later) via QStash
         const coolingEndTime = new Date(Date.now() + (24 * 60 * 60 * 1000) + (5 * 60 * 1000));
         const coolingTimeStr = coolingEndTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }).replace(/[\u202F\u00A0]/g, ' ').toLowerCase();
-        const paymentCard = accessibleCards.find(c => c.id === selectedPaymentCardId);
         const qstashToken = process.env.NEXT_PUBLIC_QSTASH_TOKEN;
 
         for (const profile of allProfiles) {
