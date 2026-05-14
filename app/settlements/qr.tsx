@@ -21,6 +21,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase";
+import { sendWhatsAppAlert } from "@/lib/whatsapp";
 
 interface QR {
   id: string;
@@ -43,6 +44,7 @@ interface CardData {
 interface Profile {
   id: string;
   name: string;
+  phone?: string;
 }
 
 interface ActiveCooldown {
@@ -58,6 +60,8 @@ interface QRTabProps {
   currentUser: Profile | null;
   firstName: string;
   isActive: boolean;
+  allProfiles: Profile[];
+  cardAvailableMap: Record<string, number>;
 }
 
 // Stagger & Card Animations
@@ -71,7 +75,7 @@ const itemVars: Variants = {
   visible: { opacity: 1, y: 0, scale: 1, filter: "blur(0px)", transition: { type: "spring", stiffness: 300, damping: 24 } }
 };
 
-export default function QRTab({ accessibleCards, globalSelectedCardId, currentUser, firstName, isActive }: QRTabProps) {
+export default function QRTab({ accessibleCards, globalSelectedCardId, currentUser, firstName, isActive, allProfiles, cardAvailableMap }: QRTabProps) {
   const [qrs, setQrs] = useState<QR[]>([]);
   const [recommendedQrs, setRecommendedQrs] = useState<QR[]>([]);
   const [dynamicQrs, setDynamicQrs] = useState<QR[]>([]);
@@ -112,6 +116,11 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
     const interval = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(interval);
   }, []);
+
+  const sanitizeText = (str: any) => {
+    if (!str) return "-";
+    return String(str).replace(/[\u202F\u00A0]/g, ' ').replace(/[\r\n\t]+/g, ' ').trim() || "-";
+  };
 
   const fetchQRs = async () => {
     if (!currentUser) return;
@@ -356,9 +365,33 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
         const { error: qrUpdateError } = await supabase.from('qrs').update({ last_used_date: nowISO }).eq('id', selectedQr.id);
         if (qrUpdateError) throw qrUpdateError;
 
+        const nowTime = new Date();
+        const timeStr = nowTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }).replace(/[\u202F\u00A0]/g, ' ').toLowerCase();
+        const paymentCard = accessibleCards.find(c => c.id === selectedPaymentCardId);
+        const currentBal = (cardAvailableMap[selectedPaymentCardId] || 0) - totalAmt;
+        for (const profile of allProfiles) {
+          const cleanPhone = (profile.phone || "").replace(/[^0-9]/g, '');
+          if (cleanPhone.length >= 10) {
+            const rawVars = {
+              greeting_user: profile.name,
+              entry_user: currentUser.name,
+              time: timeStr,
+              mode: "QR",
+              provider: selectedQr.merchant_name,
+              amount: String(totalAmt),
+              card_name: paymentCard?.card_name || 'Card',
+              last_4: paymentCard?.last_4_digits || '0000',
+              current_balance: String(currentBal)
+            };
+            const safeVars: Record<string, string> = {};
+            for (const [k, v] of Object.entries(rawVars)) { safeVars[k] = sanitizeText(v); }
+            await sendWhatsAppAlert(cleanPhone, "rotation_withdraw_alert", safeVars);
+          }
+        }
+
         setIsViewModalOpen(false);
-        fetchQRs();
         window.dispatchEvent(new CustomEvent('switch-tab-to-pending'));
+        fetchQRs();
     } catch (error: any) {
         alert("Failed to record transaction: " + error.message);
     }

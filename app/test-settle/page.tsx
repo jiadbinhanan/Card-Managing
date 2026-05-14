@@ -11,14 +11,15 @@ import {
   ShieldCheck,
   User,
   CreditCard,
-  Plus
+  Plus,
+  ShieldAlert
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { BottomNav } from "@/components/BottomNav";
 import { supabase } from "@/lib/supabase";
-import Link from "next/link";
 import { sendWhatsAppAlert } from "@/lib/whatsapp";
+import Link from "next/link";
 import QRTab from "./qr";
 
 interface Transaction {
@@ -43,7 +44,7 @@ interface Profile {
   id: string;
   name: string;
   avatar_url?: string;
-  phone?: string;
+  phone?: string; // Added phone
 }
 
 interface CardData {
@@ -60,7 +61,6 @@ interface QRData {
   merchant_name: string;
 }
 
-// Stagger Animation Variants (Shared for tabs)
 const listContainerVars: Variants = {
   hidden: { opacity: 0, display: "none", transition: { duration: 0 } },
   visible: { opacity: 1, display: "block", transition: { staggerChildren: 0.08 } }
@@ -71,7 +71,7 @@ const listItemVars: Variants = {
   visible: { opacity: 1, y: 0, scale: 1, filter: "blur(0px)", transition: { type: "spring", stiffness: 300, damping: 24 } }
 };
 
-export default function SettlementsPage() {
+export default function TestSettlementsPage() {
   const [activeTab, setActiveTab] = useState<"vault" | "pending" | "history">("vault");
 
   const [pendingTxs, setPendingTxs] = useState<Transaction[]>([]);
@@ -106,16 +106,10 @@ export default function SettlementsPage() {
 
   useEffect(() => {
     fetchInitialData();
-    const handleSwitchTab = () => { setActiveTab("pending"); fetchLedgerData(accessibleCards); };
+    const handleSwitchTab = () => setActiveTab("pending");
     window.addEventListener('switch-tab-to-pending', handleSwitchTab);
 
-    const channel = supabase.channel('settlements_ledger')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'card_transactions' }, () => fetchLedgerData(accessibleCards))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'cash_on_hand' }, () => fetchLedgerData(accessibleCards))
-      .subscribe();
-
     return () => { 
-        supabase.removeChannel(channel); 
         window.removeEventListener('switch-tab-to-pending', handleSwitchTab);
     };
   }, [globalSelectedCardId, firstName]);
@@ -127,13 +121,17 @@ export default function SettlementsPage() {
 
   const sanitizeText = (str: any) => {
     if (!str) return "-";
-    return String(str).replace(/[\u202F\u00A0]/g, ' ').replace(/[\r\n\t]+/g, ' ').trim() || "-";
+    return String(str)
+      .replace(/[\u202F\u00A0]/g, ' ') 
+      .replace(/[\r\n\t]+/g, ' ')      
+      .trim() || "-";                  
   };
 
   const fetchInitialData = async () => {
     setIsLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
 
+    // Fetched phone for alerts
     const { data: profData } = await supabase.from('profiles').select('id, name, avatar_url, phone');
     const { data: cData } = await supabase.from('cards').select('*');
     const { data: aData } = await supabase.from('card_access').select('*');
@@ -197,7 +195,6 @@ export default function SettlementsPage() {
     coh?.forEach(c => { cashMap[c.user_id] = (cashMap[c.user_id] || 0) + Number(c.current_balance); });
     setUserCashMap(cashMap);
 
-    // Card Available Limits — using dashboard/page.tsx logic
     const { data: allTxs } = await supabase.from('card_transactions')
       .select('amount, type, payment_method, card_id, status, qr_id, settled_to_user, remarks');
     const { data: allSpends } = await supabase.from('spends').select('amount, payment_method, user_id, card_id');
@@ -230,91 +227,41 @@ export default function SettlementsPage() {
   const openSettleModal = (tx: Transaction) => {
      setSettleTx(tx);
      setCashReceiverId(currentUser?.id || "");
-
      const defaultCard = globalSelectedCardId !== 'all' ? globalSelectedCardId : (tx.card_id || accessibleCards[0]?.id || "");
      setSettleTargetCardId(defaultCard);
-
      setSettlementType("full");
      setPartialAmount("");
      setIsSettleModalOpen(true);
   };
 
+  // ==========================================
+  // 1. TEST MODE: CONFIRM SETTLEMENT ALERT
+  // ==========================================
   const handleConfirmSettlement = async () => {
-     if (!settleTx || !cashReceiverId || !settleTargetCardId) return;
-
+     if (!settleTx || !cashReceiverId || !settleTargetCardId || !currentUser) return;
      setIsSettling(true);
-     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-     const isPartial = settlementType === "partial" && Number(partialAmount) > 0 && Number(partialAmount) < settleTx.amount;
-     const amtToSettle = isPartial ? Number(partialAmount) : settleTx.amount;
 
      try {
-        if (isPartial) {
-            const newPendingBalance = settleTx.amount - amtToSettle;
-            await supabase.from('card_transactions').update({ amount: newPendingBalance }).eq('id', settleTx.id);
+        const isPartial = settlementType === "partial" && Number(partialAmount) > 0 && Number(partialAmount) < settleTx.amount;
+        const amtToSettle = isPartial ? Number(partialAmount) : settleTx.amount;
 
-            await supabase.from('card_transactions').insert({
-                card_id: settleTargetCardId, 
-                qr_id: settleTx.qr_id, 
-                amount: amtToSettle,
-                transaction_date: settleTx.transaction_date, 
-                type: 'withdrawal',
-                status: 'settled',
-                settled_date: today,
-                settled_to_user: cashReceiverId,
-                recorded_by: currentUser?.id,
-                remarks: `Partial Settlement (Total was ₹${settleTx.amount})`
-            });
-        } else {
-            await supabase.from('card_transactions').update({
-                card_id: settleTargetCardId, 
-                status: 'settled',
-                settled_date: today,
-                settled_to_user: cashReceiverId
-            }).eq('id', settleTx.id);
-        }
+        const targetCard = accessibleCards.find(c => c.id === settleTargetCardId);
+        const receiverProfile = profiles.find(p => p.id === cashReceiverId);
 
-        const { data: existingCashRow } = await supabase
-           .from('cash_on_hand')
-           .select('current_balance')
-           .eq('user_id', cashReceiverId)
-           .eq('card_id', settleTargetCardId)
-           .maybeSingle();
-
+        // Mock current cash balance calculation
+        const { data: existingCashRow } = await supabase.from('cash_on_hand').select('current_balance').eq('user_id', cashReceiverId).eq('card_id', settleTargetCardId).maybeSingle();
         const newBalance = Number(existingCashRow?.current_balance || 0) + amtToSettle;
-        const { data: updatedRows } = await supabase
-           .from('cash_on_hand')
-           .update({ current_balance: newBalance })
-           .eq('user_id', cashReceiverId)
-           .eq('card_id', settleTargetCardId)
-           .select('user_id');
-
-        if (!updatedRows || updatedRows.length === 0) {
-           await supabase.from('cash_on_hand').insert({
-              user_id: cashReceiverId,
-              card_id: settleTargetCardId,
-              current_balance: newBalance
-           });
-        }
-
-        await supabase.from('cash_on_hand_ledger').insert({
-           user_id: cashReceiverId,
-           card_id: settleTargetCardId,
-           amount: amtToSettle,
-           transaction_type: 'credit',
-           remarks: `Settlement received from ${settleTx.qrs?.merchant_name || 'Manual Rotation Entry'}`,
-           transaction_date: new Date().toISOString()
-        });
 
         const nowTime = new Date();
         const timeStr = nowTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }).replace(/[\u202F\u00A0]/g, ' ').toLowerCase();
-        const targetCard = accessibleCards.find(c => c.id === settleTargetCardId);
-        const receiverProfile = profiles.find(p => p.id === cashReceiverId);
+
+        // Broadcast alert
         for (const profile of profiles) {
            const cleanPhone = (profile.phone || "").replace(/[^0-9]/g, '');
            if (cleanPhone.length >= 10) {
               const rawVars = {
                 greeting_user: profile.name,
-                entry_user: currentUser?.name || '-',
+                entry_user: currentUser.name,
                 time: timeStr,
                 card_name: targetCard?.card_name || 'Card',
                 last_4: targetCard?.last_4_digits || '0000',
@@ -323,58 +270,50 @@ export default function SettlementsPage() {
                 receiver_name: receiverProfile?.name || 'User',
                 total_cash: String(newBalance)
               };
+
               const safeVars: Record<string, string> = {};
               for (const [k, v] of Object.entries(rawVars)) { safeVars[k] = sanitizeText(v); }
+
+              console.log(`Sending rotation_settlement_alert to ${profile.name}`, safeVars);
               await sendWhatsAppAlert(cleanPhone, "rotation_settlement_alert", safeVars);
            }
         }
+
+        alert("✅ [TEST MODE] Settlement Alert Sent Successfully!\nNo data was saved to Database.");
         setIsSettleModalOpen(false);
-        fetchLedgerData(accessibleCards);
      } catch (error: any) {
-        alert("Error during settlement: " + error.message);
+        alert("Test Error: " + error.message);
      } finally {
         setIsSettling(false);
      }
   };
 
+  // ==========================================
+  // 2. TEST MODE: MANUAL ENTRY ALERT
+  // ==========================================
   const handleManualEntry = async () => {
-     if (!manualAmount || !manualCardId) {
+     if (!manualAmount || !manualCardId || !currentUser) {
          alert("Amount and Card are required!");
          return;
      }
 
      setIsSettling(true);
-     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-
      try {
-         await supabase.from('card_transactions').insert({
-            card_id: manualCardId,
-            qr_id: manualQrId || null, 
-            amount: Number(manualAmount),
-            transaction_date: today,
-            type: 'withdrawal',
-            status: 'pending_settlement',
-            recorded_by: currentUser?.id,
-            remarks: manualRemarks || "Manual Rotation Entry"
-         });
-
-         if (manualQrId) {
-             await supabase.from('qrs').update({
-                 last_used_date: new Date().toISOString()
-             }).eq('id', manualQrId);
-         }
-
          const nowTime = new Date();
          const timeStr = nowTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }).replace(/[\u202F\u00A0]/g, ' ').toLowerCase();
+
          const manualCard = accessibleCards.find(c => c.id === manualCardId);
          const qrInfo = manualQrId ? activeQrs.find(q => q.id === manualQrId) : null;
+
          const currentBal = (cardAvailableMap[manualCardId] || 0) - Number(manualAmount);
+
+         // Broadcast alert
          for (const profile of profiles) {
            const cleanPhone = (profile.phone || "").replace(/[^0-9]/g, '');
            if (cleanPhone.length >= 10) {
               const rawVars = {
                 greeting_user: profile.name,
-                entry_user: currentUser?.name || '-',
+                entry_user: currentUser.name,
                 time: timeStr,
                 mode: qrInfo ? "QR" : "Manual",
                 provider: qrInfo ? qrInfo.merchant_name : "Entry",
@@ -383,18 +322,20 @@ export default function SettlementsPage() {
                 last_4: manualCard?.last_4_digits || '0000',
                 current_balance: String(currentBal)
               };
+
               const safeVars: Record<string, string> = {};
               for (const [k, v] of Object.entries(rawVars)) { safeVars[k] = sanitizeText(v); }
+
+              console.log(`Sending rotation_withdraw_alert to ${profile.name}`, safeVars);
               await sendWhatsAppAlert(cleanPhone, "rotation_withdraw_alert", safeVars);
            }
          }
+
+         alert("✅ [TEST MODE] Manual Rotation Alert Sent Successfully!\nNo data was saved to Database.");
          setIsManualEntryOpen(false);
-         setManualAmount("");
-         setManualRemarks("");
-         setManualQrId(""); 
-         fetchLedgerData(accessibleCards);
+         setManualAmount(""); setManualRemarks(""); setManualQrId(""); 
      } catch(e: any) {
-         alert("Failed to add entry: " + e.message);
+         alert("Test Error: " + e.message);
      } finally {
          setIsSettling(false);
      }
@@ -433,14 +374,20 @@ export default function SettlementsPage() {
              </div>
            </Link>
            <div>
-             {/* Smoke Reveal Animation */}
+             <div className="overflow-hidden">
+               <motion.div animate={{ backgroundPosition: ['0% 50%', '100% 50%', '0% 50%'] }} transition={{ duration: 5, ease: "linear", repeat: Infinity }}>
+                 <p className="text-[10px] font-black text-[#10b981] uppercase tracking-widest leading-none mb-0.5 flex items-center gap-1">
+                   <ShieldAlert className="w-3 h-3" /> SIMULATION MODE
+                 </p>
+               </motion.div>
+             </div>
              <motion.h1 
                initial={{ filter: "blur(10px)", opacity: 0, y: -5 }} 
                animate={{ filter: "blur(0px)", opacity: 1, y: 0 }} 
                transition={{ duration: 0.8, ease: "easeOut" }}
                className="text-xl font-black tracking-tight bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent leading-none"
              >
-               QR & Settlements
+               Test QR & Settle
              </motion.h1>
            </div>
         </div>
@@ -461,6 +408,19 @@ export default function SettlementsPage() {
       </header>
 
       <main className="relative z-10 px-4 pt-5 max-w-md mx-auto space-y-5">
+        <motion.div 
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-emerald-500/10 border border-emerald-500/50 rounded-2xl p-4 flex items-start gap-3 shadow-[0_0_20px_rgba(16,185,129,0.15)]"
+        >
+          <ShieldAlert className="text-emerald-400 w-6 h-6 flex-shrink-0 mt-0.5" />
+          <div>
+            <h2 className="text-emerald-400 font-black text-sm uppercase tracking-widest mb-1">TEST ENVIRONMENT</h2>
+            <p className="text-emerald-100/70 text-[11px] leading-relaxed font-medium">
+              No transactions will be saved to the database. This page is only for testing WhatsApp Alerts.
+            </p>
+          </div>
+        </motion.div>
 
         <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-white/[0.03] p-1.5 rounded-2xl border border-white/10 flex items-center justify-between backdrop-blur-xl shadow-inner">
            {[
@@ -493,7 +453,6 @@ export default function SettlementsPage() {
           </div>
         ) : (
            <>
-              {/* Vault Tab Container controlled internally in QRTab via isActive prop */}
               <QRTab 
                   accessibleCards={accessibleCards}
                   globalSelectedCardId={globalSelectedCardId}
@@ -504,7 +463,6 @@ export default function SettlementsPage() {
                   cardAvailableMap={cardAvailableMap}
               />
 
-              {/* Pending Tab Container with Staggered Animation */}
               <motion.div 
                  variants={listContainerVars}
                  initial="hidden"
@@ -526,7 +484,7 @@ export default function SettlementsPage() {
                              <Plus className="w-4 h-4 text-white" />
                           </div>
                         </div>
-                        <span className="text-[10px] font-bold text-slate-300 group-hover:text-white relative z-10">New Entry</span>
+                        <span className="text-[10px] font-bold text-slate-300 group-hover:text-white relative z-10">Test Entry</span>
                      </button>
                  </motion.div>
 
@@ -564,87 +522,30 @@ export default function SettlementsPage() {
                                    {tx.cards ? `${tx.cards.card_name} (**${tx.cards.last_4_digits})` : 'Card not linked'}
                                 </div>
                                 <Button size="sm" className="h-7 px-2.5 text-[10px] bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-lg">
-                                   <CheckCircle2 className="w-3 h-3 mr-1" /> Settle
+                                   <CheckCircle2 className="w-3 h-3 mr-1" /> Test Settle
                                 </Button>
                              </div>
                           </motion.div>
                        ))}
                     </AnimatePresence>
-                    {pendingTxs.length === 0 && (
-                       <motion.div variants={listItemVars} className="text-center py-10 bg-white/[0.02] rounded-[24px] border border-white/5 border-dashed">
-                          <ShieldCheck className="w-10 h-10 text-emerald-500/40 mx-auto mb-2" />
-                          <p className="text-xs font-bold text-slate-400">All funds have been successfully settled.</p>
-                       </motion.div>
-                    )}
                  </div>
               </motion.div>
 
-              {/* History Tab Container with Staggered Animation */}
-              <motion.div 
-                 variants={listContainerVars}
-                 initial="hidden"
-                 animate={activeTab === "history" ? "visible" : "hidden"}
-                 className="space-y-6 pb-6"
-              >
-                 {Object.keys(groupedHistory).length === 0 ? (
-                    <motion.div variants={listItemVars} className="text-center py-12 bg-white/[0.02] rounded-[24px] border border-white/5 border-dashed shadow-inner">
-                       <ShieldCheck className="w-12 h-12 text-slate-600 mx-auto mb-3" />
-                       <p className="text-xs font-bold text-slate-400">No settled history found.</p>
-                    </motion.div>
-                 ) : (
-                   <AnimatePresence mode="popLayout">
-                     {Object.entries(groupedHistory).map(([date, items]) => (
-                        <div key={date} className="space-y-3">
-                           <motion.div variants={listItemVars} className="sticky top-20 z-20 flex items-center gap-3">
-                              <span className="px-3 py-1 bg-black/80 backdrop-blur-md border border-white/10 rounded-full text-[10px] font-black uppercase tracking-widest text-[#10b981] shadow-[0_0_10px_rgba(16,185,129,0.2)]">
-                                 {date}
-                              </span>
-                              <div className="flex-1 h-px bg-gradient-to-r from-white/10 to-transparent" />
-                           </motion.div>
-
-                           {items.map((item) => (
-                             <motion.div
-                               key={item.id}
-                               layout
-                               variants={listItemVars}
-                               className="group p-4 bg-white/[0.02] border border-white/5 rounded-[24px] backdrop-blur-xl flex flex-col shadow-inner ml-2 border-l-2 border-l-[#10b981]/50 hover:bg-white/[0.04] transition-all"
-                             >
-                               <div className="flex items-center justify-between mb-2">
-                                  <div className="flex items-center gap-3 w-[70%]">
-                                    <div className="w-9 h-9 shrink-0 rounded-[10px] flex items-center justify-center border border-emerald-500/20 bg-emerald-500/10">
-                                      <ArrowDownLeft className="w-4 h-4 text-emerald-400" />
-                                    </div>
-                                    <div className="truncate">
-                                      <h3 className="text-sm font-bold text-slate-100 truncate">{item.qrs?.merchant_name || item.remarks || 'Manual Entry'}</h3>
-                                      <p className="text-[10px] font-medium text-slate-400 flex items-center gap-1">
-                                         Rotated: {new Date(item.transaction_date).toLocaleDateString('en-GB', {day: '2-digit', month: 'short'})}
-                                      </p>
-                                    </div>
-                                  </div>
-                                  <div className="text-right shrink-0">
-                                    <span className="text-sm font-black text-emerald-400">+₹{item.amount.toLocaleString()}</span>
-                                  </div>
-                               </div>
-                               <div className="pt-2 border-t border-white/5 flex items-center justify-between text-[9px] font-bold text-slate-500 uppercase tracking-wider">
-                                  <div className="flex items-center gap-1"><CreditCard className="w-3 h-3"/> {item.cards?.card_name || 'Card'}</div>
-                                  <div className="flex items-center gap-1 text-[#0ea5e9]"><User className="w-3 h-3"/> By: {item.settled_to_profile?.name.split(' ')[0] || 'Unknown'}</div>
-                               </div>
-                             </motion.div>
-                           ))}
-                        </div>
-                     ))}
-                   </AnimatePresence>
-                 )}
+              <motion.div variants={listContainerVars} initial="hidden" animate={activeTab === "history" ? "visible" : "hidden"} className="space-y-6 pb-6">
+                 {/* Only for UI consistency, removed loops to keep code short since history has no alerts */}
+                  <motion.div variants={listItemVars} className="text-center py-12 bg-white/[0.02] rounded-[24px] border border-white/5 border-dashed shadow-inner">
+                     <ShieldCheck className="w-12 h-12 text-slate-600 mx-auto mb-3" />
+                     <p className="text-xs font-bold text-slate-400">History Tab logic is active but simplified for testing.</p>
+                  </motion.div>
               </motion.div>
            </>
         )}
       </main>
 
-      {/* Manual Entry Dialog */}
       <Dialog open={isManualEntryOpen} onOpenChange={setIsManualEntryOpen}>
         <DialogContent className="bg-[#050505]/95 backdrop-blur-3xl border border-white/10 text-slate-50 rounded-[40px] w-[95vw] max-w-md p-6 shadow-[0_0_80px_rgba(0,0,0,0.9)] overflow-hidden">
           <DialogHeader className="mb-4">
-            <DialogTitle className="text-xl font-black text-white">New Manual Entry</DialogTitle>
+            <DialogTitle className="text-xl font-black text-white">Test Manual Entry</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
              <div className="space-y-1.5 relative">
@@ -661,11 +562,7 @@ export default function SettlementsPage() {
                 <select value={manualCardId} onChange={(e) => setManualCardId(e.target.value)} className="w-full h-12 bg-white/[0.05] border border-white/10 rounded-xl px-4 text-xs font-bold text-white outline-none appearance-none focus:border-[#10b981]">
                    {accessibleCards.map(c => {
                       const avail = cardAvailableMap[c.id] || 0;
-                      return (
-                         <option key={c.id} value={c.id} className="bg-[#050505]">
-                            {c.card_name} (**{c.last_4_digits}) - Avail: ₹{avail.toLocaleString()}
-                         </option>
-                      );
+                      return <option key={c.id} value={c.id} className="bg-[#050505]">{c.card_name} (**{c.last_4_digits}) - Avail: ₹{avail.toLocaleString()}</option>
                    })}
                 </select>
                 <ChevronDown className="absolute right-3 top-[38px] w-4 h-4 text-slate-500 pointer-events-none" />
@@ -676,24 +573,19 @@ export default function SettlementsPage() {
                 <input type="number" value={manualAmount} onChange={(e) => setManualAmount(e.target.value)} placeholder="0.00" className="w-full h-12 bg-white/[0.05] border border-white/10 rounded-xl px-4 text-sm font-bold text-white outline-none focus:border-[#10b981]" />
              </div>
 
-             <div className="space-y-1.5">
-                <label className="text-[11px] font-bold text-slate-400 uppercase ml-1">Remarks {manualQrId && "(Optional)"}</label>
-                <input type="text" value={manualRemarks} onChange={(e) => setManualRemarks(e.target.value)} placeholder="e.g. Petrol Pump / Friend" className="w-full h-12 bg-white/[0.05] border border-white/10 rounded-xl px-4 text-sm font-bold text-white outline-none focus:border-[#10b981]" />
-             </div>
              <Button onClick={handleManualEntry} disabled={isSettling} className="w-full h-14 rounded-2xl bg-[#10b981] hover:bg-[#10b981]/90 text-black font-black text-lg border-0 mt-4 shadow-[0_0_20px_rgba(16,185,129,0.3)]">
-               {isSettling ? "Saving..." : "Add Entry"}
+               {isSettling ? "Simulating..." : "Simulate Alert (No Save)"}
              </Button>
           </div>
         </DialogContent>
       </Dialog>
 
-      {/* Settle Dialog */}
       <Dialog open={isSettleModalOpen} onOpenChange={setIsSettleModalOpen}>
         <DialogContent className="bg-[#050505]/95 backdrop-blur-3xl border border-white/10 text-slate-50 rounded-[40px] w-[95vw] max-w-md p-6 shadow-[0_0_80px_rgba(0,0,0,0.9)] overflow-hidden">
           <div className="absolute top-0 right-0 w-40 h-40 bg-[#10b981]/20 rounded-full blur-[50px] pointer-events-none" />
           <DialogHeader className="mb-4 relative z-10">
             <DialogTitle className="text-2xl font-space font-black bg-gradient-to-r from-[#10b981] to-[#34d399] bg-clip-text text-transparent">
-              Settlement Process
+              Test Settlement
             </DialogTitle>
             <DialogDescription className="text-xs text-slate-400">Total Due: ₹{settleTx?.amount.toLocaleString()}</DialogDescription>
           </DialogHeader>
@@ -722,9 +614,6 @@ export default function SettlementsPage() {
                           className="w-full h-14 bg-white/[0.03] border border-emerald-500/30 rounded-2xl pl-8 pr-4 text-xl font-bold text-white outline-none focus:border-emerald-500" 
                        />
                     </div>
-                    {Number(partialAmount) > 0 && Number(partialAmount) < (settleTx?.amount || 0) && (
-                       <p className="text-[10px] text-slate-400 font-medium text-right mt-1">Remaining balance will be: ₹{(settleTx!.amount - Number(partialAmount)).toLocaleString()}</p>
-                    )}
                  </div>
              )}
 
@@ -757,7 +646,7 @@ export default function SettlementsPage() {
                 disabled={isSettling || (settlementType === 'partial' && (!partialAmount || Number(partialAmount) >= (settleTx?.amount || 0)))} 
                 className="w-full h-14 rounded-2xl bg-gradient-to-r from-[#10b981] to-[#34d399] hover:opacity-90 text-black font-black text-lg border-0 mt-4 disabled:opacity-50"
              >
-               {isSettling ? "Processing..." : "Confirm"}
+               {isSettling ? "Processing..." : "Simulate Alert (No Save)"}
              </Button>
           </div>
         </DialogContent>
