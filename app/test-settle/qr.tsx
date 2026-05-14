@@ -8,11 +8,9 @@ import {
   CheckCircle2,
   ChevronDown,
   Sparkles,
-  ArrowRight,
   CreditCard,
-  Link as LinkIcon
 } from "lucide-react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase";
 import { sendWhatsAppAlert } from "@/lib/whatsapp";
@@ -110,7 +108,7 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
   };
 
   // ==========================================
-  // TEST MODE: MARK USED & ALERT
+  // TEST MODE: MARK USED & SCHEDULE ALERT
   // ==========================================
   const markQrAsUsedToday = async () => {
     if (!selectedQr || !selectedPaymentCardId || !currentUser) {
@@ -127,7 +125,7 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
 
         const currentBal = (cardAvailableMap[selectedPaymentCardId] || 0) - totalAmt;
 
-        // Broadcast alert
+        // 1. BROADCAST INSTANT ALERT (Withdrawal Alert)
         for (const profile of allProfiles) {
            const cleanPhone = (profile.phone || "").replace(/[^0-9]/g, '');
            if (cleanPhone.length >= 10) {
@@ -146,14 +144,56 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
               const safeVars: Record<string, string> = {};
               for (const [k, v] of Object.entries(rawVars)) { safeVars[k] = sanitizeText(v); }
 
-              console.log(`Sending rotation_withdraw_alert to ${profile.name}`, safeVars);
+              console.log(`Sending INSTANT rotation_withdraw_alert to ${profile.name}`);
               await sendWhatsAppAlert(cleanPhone, "rotation_withdraw_alert", safeVars);
            }
         }
 
-        alert("✅ [TEST MODE] QR Rotation Alert Sent!\nRedirecting to Transit Tab...");
+        // 2. SCHEDULE COOLING PERIOD ALERT (24h 5m Later) - FOR ALL QRs
+        // Calculate time 24h 5m from now for the message text
+        const coolingEndTime = new Date(Date.now() + (24 * 60 * 60 * 1000) + (5 * 60 * 1000));
+        const coolingTimeStr = coolingEndTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }).replace(/[\u202F\u00A0]/g, ' ').toLowerCase();
 
-        // This instantly triggers the switch to pending tab in parent
+        for (const profile of allProfiles) {
+           const cleanPhone = (profile.phone || "").replace(/[^0-9]/g, '');
+           if (cleanPhone.length >= 10) {
+              const coolingVars = {
+                greeting_user: sanitizeText(profile.name),
+                qr_name: sanitizeText(selectedQr.merchant_name),
+                time: coolingTimeStr,
+                card_name_with_last4: sanitizeText(`${paymentCard?.card_name} ${paymentCard?.last_4_digits}`)
+              };
+
+              console.log(`Scheduling COOLING ALERT for ${profile.name} via QStash`);
+
+              // QStash API Call directly from Frontend
+              const qstashToken = process.env.NEXT_PUBLIC_QSTASH_TOKEN;
+
+              if (qstashToken) {
+                 const payload = {
+                    phone: cleanPhone,
+                    templateName: "qr_cooling_period_alert",
+                    variables: coolingVars
+                 };
+
+                 // To test immediately, you can change "24h5m" to "1m" (1 minute) during testing
+                 await fetch(`https://qstash-us-east-1.upstash.io/v2/publish/https://b55a7bc9-9bd9-4a2d-a2a8-8b5748e5145d-00-14f7jw2krp3d.riker.replit.dev/api/send-whatsapp`, {
+                     method: 'POST',
+                     headers: {
+                         'Authorization': `Bearer ${qstashToken}`,
+                         'Content-Type': 'application/json',
+                         'Upstash-Delay': '1m' // The Magic Scheduling Header
+                     },
+                     body: JSON.stringify(payload)
+                 });
+              } else {
+                 console.warn("NEXT_PUBLIC_QSTASH_TOKEN is missing in environment variables! Cooling alert was not scheduled.");
+              }
+           }
+        }
+
+        alert("✅ [TEST MODE] QR Alert Sent & Cooling Alert Scheduled!\nRedirecting to Transit Tab...");
+
         setIsViewModalOpen(false);
         window.dispatchEvent(new CustomEvent('switch-tab-to-pending'));
 

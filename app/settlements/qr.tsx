@@ -389,6 +389,43 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
           }
         }
 
+        // 2. SCHEDULE COOLING PERIOD ALERT (24h 5m later) via QStash
+        const coolingEndTime = new Date(Date.now() + (24 * 60 * 60 * 1000) + (5 * 60 * 1000));
+        const coolingTimeStr = coolingEndTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }).replace(/[\u202F\u00A0]/g, ' ').toLowerCase();
+        const paymentCard = accessibleCards.find(c => c.id === selectedPaymentCardId);
+        const qstashToken = process.env.NEXT_PUBLIC_QSTASH_TOKEN;
+
+        for (const profile of allProfiles) {
+          const cleanPhone = (profile.phone || "").replace(/[^0-9]/g, '');
+          if (cleanPhone.length >= 10) {
+            const coolingVars = {
+              greeting_user: sanitizeText(profile.name),
+              qr_name: sanitizeText(selectedQr.merchant_name),
+              time: coolingTimeStr,
+              card_name_with_last4: sanitizeText(`${paymentCard?.card_name} ${paymentCard?.last_4_digits}`)
+            };
+
+            if (qstashToken) {
+              const payload = {
+                phone: cleanPhone,
+                templateName: "qr_cooling_period_alert",
+                variables: coolingVars
+              };
+              await fetch(`https://qstash-us-east-1.upstash.io/v2/publish/https://credics.vercel.app/api/send-whatsapp`, {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${qstashToken}`,
+                  'Content-Type': 'application/json',
+                  'Upstash-Delay': '24h5m'
+                },
+                body: JSON.stringify(payload)
+              });
+            } else {
+              console.warn("NEXT_PUBLIC_QSTASH_TOKEN missing — cooling alert not scheduled.");
+            }
+          }
+        }
+
         setIsViewModalOpen(false);
         window.dispatchEvent(new CustomEvent('switch-tab-to-pending'));
         fetchQRs();
