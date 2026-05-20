@@ -157,11 +157,18 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
         for (const profile of allProfiles) {
            const cleanPhone = (profile.phone || "").replace(/[^0-9]/g, '');
            if (cleanPhone.length >= 10) {
+              const coolingUserName = sanitizeText(currentUser.name);
               const coolingVars = {
-                greeting_user: sanitizeText(profile.name),
-                qr_name: sanitizeText(selectedQr.merchant_name),
-                time: coolingTimeStr,
-                card_name_with_last4: sanitizeText(`${paymentCard?.card_name} ${paymentCard?.last_4_digits}`)
+                header: {
+                  cooling_user: coolingUserName
+                },
+                body: {
+                  greeting_user: sanitizeText(profile.name),
+                  cooling_user: coolingUserName,
+                  qr_name: sanitizeText(selectedQr.merchant_name),
+                  time: coolingTimeStr,
+                  card_name_with_last4: sanitizeText(`${paymentCard?.card_name} ${paymentCard?.last_4_digits}`)
+                }
               };
 
               console.log(`Scheduling COOLING ALERT for ${profile.name} via QStash`);

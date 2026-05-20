@@ -102,6 +102,7 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
   const [splitCount, setSplitCount] = useState<number>(2);
   const [generatedAmounts, setGeneratedAmounts] = useState<number[]>([]);
   const [selectedPaymentCardId, setSelectedPaymentCardId] = useState<string>("");
+  const [isMarking, setIsMarking] = useState(false);
 
   useEffect(() => {
     fetchQRs();
@@ -344,6 +345,8 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
         alert("Please select a card for the payment first!");
         return;
     }
+    if (isMarking) return;
+    setIsMarking(true);
 
     const nowISO = new Date().toISOString(); 
     const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
@@ -397,11 +400,18 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
         for (const profile of allProfiles) {
           const cleanPhone = (profile.phone || "").replace(/[^0-9]/g, '');
           if (cleanPhone.length >= 10) {
+            const coolingUserName = sanitizeText(currentUser.name);
             const coolingVars = {
-              greeting_user: sanitizeText(profile.name),
-              qr_name: sanitizeText(selectedQr.merchant_name),
-              time: coolingTimeStr,
-              card_name_with_last4: sanitizeText(`${paymentCard?.card_name} ${paymentCard?.last_4_digits}`)
+              header: {
+                cooling_user: coolingUserName
+              },
+              body: {
+                greeting_user: sanitizeText(profile.name),
+                cooling_user: coolingUserName,
+                qr_name: sanitizeText(selectedQr.merchant_name),
+                time: coolingTimeStr,
+                card_name_with_last4: sanitizeText(`${paymentCard?.card_name} ${paymentCard?.last_4_digits}`)
+              }
             };
 
             if (qstashToken) {
@@ -430,6 +440,8 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
         fetchQRs();
     } catch (error: any) {
         alert("Failed to record transaction: " + error.message);
+    } finally {
+        setIsMarking(false);
     }
   };
 
@@ -838,8 +850,8 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
 
           <div className="p-4 bg-black/60 border-t border-white/5 rounded-b-[40px] backdrop-blur-xl">
              {selectedQr?.status !== 'static' ? (
-                <Button onClick={markQrAsUsedToday} className="w-full h-12 rounded-2xl bg-[#10b981]/20 text-[#10b981] hover:bg-[#10b981] hover:text-black transition-all font-bold border border-[#10b981]/40 shadow-[0_0_15px_rgba(16,185,129,0.2)]">
-                  <CheckCircle2 className="w-4 h-4 mr-2" /> Mark Used & Save Transaction
+                <Button onClick={markQrAsUsedToday} disabled={isMarking} className="w-full h-12 rounded-2xl bg-[#10b981]/20 text-[#10b981] hover:bg-[#10b981] hover:text-black transition-all font-bold border border-[#10b981]/40 shadow-[0_0_15px_rgba(16,185,129,0.2)] disabled:opacity-50 disabled:cursor-not-allowed">
+                  <CheckCircle2 className="w-4 h-4 mr-2" /> {isMarking ? "Saving..." : "Mark Used & Save Transaction"}
                 </Button>
              ) : (
                 <Button onClick={() => setIsViewModalOpen(false)} className="w-full h-12 rounded-2xl bg-white/5 text-slate-300 hover:bg-white/10 transition-all font-bold border border-white/10">
