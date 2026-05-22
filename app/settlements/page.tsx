@@ -388,6 +388,51 @@ export default function SettlementsPage() {
               await sendWhatsAppAlert(cleanPhone, "rotation_withdraw_alert", safeVars);
            }
          }
+
+         // Scheduled cooling alert via QStash (24h 5m later)
+         const coolingEndTime = new Date(Date.now() + (24 * 60 * 60 * 1000) + (5 * 60 * 1000));
+         const coolingTimeStr = coolingEndTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }).replace(/[\u202F\u00A0]/g, ' ').toLowerCase();
+         const qstashToken = process.env.NEXT_PUBLIC_QSTASH_TOKEN;
+
+         for (const profile of profiles) {
+           const cleanPhone = (profile.phone || "").replace(/[^0-9]/g, '');
+           if (cleanPhone.length >= 10) {
+              const coolingUserName = sanitizeText(currentUser?.name || '-');
+              const coolingComponents = [
+                {
+                  type: "header",
+                  parameters: [
+                    { type: "text", parameter_name: "cooling_user", text: coolingUserName }
+                  ]
+                },
+                {
+                  type: "body",
+                  parameters: [
+                    { type: "text", parameter_name: "greeting_user", text: sanitizeText(profile.name) },
+                    { type: "text", parameter_name: "cooling_user", text: coolingUserName },
+                    { type: "text", parameter_name: "card_name_with_last4", text: sanitizeText(`${manualCard?.card_name} ${manualCard?.last_4_digits}`) },
+                    { type: "text", parameter_name: "qr_name", text: sanitizeText(qrInfo?.merchant_name || "Manual Entry") },
+                    { type: "text", parameter_name: "time", text: coolingTimeStr }
+                  ]
+                }
+              ];
+              if (qstashToken) {
+                const payload = { phone: cleanPhone, templateName: "qr_cooling_period_alert", components: coolingComponents };
+                await fetch(`https://qstash-us-east-1.upstash.io/v2/publish/https://credics.vercel.app/api/send-whatsapp`, {
+                  method: 'POST',
+                  headers: {
+                    'Authorization': `Bearer ${qstashToken}`,
+                    'Content-Type': 'application/json',
+                    'Upstash-Delay': '24h5m'
+                  },
+                  body: JSON.stringify(payload)
+                });
+              } else {
+                console.warn("NEXT_PUBLIC_QSTASH_TOKEN missing — cooling alert not scheduled.");
+              }
+           }
+         }
+
          setIsManualEntryOpen(false);
          setManualAmount("");
          setManualRemarks("");
