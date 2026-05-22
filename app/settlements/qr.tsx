@@ -401,24 +401,30 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
           const cleanPhone = (profile.phone || "").replace(/[^0-9]/g, '');
           if (cleanPhone.length >= 10) {
             const coolingUserName = sanitizeText(currentUser.name);
-            const coolingVars = {
-              header: {
-                cooling_user: coolingUserName
+            const coolingComponents = [
+              {
+                type: "header",
+                parameters: [
+                  { type: "text", text: coolingUserName }
+                ]
               },
-              body: {
-                greeting_user: sanitizeText(profile.name),
-                cooling_user: coolingUserName,
-                qr_name: sanitizeText(selectedQr.merchant_name),
-                time: coolingTimeStr,
-                card_name_with_last4: sanitizeText(`${paymentCard?.card_name} ${paymentCard?.last_4_digits}`)
+              {
+                type: "body",
+                parameters: [
+                  { type: "text", text: sanitizeText(profile.name) },
+                  { type: "text", text: coolingUserName },
+                  { type: "text", text: sanitizeText(`${paymentCard?.card_name} ${paymentCard?.last_4_digits}`) },
+                  { type: "text", text: sanitizeText(selectedQr.merchant_name) },
+                  { type: "text", text: coolingTimeStr }
+                ]
               }
-            };
+            ];
 
             if (qstashToken) {
               const payload = {
                 phone: cleanPhone,
                 templateName: "qr_cooling_period_alert",
-                variables: coolingVars
+                components: coolingComponents
               };
               await fetch(`https://qstash-us-east-1.upstash.io/v2/publish/https://credics.vercel.app/api/send-whatsapp`, {
                 method: 'POST',
