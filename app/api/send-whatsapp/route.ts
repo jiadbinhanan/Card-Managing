@@ -3,18 +3,37 @@ import { NextResponse } from 'next/server';
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { phone, templateName, variables } = body;
+    // রিকোয়েস্ট থেকে components এবং variables দুটোই এক্সট্র্যাক্ট করা হলো
+    const { phone, templateName, variables, components } = body;
 
     const META_TOKEN = process.env.META_WA_TOKEN;
     const PHONE_ID = process.env.META_WA_PHONE_ID;
 
-    // Object থেকে Meta-র রিকোয়ারমেন্ট অনুযায়ী parameter_name যুক্ত করা
-    const parameters = Object.entries(variables).map(([key, value]) => ({
-      type: "text",
-      parameter_name: key,
-      // invisible spaces এবং newlines রিমুভ করে সেফটি দেওয়া হলো
-      text: String(value).replace(/[\u202F\u00A0]/g, ' ').replace(/[\r\n\t]+/g, ' ').trim() || "-"
-    }));
+    let finalComponents: any[] = [];
+
+    // কন্ডিশন ১: যদি রিকোয়েস্টে সরাসরি components অ্যারে থাকে (যেমন: QStash থেকে আসা রিকোয়েস্ট)
+    if (components && Array.isArray(components)) {
+      finalComponents = components;
+    } 
+    // কন্ডিশন ২: যদি রিকোয়েস্টে variables অবজেক্ট থাকে (তোমার পুরনো sendWhatsAppAlert এর জন্য)
+    else if (variables && typeof variables === 'object') {
+      const parameters = Object.entries(variables).map(([key, value]) => ({
+        type: "text",
+        parameter_name: key,
+        // invisible spaces এবং newlines রিমুভ করে সেফটি দেওয়া হলো
+        text: String(value).replace(/[\u202F\u00A0]/g, ' ').replace(/[\r\n\t]+/g, ' ').trim() || "-"
+      }));
+
+      finalComponents = [
+        {
+          type: "body",
+          parameters: parameters
+        }
+      ];
+    } else {
+        // যদি কোনো ভ্যারিয়েবল বা কম্পোনেন্ট না থাকে তবে ফাঁকা অ্যারে যাবে (যেমন শুধু টেক্সট টেমপ্লেটের ক্ষেত্রে)
+        finalComponents = [];
+    }
 
     const payload = {
       messaging_product: "whatsapp",
@@ -25,12 +44,7 @@ export async function POST(req: Request) {
         language: {
           code: "bn"
         },
-        components: [
-          {
-            type: "body",
-            parameters: parameters
-          }
-        ]
+        components: finalComponents // ডায়নামিক কম্পোনেন্ট পাস করা হলো
       }
     };
 

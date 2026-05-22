@@ -405,17 +405,17 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
               {
                 type: "header",
                 parameters: [
-                  { type: "text", text: coolingUserName }
+                  { type: "text", parameter_name: "cooling_user", text: coolingUserName }
                 ]
               },
               {
                 type: "body",
                 parameters: [
-                  { type: "text", text: sanitizeText(profile.name) },
-                  { type: "text", text: coolingUserName },
-                  { type: "text", text: sanitizeText(`${paymentCard?.card_name} ${paymentCard?.last_4_digits}`) },
-                  { type: "text", text: sanitizeText(selectedQr.merchant_name) },
-                  { type: "text", text: coolingTimeStr }
+                  { type: "text", parameter_name: "greeting_user", text: sanitizeText(profile.name) },
+                  { type: "text", parameter_name: "cooling_user", text: coolingUserName },
+                  { type: "text", parameter_name: "card_name_with_last4", text: sanitizeText(`${paymentCard?.card_name} ${paymentCard?.last_4_digits}`) },
+                  { type: "text", parameter_name: "qr_name", text: sanitizeText(selectedQr.merchant_name) },
+                  { type: "text", parameter_name: "time", text: coolingTimeStr }
                 ]
               }
             ];
