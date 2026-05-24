@@ -88,7 +88,9 @@ export default function SettlementsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [imgError, setImgError] = useState(false);
 
-  const { globalSelectedCardId, setGlobalSelectedCardId } = useCardStore();
+  const { globalSelectedCardIds, setGlobalSelectedCardIds } = useCardStore();
+  const globalSelectedCardId = globalSelectedCardIds.includes('all') ? 'all' : (globalSelectedCardIds[0] || 'all');
+  const setGlobalSelectedCardId = (id: string) => setGlobalSelectedCardIds(id === 'all' ? ['all'] : [id]);
 
   const [isSettleModalOpen, setIsSettleModalOpen] = useState(false);
   const [settleTx, setSettleTx] = useState<Transaction | null>(null);

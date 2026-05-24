@@ -20,6 +20,7 @@ import {
   CalendarClock,
   ShieldCheck,
   CalendarDays,
+  Check,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -133,7 +134,7 @@ export default function TransactionsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [imgError, setImgError] = useState(false);
 
-  const { globalSelectedCardId, setGlobalSelectedCardId } = useCardStore();
+  const { globalSelectedCardIds, setGlobalSelectedCardIds } = useCardStore();
 
   // Balances
   const [familyLimitsMap, setFamilyLimitsMap] = useState<Record<string, number>>({});
@@ -161,7 +162,7 @@ export default function TransactionsPage() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'cash_on_hand' }, () => fetchLedgerData(allCards))
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [globalSelectedCardId]);
+  }, [JSON.stringify(globalSelectedCardIds)]);
 
   const cleanUrl = (url?: string | null) => {
     if (!url) return "";
@@ -207,12 +208,20 @@ export default function TransactionsPage() {
 
   async function fetchLedgerData(currentCards: CardData[]) {
     let targetCardIds: string[] = [];
-    if (globalSelectedCardId !== 'all') {
-      const selected = currentCards.find(c => c.id === globalSelectedCardId);
-      if (selected) {
-        const primaryId = selected.is_primary ? selected.id : selected.parent_card_id;
-        targetCardIds = currentCards.filter(c => c.id === primaryId || c.parent_card_id === primaryId).map(c => c.id);
-      }
+    if (!globalSelectedCardIds.includes('all')) {
+      const primaryIds = new Set<string>();
+      globalSelectedCardIds.forEach(id => {
+        const selected = currentCards.find(c => c.id === id);
+        if (selected) {
+          const primaryId = selected.is_primary ? selected.id : selected.parent_card_id;
+          if (primaryId) primaryIds.add(primaryId);
+        }
+      });
+      primaryIds.forEach(primaryId => {
+        currentCards
+          .filter(c => c.id === primaryId || c.parent_card_id === primaryId)
+          .forEach(c => targetCardIds.push(c.id));
+      });
     }
 
     let txQuery = supabase.from('card_transactions')
@@ -222,7 +231,7 @@ export default function TransactionsPage() {
       .select('*, profiles (name, avatar_url), cards(card_name, last_4_digits)')
       .order('spend_date', { ascending: false });
 
-    if (globalSelectedCardId !== 'all' && targetCardIds.length > 0) {
+    if (!globalSelectedCardIds.includes('all') && targetCardIds.length > 0) {
       txQuery = txQuery.in('card_id', targetCardIds);
       spendsQuery = spendsQuery.in('card_id', targetCardIds);
     }
@@ -285,13 +294,13 @@ export default function TransactionsPage() {
   const myAccessibleCardIds = allCardAccess.filter(a => a.user_id === (currentUser?.id || '')).map(a => a.card_id);
   const billPrimaryCards = allCards.filter(c => c.is_primary && myAccessibleCardIds.includes(c.id));
 
-  // When globalSelectedCardId changes or modal opens, set billCardId to the right primary
+  // When globalSelectedCardIds changes or modal opens, set billCardId to the right primary
   useEffect(() => {
     if (!isModalOpen) return;
     if (billPrimaryCards.length === 0) return;
 
-    if (globalSelectedCardId !== 'all') {
-      const sel = allCards.find(c => c.id === globalSelectedCardId);
+    if (!globalSelectedCardIds.includes('all') && globalSelectedCardIds.length === 1) {
+      const sel = allCards.find(c => c.id === globalSelectedCardIds[0]);
       if (sel) {
         const primaryId = sel.is_primary ? sel.id : sel.parent_card_id;
         const found = billPrimaryCards.find(c => c.id === primaryId);
@@ -302,7 +311,7 @@ export default function TransactionsPage() {
     if (!billCardId || !billPrimaryCards.find(c => c.id === billCardId)) {
       setBillCardId(billPrimaryCards[0].id);
     }
-  }, [isModalOpen, globalSelectedCardId, allCards, billPrimaryCards.length]);
+  }, [isModalOpen, JSON.stringify(globalSelectedCardIds), allCards, billPrimaryCards.length]);
 
   useEffect(() => {
     if (entryUserCards.length > 0 && !entryUserCards.find(c => c.id === entryCardId)) {
@@ -438,8 +447,20 @@ export default function TransactionsPage() {
   }
 
   // --- Helper: Process Bill Payment (Billing Cycles) ---
-  async function processBillPayment(cardId: string, amt: number, txDate: string) {
-    let activeCycleId = null;
+  const triggerAlert = (phone: string, template: string, vars: Record<string, string> | any[], isComponents = false) => {
+    if (!phone || phone.length < 10) return;
+    const payload: any = { phone, templateName: template };
+    if (isComponents) payload.components = vars;
+    else payload.variables = vars;
+    fetch('/api/send-whatsapp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    }).catch(err => console.error(`Failed to send ${template}:`, err));
+  };
+
+  async function processBillPayment(cardId: string, amt: number, txDate: string): Promise<{ cycleId: string | null; status: string | null; remainingDue: number }> {
+    const result: { cycleId: string | null; status: string | null; remainingDue: number } = { cycleId: null, status: null, remainingDue: 0 };
     const txDateObj = new Date(txDate);
     const startOfMonth = new Date(txDateObj.getFullYear(), txDateObj.getMonth(), 1)
       .toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
@@ -459,17 +480,18 @@ export default function TransactionsPage() {
       if (paidAmt < generatedAmt) {
         const newPaidAmt = paidAmt + amt;
         let cycleStatus = cycle.status;
-        if (newPaidAmt >= generatedAmt) cycleStatus = 'paid';
-        else if (newPaidAmt > 0) cycleStatus = 'partially_paid';
+        if (newPaidAmt >= generatedAmt) { cycleStatus = 'paid'; result.remainingDue = 0; }
+        else if (newPaidAmt > 0) { cycleStatus = 'partially_paid'; result.remainingDue = generatedAmt - newPaidAmt; }
 
         await supabase.from('billing_cycles').update({
           paid_amount: newPaidAmt, status: cycleStatus
         }).eq('id', cycle.id);
 
-        activeCycleId = cycle.id;
+        result.cycleId = cycle.id;
+        result.status = cycleStatus;
       }
     }
-    return activeCycleId;
+    return result;
   };
 
   const handleSave = async () => {
@@ -496,6 +518,8 @@ export default function TransactionsPage() {
     const cardDataPayload = activeCardObj
       ? { card_name: activeCardObj.card_name, last_4_digits: activeCardObj.last_4_digits }
       : undefined;
+
+    let billResult: { cycleId: string | null; status: string | null; remainingDue: number } = { cycleId: null, status: null, remainingDue: 0 };
 
     setIsModalOpen(false);
 
@@ -582,7 +606,8 @@ export default function TransactionsPage() {
         }
       }
       else if (txType === "bill") {
-        let activeCycleId = await processBillPayment(activeCardId, amtNum, finalDate);
+        billResult = await processBillPayment(activeCardId, amtNum, finalDate);
+        let activeCycleId = billResult.cycleId;
 
         if (isDebtRepayment) {
           await supabase.from('spends').insert({ user_id: finalActingUserId, amount: -amtNum, spend_type: 'repayment', payment_method: billMethod, remarks: "Debt Cleared" + (remarks ? `: ${remarks}` : ''), spend_date: finalDate, card_id: activeCardId });
@@ -608,6 +633,98 @@ export default function TransactionsPage() {
     } catch (error: any) {
       console.error("Save Error:", error);
     }
+
+    // WHATSAPP ALERTS — Fire & Forget (non-blocking)
+    const sendAlerts = () => {
+      const sanitize = (v: string) => (v || '').normalize('NFC').replace(/[^\x20-\x7E\u00A0-\uFFFF]/g, '').trim().substring(0, 60);
+      const targetPhone = (profiles.find(p => p.id === finalActingUserId)?.phone || "").replace(/[^0-9]/g, '');
+      if (!targetPhone || targetPhone.length < 10) return;
+
+      const nowTimeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }).replace(/[\u202F\u00A0]/g, ' ').toLowerCase();
+
+      if (txType === "bill" && billResult.status) {
+        if (billResult.status === 'partially_paid') {
+          triggerAlert(targetPhone, "partial_bill_pay_alert", {
+            greeting_user: sanitize(profileData.name),
+            card_name: sanitize(activeCardObj?.card_name || 'Card'),
+            last_4: sanitize(activeCardObj?.last_4_digits || '0000'),
+            entry_user: sanitize(currentUser?.name || '-'),
+            time: nowTimeStr,
+            paid_amount: String(amtNum),
+            due_date: "Updated Soon",
+            remaining_due: String(billResult.remainingDue)
+          });
+        } else if (billResult.status === 'paid') {
+          triggerAlert(targetPhone, "full_billpay_complete", {
+            greeting_user: sanitize(profileData.name),
+            card_name: sanitize(activeCardObj?.card_name || 'Card'),
+            last_4: sanitize(activeCardObj?.last_4_digits || '0000'),
+            entry_user: sanitize(currentUser?.name || '-'),
+            time: nowTimeStr,
+            available_limit: String((familyLimitsMap[activePrimaryId || ''] || 0) + amtNum)
+          });
+        }
+        triggerAlert(targetPhone, "credit_transaction_alert", {
+          greeting_user: sanitize(profileData.name),
+          card_name: sanitize(activeCardObj?.card_name || 'Card'),
+          last_4: sanitize(activeCardObj?.last_4_digits || '0000'),
+          entry_user: sanitize(currentUser?.name || '-'),
+          time: nowTimeStr,
+          amount: String(amtNum),
+          remarks: sanitize(remarks || "Bill Pay"),
+          current_balance: String((familyLimitsMap[activePrimaryId || ''] || 0) + amtNum)
+        });
+      } else if (txType === "rotate") {
+        const qrName = sanitize(qrs.find(q => q.id === selectedQrId)?.merchant_name || 'QR');
+        triggerAlert(targetPhone, "rotation_withdraw_alert", {
+          greeting_user: sanitize(profileData.name),
+          card_name: sanitize(activeCardObj?.card_name || 'Card'),
+          last_4: sanitize(activeCardObj?.last_4_digits || '0000'),
+          mode: "QR",
+          provider: qrName,
+          entry_user: sanitize(currentUser?.name || '-'),
+          time: nowTimeStr,
+          amount: String(amtNum),
+          current_balance: String((familyLimitsMap[activePrimaryId || ''] || 0) - amtNum)
+        });
+        if (process.env.NEXT_PUBLIC_QSTASH_TOKEN) {
+          const coolingEnd = new Date(Date.now() + (24 * 60 * 60 * 1000) + (5 * 60 * 1000));
+          const coolingTimeStr = coolingEnd.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }).toLowerCase();
+          const coolingComponents = [
+            { type: "header", parameters: [{ type: "text", parameter_name: "cooling_user", text: sanitize(currentUser?.name || '-') }] },
+            { type: "body", parameters: [
+              { type: "text", parameter_name: "greeting_user", text: sanitize(profileData.name) },
+              { type: "text", parameter_name: "cooling_user", text: sanitize(currentUser?.name || '-') },
+              { type: "text", parameter_name: "card_name_with_last4", text: sanitize(`${activeCardObj?.card_name} ${activeCardObj?.last_4_digits}`) },
+              { type: "text", parameter_name: "qr_name", text: qrName },
+              { type: "text", parameter_name: "time", text: coolingTimeStr }
+            ]}
+          ];
+          fetch('/api/send-whatsapp', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.NEXT_PUBLIC_QSTASH_TOKEN}`, 'Upstash-Delay': '24h5m' },
+            body: JSON.stringify({ phone: targetPhone, templateName: "qr_cooling_period_alert", components: coolingComponents })
+          }).catch(console.error);
+        }
+      } else if (txType === "spend") {
+        const sourceName = spendMethod === 'credit_card' ? sanitize(activeCardObj?.card_name || 'Card') : 'Cash on Hand';
+        const remainingBal = spendMethod === 'credit_card'
+          ? String((familyLimitsMap[activePrimaryId || ''] || 0) - amtNum)
+          : String((userCashMap[finalActingUserId] || 0) - amtNum);
+        triggerAlert(targetPhone, "personal_spend_alert", {
+          greeting_user: sanitize(profileData.name),
+          entry_user: sanitize(currentUser?.name || '-'),
+          time: nowTimeStr,
+          amount: String(amtNum),
+          source_name: sourceName,
+          remarks: sanitize(remarks || "N/A"),
+          remaining_balance: remainingBal,
+          entry_user_duplicate: sanitize(currentUser?.name || '-'),
+          total_spend: "Updated Soon"
+        });
+      }
+    };
+    sendAlerts();
   };
 
   const resetForm = () => {
@@ -769,19 +886,21 @@ export default function TransactionsPage() {
           </div>
         </div>
 
-        {/* Custom Header Dropdown */}
+        {/* Custom Header Dropdown — Multi-Select */}
         <div className="relative">
           <button
             onClick={() => setIsCardDropdownOpen(!isCardDropdownOpen)}
             className="flex items-center gap-2 bg-white/[0.03] border border-white/10 text-white text-[10px] font-bold py-2 pl-3 pr-3 rounded-xl outline-none focus:border-[#0ea5e9] shadow-[0_0_20px_rgba(14,165,233,0.15)] backdrop-blur-md"
           >
             <span className="truncate max-w-[120px]">
-              {globalSelectedCardId === 'all' 
-                ? 'All Vault Cards' 
-                : (() => {
-                    const card = allCards.find(c => c.id === globalSelectedCardId);
-                    return card ? `${card.card_name} (**${card.last_4_digits})` : 'Select Card';
-                  })()
+              {globalSelectedCardIds.includes('all')
+                ? 'All Vault Cards'
+                : globalSelectedCardIds.length === 1
+                  ? (() => {
+                      const card = allCards.find(c => c.id === globalSelectedCardIds[0]);
+                      return card ? `${card.card_name} (**${card.last_4_digits})` : 'Select Card';
+                    })()
+                  : `${globalSelectedCardIds.length} Cards`
               }
             </span>
             <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-300 ${isCardDropdownOpen ? 'rotate-180' : ''}`} />
@@ -790,35 +909,51 @@ export default function TransactionsPage() {
           <AnimatePresence>
             {isCardDropdownOpen && (
               <>
-                {/* Invisible backdrop for click-away */}
                 <div className="fixed inset-0 z-40" onClick={() => setIsCardDropdownOpen(false)} />
                 <motion.div
                   initial={{ opacity: 0, y: -10, scaleY: 0.95 }}
                   animate={{ opacity: 1, y: 0, scaleY: 1 }}
                   exit={{ opacity: 0, y: -10, scaleY: 0.95 }}
                   transition={{ duration: 0.15, ease: "easeOut" }}
-                  className="absolute right-0 top-[calc(100%+8px)] w-56 bg-[#050505]/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-[0_15px_40px_rgba(0,0,0,0.8)] overflow-hidden z-50 py-1"
+                  className="absolute right-0 top-[calc(100%+8px)] w-60 bg-[#050505]/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-[0_15px_40px_rgba(0,0,0,0.8)] overflow-hidden z-50 py-1"
                   style={{ transformOrigin: 'top right' }}
                 >
+                  {/* Select All row */}
                   <button
-                    onClick={() => { setGlobalSelectedCardId('all'); setIsCardDropdownOpen(false); }}
-                    className={`w-full text-left px-4 py-3 text-xs font-bold transition-colors border-b border-white/5 ${globalSelectedCardId === 'all' ? 'text-[#0ea5e9] bg-[#0ea5e9]/10' : 'text-slate-300 hover:bg-white/5'}`}
+                    onClick={() => setGlobalSelectedCardIds(['all'])}
+                    className={`w-full text-left px-4 py-3 text-xs font-bold transition-colors border-b border-white/5 flex items-center justify-between ${globalSelectedCardIds.includes('all') ? 'text-[#0ea5e9] bg-[#0ea5e9]/10' : 'text-slate-300 hover:bg-white/5'}`}
                   >
                     All Vault Cards
+                    <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${globalSelectedCardIds.includes('all') ? 'bg-[#0ea5e9] border-[#0ea5e9]' : 'border-white/20'}`}>
+                      {globalSelectedCardIds.includes('all') && <Check className="w-2.5 h-2.5 text-white" />}
+                    </div>
                   </button>
                   <div className="max-h-[50vh] overflow-y-auto custom-scrollbar">
                     {sortedVaultCards.map((c: any) => {
                       const isSub = c._isSub;
+                      const isSelected = !globalSelectedCardIds.includes('all') && globalSelectedCardIds.includes(c.id);
                       return (
                         <button
                           key={c.id}
-                          onClick={() => { setGlobalSelectedCardId(c.id); setIsCardDropdownOpen(false); }}
-                          className={`w-full text-left px-4 py-2.5 text-xs transition-colors flex items-center justify-between ${
-                            globalSelectedCardId === c.id ? 'text-[#0ea5e9] bg-[#0ea5e9]/5' : 'text-slate-300 hover:bg-white/5'
+                          onClick={() => {
+                            if (globalSelectedCardIds.includes('all')) {
+                              setGlobalSelectedCardIds([c.id]);
+                            } else {
+                              const next = isSelected
+                                ? globalSelectedCardIds.filter(id => id !== c.id)
+                                : [...globalSelectedCardIds, c.id];
+                              setGlobalSelectedCardIds(next.length === 0 ? ['all'] : next);
+                            }
+                          }}
+                          className={`w-full text-left px-4 py-2.5 text-xs transition-colors flex items-center gap-2 ${
+                            isSelected ? 'text-[#0ea5e9] bg-[#0ea5e9]/5' : 'text-slate-300 hover:bg-white/5'
                           } ${isSub ? 'pl-8 bg-white/[0.01]' : 'font-bold mt-1'}`}
                         >
-                          <span className="truncate">{c.card_name} <span className="opacity-60 text-[10px]">(**{c.last_4_digits})</span></span>
-                          {isSub && <span className="text-[8px] font-black uppercase text-slate-500 bg-white/5 px-1.5 py-0.5 rounded ml-2 shrink-0">(Sub)</span>}
+                          <span className="truncate flex-1">{c.card_name} <span className="opacity-60 text-[10px]">(**{c.last_4_digits})</span></span>
+                          {isSub && <span className="text-[8px] font-black uppercase text-slate-500 bg-white/5 px-1.5 py-0.5 rounded shrink-0">(Sub)</span>}
+                          <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${isSelected ? 'bg-[#0ea5e9] border-[#0ea5e9]' : 'border-white/20'}`}>
+                            {isSelected && <Check className="w-2.5 h-2.5 text-white" />}
+                          </div>
                         </button>
                       );
                     })}

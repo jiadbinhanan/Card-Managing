@@ -76,7 +76,9 @@ export default function Dashboard() {
   const [imgError, setImgError] = useState(false);
 
   const [accessibleCards, setAccessibleCards] = useState<CardData[]>([]);
-  const { globalSelectedCardId: selectedCardId, setGlobalSelectedCardId: setSelectedCardId } = useCardStore();
+  const { globalSelectedCardIds, setGlobalSelectedCardIds } = useCardStore();
+  const selectedCardId = globalSelectedCardIds.includes('all') ? 'all' : (globalSelectedCardIds[0] || 'all');
+  const setSelectedCardId = (id: string) => setGlobalSelectedCardIds(id === 'all' ? ['all'] : [id]);
 
   const [totalLimit, setTotalLimit] = useState(0);
   const [availableLimit, setAvailableLimit] = useState(0);
