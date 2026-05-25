@@ -1,10 +1,13 @@
 export const sendWhatsAppAlert = async (
-  phone: string, 
-  templateName: string, 
-  variables: Record<string, string> // Array-এর বদলে Object করা হলো
+  phone: string,
+  templateName: string,
+  variablesOrComponents: Record<string, string> | any[]
 ) => {
   try {
     const cleanPhone = phone.replace(/[^0-9]/g, '');
+
+    // Array হলে components, object হলে variables হিসেবে পাঠাও
+    const isComponents = Array.isArray(variablesOrComponents);
 
     const res = await fetch('/api/send-whatsapp', {
       method: 'POST',
@@ -12,7 +15,9 @@ export const sendWhatsAppAlert = async (
       body: JSON.stringify({
         phone: cleanPhone,
         templateName,
-        variables
+        ...(isComponents
+          ? { components: variablesOrComponents }
+          : { variables: variablesOrComponents })
       })
     });
 

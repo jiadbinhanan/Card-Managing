@@ -24,8 +24,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Button } from "@/components/ui/button";
 import { BottomNav } from "@/components/BottomNav";
 import { supabase } from "@/lib/supabase";
-import { sendWhatsAppAlert } from "@/lib/whatsapp";
 import Link from "next/link";
+// NEW: Imported separated WhatsApp alert logic
+import { sendLentIssueAlert, sendLentRecoveryAlert } from "./WaAlert";
 
 // --- Interfaces ---
 interface PaymentHistory {
@@ -129,8 +130,10 @@ export default function LentsPage() {
 
   const [isLoading, setIsLoading] = useState(true);
   const [imgError, setImgError] = useState(false);
+  const [cardDropdownOpen, setCardDropdownOpen] = useState(false);
+  const cardDropdownRef = useRef<HTMLDivElement>(null);
 
-  const { globalSelectedCardId, setGlobalSelectedCardId } = useCardStore();
+  const { globalSelectedCardIds, setGlobalSelectedCardIds } = useCardStore();
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   // --- LENDING ENTRY MODAL STATES ---
@@ -154,6 +157,17 @@ export default function LentsPage() {
   const [receiveCardId, setReceiveCardId] = useState<string>(""); // direct-to-card
   const [receiveCashCardId, setReceiveCashCardId] = useState<string>(""); // NEW: cash-to-card
 
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (cardDropdownRef.current && !cardDropdownRef.current.contains(e.target as Node)) {
+        setCardDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   useEffect(() => {
     fetchInitialData();
 
@@ -164,7 +178,7 @@ export default function LentsPage() {
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, [globalSelectedCardId]);
+  }, [globalSelectedCardIds]);
 
   const cleanUrl = (url?: string | null) => {
      if (!url) return "";
@@ -214,12 +228,16 @@ export default function LentsPage() {
 
   const fetchLentsData = async (currentCards: CardData[]) => {
     let targetCardIds: string[] = [];
-    if (globalSelectedCardId !== 'all') {
-      const selected = currentCards.find(c => c.id === globalSelectedCardId);
-      if (selected) {
-         const primaryId = selected.is_primary ? selected.id : selected.parent_card_id;
-         targetCardIds = currentCards.filter(c => c.id === primaryId || c.parent_card_id === primaryId).map(c => c.id);
-      }
+    const isAllSelected = globalSelectedCardIds.includes('all') || globalSelectedCardIds.length === 0;
+    if (!isAllSelected) {
+      globalSelectedCardIds.forEach(selId => {
+        const selected = currentCards.find(c => c.id === selId);
+        if (selected) {
+          const primaryId = selected.is_primary ? selected.id : selected.parent_card_id;
+          const familyIds = currentCards.filter(c => c.id === primaryId || c.parent_card_id === primaryId).map(c => c.id);
+          familyIds.forEach(id => { if (!targetCardIds.includes(id)) targetCardIds.push(id); });
+        }
+      });
     }
 
     // 1. Fetch Lents
@@ -227,7 +245,7 @@ export default function LentsPage() {
       .select('*, profiles:given_by(name, avatar_url), cards(card_name, last_4_digits)')
       .order('lent_date', { ascending: false });
 
-    if (globalSelectedCardId !== 'all' && targetCardIds.length > 0) {
+    if (!isAllSelected && targetCardIds.length > 0) {
        lentsQuery = lentsQuery.in('card_id', targetCardIds);
     }
 
@@ -389,37 +407,49 @@ export default function LentsPage() {
       if (lentError) throw lentError;
 
       setIsModalOpen(false);
-      fetchLentsData(allCards);
+      await fetchLentsData(allCards);
 
-      const nowTime = new Date();
-      const timeStr = nowTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }).toLowerCase();
       const sourceName = fundSource === 'credit_card'
         ? (allCards.find(c => c.id === selectedCardId)?.card_name || "Card")
         : "Cash on Hand";
-      const remainingBalance = fundSource === 'credit_card'
-        ? (activeLimit - amtNum)
-        : (actorCashForCard - amtNum);
-      const prevActiveLents = lents.filter(l => l.status !== "paid");
-      const prevTotalReceivable = prevActiveLents.reduce((acc, curr) => {
-        const paid = (curr.payment_history || []).reduce((s, p) => s + p.amount, 0);
-        return acc + (curr.amount - paid);
+
+      // FIX A: remaining_balance — DB থেকে fresh value fetch
+      let freshRemainingBalance = 0;
+      if (fundSource === 'cash_on_hand') {
+        const { data: freshCoh } = await supabase
+          .from('cash_on_hand')
+          .select('current_balance')
+          .eq('user_id', currentUser.id)
+          .eq('card_id', activeCashCardId)
+          .maybeSingle();
+        freshRemainingBalance = freshCoh ? Number(freshCoh.current_balance) : 0;
+      } else if (fundSource === 'credit_card') {
+        freshRemainingBalance = activeLimit - amtNum;
+      }
+
+      // FIX B: total_due_lent — DB থেকে fresh lents fetch করে calculate
+      const { data: freshLents } = await supabase
+        .from('short_term_lents')
+        .select('amount, status, payment_history')
+        .neq('status', 'paid');
+      const freshTotalDue = (freshLents || []).reduce((acc, l) => {
+        const paid = ((l.payment_history as any[]) || []).reduce((s: number, p: any) => s + Number(p.amount), 0);
+        return acc + (Number(l.amount) - paid);
       }, 0);
-      const totalDue = prevTotalReceivable + amtNum;
-      allProfiles.forEach(async (profile) => {
-        if (profile.phone) {
-          const alertVars = {
-            greeting_user: profile.name,
-            entry_user: currentUser.name,
-            time: timeStr,
-            borrower_name: borrowerName,
-            amount: String(amtNum),
-            source_name: sourceName,
-            remaining_balance: String(remainingBalance),
-            total_due_lent: String(totalDue)
-          };
-          await sendWhatsAppAlert(profile.phone, "lent_issue_alert", alertVars);
-        }
-      });
+
+      // Trigger separated WaAlert Logic
+      await sendLentIssueAlert(
+        allProfiles,
+        currentUser.name,
+        borrowerName,
+        amtNum,
+        sourceName,
+        freshRemainingBalance,
+        freshTotalDue,
+        dueDate,
+        remarks
+      );
+
     } catch (error: any) {
       alert("Error: " + error.message);
     } finally {
@@ -535,36 +565,64 @@ export default function LentsPage() {
         setIsCollectModalOpen(false);
         fetchLentsData(allCards);
 
-        const nowTime = new Date();
-        const timeStr = nowTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }).toLowerCase();
         const fullOrPartial = collectType === 'full' ? "সম্পূর্ণ" : "আংশিক";
-        const fullAmmount = collectType === 'partial'
-          ? `, মোট ₹${collectingLent.amount} এর মধ্যে থেকে`
-          : " ";
+        const fullAmmount = String(collectingLent.amount);
         const receivedOn = receiveMethod === 'card'
           ? (accessibleCards.find(c => c.id === receiveCardId)?.card_name || "Card")
           : "Cash on hand";
-        const currentBal = receiveMethod === 'card'
-          ? ((cardAvailableMap[receiveCardId] || 0) + amtNum)
-          : (getUserCashForCard(currentUser.id, receiveCashCardId) + amtNum);
-        const remainingDue = collectingLent.amount - totalPaidBefore - amtNum;
-        allProfiles.forEach(async (profile) => {
-          if (profile.phone) {
-            const alertVars = {
-              greeting_user: profile.name,
-              entry_user: currentUser.name,
-              time: timeStr,
-              borrower_name: collectingLent.borrower_name,
-              full_or_partial: fullOrPartial,
-              amount: String(amtNum),
-              full_ammount: fullAmmount,
-              received_on: receivedOn,
-              current_bal: String(currentBal),
-              remaining_due: String(remainingDue)
-            };
-            await sendWhatsAppAlert(profile.phone, "lent_recovery_alert", alertVars);
+        const remainingDueAfterCollection = collectingLent.amount - totalPaidBefore - amtNum;
+
+        // FIX D: current_bal — DB থেকে fresh balance fetch
+        let freshCurrentBal = 0;
+        if (receiveMethod === 'cash') {
+          const { data: freshCoh } = await supabase
+            .from('cash_on_hand')
+            .select('current_balance')
+            .eq('user_id', currentUser.id)
+            .eq('card_id', receiveCashCardId)
+            .maybeSingle();
+          freshCurrentBal = freshCoh ? Number(freshCoh.current_balance) : 0;
+        } else if (receiveMethod === 'card') {
+          // card available: fetch fresh transactions to compute
+          const { data: freshTxs } = await supabase
+            .from('card_transactions')
+            .select('amount, type, status, qr_id, settled_to_user, remarks, card_id')
+            .eq('card_id', receiveCardId);
+          const { data: freshSpends } = await supabase
+            .from('spends')
+            .select('amount, payment_method, card_id')
+            .eq('card_id', receiveCardId);
+          const { data: cardInfo } = await supabase
+            .from('cards')
+            .select('total_limit, is_primary, parent_card_id')
+            .eq('id', receiveCardId)
+            .maybeSingle();
+          if (cardInfo) {
+            const withdrawals = (freshTxs || []).filter(t => {
+              if (t.type !== 'withdrawal') return false;
+              const isRotation = t.qr_id || t.settled_to_user || (t.remarks || '').toLowerCase().includes('rotation');
+              return isRotation || t.status === 'pending_settlement';
+            }).reduce((s, t) => s + Number(t.amount), 0);
+            const billPay = (freshTxs || []).filter(t => t.type === 'bill_payment').reduce((s, t) => s + Number(t.amount), 0);
+            const ccSpends = (freshSpends || []).filter(s => s.payment_method === 'credit_card').reduce((s, sp) => s + Number(sp.amount), 0);
+            freshCurrentBal = Number(cardInfo.total_limit) - withdrawals - ccSpends + billPay;
           }
-        });
+        }
+
+        // Trigger separated WaAlert Logic
+        await sendLentRecoveryAlert(
+          allProfiles,
+          currentUser.name,
+          collectingLent.borrower_name,
+          fullOrPartial,
+          amtNum,
+          fullAmmount,
+          receivedOn,
+          freshCurrentBal,
+          remainingDueAfterCollection,
+          collectingLent.remarks // Correctly passing the remarks value now
+        );
+
      } catch (err: any) {
         alert("Error during collection: " + err.message);
      } finally {
@@ -581,17 +639,16 @@ export default function LentsPage() {
     setDueDate(getDefaultDueDate());
 
     // Credit card source default
-    if (globalSelectedCardId !== 'all') {
-       setSelectedCardId(globalSelectedCardId);
+    const firstSelected = (!globalSelectedCardIds.includes('all') && globalSelectedCardIds.length > 0) ? globalSelectedCardIds[0] : null;
+    if (firstSelected) {
+       setSelectedCardId(firstSelected);
     } else if (accessibleCards.length > 0) {
        setSelectedCardId(accessibleCards[0].id);
     }
 
     // FIXED: Cash source card default
-    // vault-এ specific card → সেটাই default
-    // vault-এ "All" → first accessible card
-    if (globalSelectedCardId !== 'all') {
-       setCashSourceCardId(globalSelectedCardId);
+    if (firstSelected) {
+       setCashSourceCardId(firstSelected);
     } else if (accessibleCards.length > 0) {
        setCashSourceCardId(accessibleCards[0].id);
     }
@@ -606,17 +663,17 @@ export default function LentsPage() {
      setReceiveMethod("cash");
 
      // Card receive default
-     if (globalSelectedCardId !== 'all') {
-        setReceiveCardId(globalSelectedCardId);
+     const firstSel = (!globalSelectedCardIds.includes('all') && globalSelectedCardIds.length > 0) ? globalSelectedCardIds[0] : null;
+     if (firstSel) {
+        setReceiveCardId(firstSel);
      } else if (accessibleCards.length > 0) {
         setReceiveCardId(accessibleCards[0].id);
      }
 
      // FIXED: Cash receive card default
-     // Priority: vault specific card → lent-এর original card → first accessible
      const defaultCashCard =
-       globalSelectedCardId !== 'all'
-         ? globalSelectedCardId
+       firstSel
+         ? firstSel
          : loan.card_id || accessibleCards[0]?.id || "";
      setReceiveCashCardId(defaultCashCard);
 
@@ -715,19 +772,83 @@ export default function LentsPage() {
            </div>
         </div>
 
-        {/* Global Card Selector */}
-        <div className="relative">
-          <select 
-             value={globalSelectedCardId}
-             onChange={(e) => setGlobalSelectedCardId(e.target.value)}
-             className="appearance-none bg-white/[0.03] border border-white/10 text-white text-[10px] font-bold py-2 pl-3 pr-7 rounded-xl outline-none focus:border-[#f59e0b] shadow-[0_0_20px_rgba(245,158,11,0.15)] backdrop-blur-md"
+        {/* Global Card Multi-Selector */}
+        <div className="relative" ref={cardDropdownRef}>
+          <button
+            onClick={() => setCardDropdownOpen(prev => !prev)}
+            className="flex items-center gap-1.5 bg-white/[0.03] border border-white/10 text-white text-[10px] font-bold py-2 pl-3 pr-2.5 rounded-xl outline-none focus:border-[#f59e0b] shadow-[0_0_20px_rgba(245,158,11,0.15)] backdrop-blur-md min-w-[110px] max-w-[140px]"
           >
-             <option value="all" className="bg-[#050505]">All Vault Cards</option>
-             {accessibleCards.map(c => (
-                <option key={c.id} value={c.id} className="bg-[#050505]">{c.card_name} (**{c.last_4_digits})</option>
-             ))}
-          </select>
-          <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
+            <span className="truncate flex-1 text-left">
+              {globalSelectedCardIds.includes('all') || globalSelectedCardIds.length === 0
+                ? 'All Vault Cards'
+                : globalSelectedCardIds.length === 1
+                  ? (accessibleCards.find(c => c.id === globalSelectedCardIds[0])?.card_name || 'Selected')
+                  : `${globalSelectedCardIds.length} Cards`}
+            </span>
+            <ChevronDown className={`w-3.5 h-3.5 text-slate-400 shrink-0 transition-transform duration-200 ${cardDropdownOpen ? 'rotate-180' : ''}`} />
+          </button>
+
+          <AnimatePresence>
+            {cardDropdownOpen && (
+              <motion.div
+                initial={{ opacity: 0, y: -6, scale: 0.97 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -6, scale: 0.97 }}
+                transition={{ duration: 0.18 }}
+                className="absolute right-0 top-full mt-1.5 z-50 bg-[#0d0d0d]/95 backdrop-blur-xl border border-white/10 rounded-2xl shadow-[0_20px_60px_rgba(0,0,0,0.8)] overflow-hidden min-w-[160px]"
+              >
+                {/* All option */}
+                <button
+                  onClick={() => {
+                    setGlobalSelectedCardIds(['all']);
+                    setCardDropdownOpen(false);
+                  }}
+                  className={`w-full flex items-center gap-2 px-3 py-2.5 text-[11px] font-bold transition-colors ${
+                    globalSelectedCardIds.includes('all')
+                      ? 'bg-[#f59e0b]/15 text-[#f59e0b]'
+                      : 'text-slate-300 hover:bg-white/[0.05]'
+                  }`}
+                >
+                  <div className={`w-3.5 h-3.5 rounded-[4px] border flex items-center justify-center shrink-0 ${globalSelectedCardIds.includes('all') ? 'bg-[#f59e0b] border-[#f59e0b]' : 'border-white/20'}`}>
+                    {globalSelectedCardIds.includes('all') && <CheckCircle2 className="w-2.5 h-2.5 text-black" />}
+                  </div>
+                  All Vault Cards
+                </button>
+                <div className="h-px bg-white/5 mx-2" />
+                {/* Individual cards */}
+                {accessibleCards.map(c => {
+                  const isChecked = globalSelectedCardIds.includes(c.id);
+                  return (
+                    <button
+                      key={c.id}
+                      onClick={() => {
+                        let newIds: string[];
+                        if (globalSelectedCardIds.includes('all')) {
+                          newIds = [c.id];
+                        } else if (isChecked) {
+                          newIds = globalSelectedCardIds.filter(id => id !== c.id);
+                          if (newIds.length === 0) newIds = ['all'];
+                        } else {
+                          newIds = [...globalSelectedCardIds, c.id];
+                        }
+                        setGlobalSelectedCardIds(newIds);
+                      }}
+                      className={`w-full flex items-center gap-2 px-3 py-2.5 text-[11px] font-bold transition-colors ${
+                        isChecked && !globalSelectedCardIds.includes('all')
+                          ? 'bg-[#f59e0b]/10 text-[#fbbf24]'
+                          : 'text-slate-300 hover:bg-white/[0.05]'
+                      }`}
+                    >
+                      <div className={`w-3.5 h-3.5 rounded-[4px] border flex items-center justify-center shrink-0 ${isChecked && !globalSelectedCardIds.includes('all') ? 'bg-[#f59e0b] border-[#f59e0b]' : 'border-white/20'}`}>
+                        {isChecked && !globalSelectedCardIds.includes('all') && <CheckCircle2 className="w-2.5 h-2.5 text-black" />}
+                      </div>
+                      <span className="truncate">{c.card_name} (**{c.last_4_digits})</span>
+                    </button>
+                  );
+                })}
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       </header>
 

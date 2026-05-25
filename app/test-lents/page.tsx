@@ -13,19 +13,18 @@ import {
   IndianRupee,
   CreditCard,
   Banknote,
-  Edit3,
   ChevronDown,
   CalendarDays,
   HandCoins,
-  History,
   ShieldAlert
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { BottomNav } from "@/components/BottomNav";
 import { supabase } from "@/lib/supabase";
-import { sendWhatsAppAlert } from "@/lib/whatsapp";
 import Link from "next/link";
+// NEW: Imported separated WhatsApp alert logic from lents folder
+import { sendLentIssueAlert, sendLentRecoveryAlert } from "@/app/lents/WaAlert";
 
 // --- Interfaces ---
 interface PaymentHistory { id: string; date: string; amount: number; method: 'cash' | 'card'; card_name?: string; }
@@ -190,15 +189,6 @@ export default function TestLentsPage() {
     setCardAvailableMap(availableMap);
   };
 
-  // 🔴 SUPER SANITIZER: Removes all invisible unicode characters & newlines 🔴
-  const sanitizeText = (str: any) => {
-    if (!str) return "-";
-    return String(str)
-      .replace(/[\u202F\u00A0]/g, ' ') // Fixes the dreaded Narrow No-Break Space from toLocaleTimeString
-      .replace(/[\r\n\t]+/g, ' ')      // Removes newlines
-      .trim() || "-";                  // Prevents empty strings
-  };
-
   // =======================================================================
   // 1. SIMULATE SAVE LENT (No Database Saving, Only WhatsApp Alert)
   // =======================================================================
@@ -221,11 +211,6 @@ export default function TestLentsPage() {
     setIsSaving(true);
 
     try {
-      // ⚠️ SIMULATION: Calculate variables WITHOUT saving to DB ⚠️
-      const nowTime = new Date();
-      // Replace invisible spaces right at creation
-      const timeStr = nowTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }).replace(/[\u202F\u00A0]/g, ' ').toLowerCase();
-
       const sourceName = fundSource === 'credit_card'
         ? (allCards.find(c => c.id === selectedCardId)?.card_name || "Card")
         : "Cash on Hand";
@@ -239,28 +224,20 @@ export default function TestLentsPage() {
       }, 0);
       const totalDue = prevTotalReceivable + amtNum;
 
-      // 🔴 WHATSAPP LOGIC WITH RIGOROUS SAFEGUARDS 🔴
-      for (const profile of allProfiles) {
-         const cleanPhone = (profile.phone || "").replace(/[^0-9]/g, '');
+      // 🔴 WHATSAPP LOGIC: Calling centralized function directly! No flat object here. 🔴
+      await sendLentIssueAlert(
+        allProfiles,
+        currentUser.name,
+        borrowerName,
+        amtNum,
+        sourceName,
+        remainingBalance,
+        totalDue,
+        dueDate,
+        remarks
+      );
 
-         if (cleanPhone.length >= 10) {
-            const alertVars: Record<string, string> = {
-              greeting_user:     sanitizeText(profile.name),
-              entry_user:        sanitizeText(currentUser.name),
-              time:              sanitizeText(timeStr),
-              borrower_name:     sanitizeText(borrowerName),
-              amount:            sanitizeText(String(amtNum)),
-              source_name:       sanitizeText(sourceName),
-              remaining_balance: sanitizeText(String(remainingBalance)),
-              total_due_lent:    sanitizeText(String(totalDue))
-            };
-            console.log(`Sending lent_issue_alert to ${profile.name} (${cleanPhone}):`, alertVars);
-            await sendWhatsAppAlert(cleanPhone, "lent_issue_alert", alertVars);
-         } else {
-            console.warn(`Skipping profile ${profile.name} due to invalid phone: ${profile.phone}`);
-         }
-      }
-
+      console.log("Simulated lent payload ready and utility invoked.");
       alert("✅ [TEST MODE] Lent Issue Alert Sent Successfully!\nCheck your console logs for details.");
       setIsModalOpen(false);
     } catch (error: any) {
@@ -285,12 +262,8 @@ export default function TestLentsPage() {
      setIsSaving(true);
 
      try {
-        // ⚠️ SIMULATION: Calculate variables WITHOUT saving to DB ⚠️
-        const nowTime = new Date();
-        const timeStr = nowTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }).replace(/[\u202F\u00A0]/g, ' ').toLowerCase();
-
         const fullOrPartial = collectType === 'full' ? "সম্পূর্ণ" : "আংশিক";
-        const fullAmmountStr = collectType === 'partial' ? `, মোট ₹${collectingLent.amount} এর মধ্যে থেকে` : "(সম্পূর্ণ)";
+        const fullAmountStr = String(collectingLent.amount); // টেমপ্লেটে শুধুমাত্র সংখ্যা দরকার
 
         const receivedOn = receiveMethod === 'card'
           ? (accessibleCards.find(c => c.id === receiveCardId)?.card_name || "Card")
@@ -302,28 +275,21 @@ export default function TestLentsPage() {
 
         const newRemainingDue = collectingLent.amount - totalPaidBefore - amtNum;
 
-        // 🔴 WHATSAPP LOGIC WITH RIGOROUS SAFEGUARDS 🔴
-        for (const profile of allProfiles) {
-           const cleanPhone = (profile.phone || "").replace(/[^0-9]/g, '');
+        // 🔴 WHATSAPP LOGIC: Calling centralized function directly! No flat object here. 🔴
+        await sendLentRecoveryAlert(
+          allProfiles,
+          currentUser.name,
+          collectingLent.borrower_name,
+          fullOrPartial,
+          amtNum,
+          fullAmountStr,
+          receivedOn,
+          currentBal,
+          newRemainingDue,
+          collectingLent.remarks
+        );
 
-           if (cleanPhone.length >= 10) {
-              const alertVars: Record<string, string> = {
-                greeting_user:  sanitizeText(profile.name),
-                entry_user:     sanitizeText(currentUser.name),
-                time:           sanitizeText(timeStr),
-                borrower_name:  sanitizeText(collectingLent.borrower_name),
-                full_or_partial: sanitizeText(fullOrPartial),
-                amount:         sanitizeText(String(amtNum)),
-                full_ammount:   sanitizeText(fullAmmountStr),
-                received_on:    sanitizeText(receivedOn),
-                current_bal:    sanitizeText(String(currentBal)),
-                remaining_due:  sanitizeText(String(newRemainingDue))
-              };
-              console.log(`Sending lent_recovery_alert to ${profile.name} (${cleanPhone}):`, alertVars);
-              await sendWhatsAppAlert(cleanPhone, "lent_recovery_alert", alertVars);
-           }
-        }
-
+        console.log("Simulated recovery payload ready and utility invoked.");
         alert("✅ [TEST MODE] Lent Recovery Alert Sent Successfully!\nCheck your console logs for details.");
         setIsCollectModalOpen(false);
      } catch (err: any) {
@@ -429,7 +395,7 @@ export default function TestLentsPage() {
           <div>
             <h2 className="text-emerald-400 font-black text-sm uppercase tracking-widest mb-1">SAFE TEST ENVIRONMENT</h2>
             <p className="text-emerald-100/70 text-[11px] leading-relaxed font-medium">
-              এই পেজের ডিজাইন ও ডেটা অরিজিনাল পেজের মতোই। কিন্তু এখানে কোনো ট্রানজ্যাকশন ডাটাবেসে সেভ হবে না। শুধু WhatsApp Alert ট্রিগার হবে।
+              এই পেজের ডিজাইন ও ডেটা অরিজিনাল পেজের মতোই। কিন্তু এখানে কোনো ট্রানজ্যাকশন ডাটাবেসে সেভ হবেবিধা নেই। শুধু WhatsApp Alert ট্রিগার হবে।
             </p>
           </div>
         </motion.div>
