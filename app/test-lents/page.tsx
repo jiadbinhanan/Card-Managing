@@ -4,17 +4,14 @@ import { useState, useEffect } from "react";
 import { useCardStore } from "@/store/cardStore";
 import { motion, AnimatePresence } from "motion/react";
 import { 
-  AlertCircle, 
   Calendar, 
   CheckCircle2, 
   Plus, 
   User, 
-  Users,
   IndianRupee,
   CreditCard,
   Banknote,
   ChevronDown,
-  CalendarDays,
   HandCoins,
   ShieldAlert
 } from "lucide-react";
@@ -46,18 +43,6 @@ function SmokeText({ text, className = "" }: { text: string; className?: string 
   );
 }
 
-function SmokeWords({ text, className = "" }: { text: string; className?: string }) {
-  return (
-    <span className={`inline-flex flex-wrap gap-x-[0.25em] ${className}`} aria-label={text}>
-      {text.split(" ").map((word, i) => (
-        <motion.span key={i} initial={{ opacity: 0, filter: "blur(8px)", y: 5 }} animate={{ opacity: 1, filter: "blur(0px)", y: 0 }} transition={{ delay: 0.3 + i * 0.08, duration: 0.45, ease: [0.22, 1, 0.36, 1] }} className="inline-block bg-gradient-to-r from-[#10b981] via-[#34d399] to-[#10b981] bg-clip-text text-transparent">
-          {word}
-        </motion.span>
-      ))}
-    </span>
-  );
-}
-
 export default function TestLentsPage() {
   const [lents, setLents] = useState<LentRecord[]>([]);
   const [currentUser, setCurrentUser] = useState<Profile | null>(null);
@@ -69,7 +54,6 @@ export default function TestLentsPage() {
   const [cardAvailableMap, setCardAvailableMap] = useState<Record<string, number>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [imgError, setImgError] = useState(false);
-  const { globalSelectedCardId, setGlobalSelectedCardId } = useCardStore();
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   // Modal States
@@ -91,6 +75,10 @@ export default function TestLentsPage() {
   const [receiveMethod, setReceiveMethod] = useState<"cash" | "card">("cash");
   const [receiveCardId, setReceiveCardId] = useState<string>(""); 
   const [receiveCashCardId, setReceiveCashCardId] = useState<string>(""); 
+
+  // Store Connection Fix
+  const { globalSelectedCardIds } = useCardStore();
+  const globalSelectedCardId = globalSelectedCardIds?.[0] || 'all';
 
   useEffect(() => { fetchInitialData(); }, [globalSelectedCardId]);
 
@@ -319,8 +307,6 @@ export default function TestLentsPage() {
 
   const getPaidAmount = (loan: LentRecord) => (loan.payment_history || []).reduce((s, p) => s + p.amount, 0);
   const getRemainingAmount = (loan: LentRecord) => loan.amount - getPaidAmount(loan);
-  const activeLents = lents.filter(l => l.status !== "paid");
-  const totalReceivable = activeLents.reduce((acc, curr) => acc + getRemainingAmount(curr), 0);
 
   const getUserCashForCard = (userId: string, cardId: string): number => {
     const userMap = cardCashMap[userId] || {};
@@ -331,7 +317,6 @@ export default function TestLentsPage() {
     return familyIds.reduce((s, cid) => s + (userMap[cid] || 0), 0);
   };
 
-  const actorCash = currentUser ? getUserCashForCard(currentUser.id, cashSourceCardId) : 0;
   const toggleExpand = (id: string) => setExpandedId(expandedId === id ? null : id);
   const entryUserAccessibleCardIds = allCardAccess.filter(a => a.user_id === currentUser?.id).map(a => a.card_id);
   const entryUserCards = allCards.filter(c => entryUserAccessibleCardIds.includes(c.id)).sort((a,b) => (a.is_primary === b.is_primary ? 0 : a.is_primary ? -1 : 1));
