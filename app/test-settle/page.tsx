@@ -4,7 +4,6 @@ import { useState, useEffect } from "react";
 import { useCardStore } from "@/store/cardStore";
 import { motion, AnimatePresence, type Variants } from "motion/react";
 import { 
-  ArrowDownLeft, 
   CheckCircle2,
   ChevronDown,
   Clock,
@@ -44,7 +43,7 @@ interface Profile {
   id: string;
   name: string;
   avatar_url?: string;
-  phone?: string; // Added phone
+  phone?: string; 
 }
 
 interface CardData {
@@ -75,10 +74,8 @@ export default function TestSettlementsPage() {
   const [activeTab, setActiveTab] = useState<"vault" | "pending" | "history">("vault");
 
   const [pendingTxs, setPendingTxs] = useState<Transaction[]>([]);
-  const [settledTxs, setSettledTxs] = useState<Transaction[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [accessibleCards, setAccessibleCards] = useState<CardData[]>([]);
-  const [userCashMap, setUserCashMap] = useState<Record<string, number>>({});
   const [cardAvailableMap, setCardAvailableMap] = useState<Record<string, number>>({});
 
   const [activeQrs, setActiveQrs] = useState<QRData[]>([]);
@@ -88,7 +85,9 @@ export default function TestSettlementsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [imgError, setImgError] = useState(false);
 
-  const { globalSelectedCardId, setGlobalSelectedCardId } = useCardStore();
+  // Store Connection Fix
+  const { globalSelectedCardIds, setGlobalSelectedCardIds } = useCardStore();
+  const globalSelectedCardId = globalSelectedCardIds?.[0] || 'all';
 
   const [isSettleModalOpen, setIsSettleModalOpen] = useState(false);
   const [settleTx, setSettleTx] = useState<Transaction | null>(null);
@@ -184,16 +183,10 @@ export default function TestSettlementsPage() {
     }
 
     const { data: txs } = await txQuery;
-    const { data: coh } = await supabase.from('cash_on_hand').select('*');
 
     if (txs) {
        setPendingTxs(txs.filter(t => t.status === 'pending_settlement') as any);
-       setSettledTxs(txs.filter(t => t.status === 'settled').sort((a,b) => new Date(b.settled_date || b.transaction_date).getTime() - new Date(a.settled_date || a.transaction_date).getTime()) as any);
     }
-
-    const cashMap: Record<string, number> = {};
-    coh?.forEach(c => { cashMap[c.user_id] = (cashMap[c.user_id] || 0) + Number(c.current_balance); });
-    setUserCashMap(cashMap);
 
     const { data: allTxs } = await supabase.from('card_transactions')
       .select('amount, type, payment_method, card_id, status, qr_id, settled_to_user, remarks');
@@ -353,14 +346,6 @@ export default function TestSettlementsPage() {
      }
   };
 
-  const groupedHistory = settledTxs.reduce((acc, item) => {
-     const dateObj = new Date(item.settled_date || item.transaction_date);
-     const dateStr = dateObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-     if (!acc[dateStr]) acc[dateStr] = [];
-     acc[dateStr].push(item);
-     return acc;
-  }, {} as Record<string, Transaction[]>);
-
   const totalPendingAmount = pendingTxs.reduce((sum, tx) => sum + tx.amount, 0);
 
   return (
@@ -407,7 +392,7 @@ export default function TestSettlementsPage() {
         <div className="relative">
           <select 
              value={globalSelectedCardId}
-             onChange={(e) => setGlobalSelectedCardId(e.target.value)}
+             onChange={(e) => setGlobalSelectedCardIds([e.target.value])}
              className="appearance-none bg-white/[0.03] border border-white/10 text-white text-[10px] font-bold py-2 pl-3 pr-7 rounded-xl outline-none focus:border-[#10b981] shadow-[0_0_20px_rgba(16,185,129,0.15)] backdrop-blur-md"
           >
              <option value="all" className="bg-[#050505]">All Vault Cards</option>
