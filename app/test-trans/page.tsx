@@ -21,8 +21,7 @@ import {
   ShieldCheck,
   CalendarDays,
   Check,
-  AlertTriangle,
-  Info
+  Beaker,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -82,8 +81,6 @@ interface CardData {
   total_limit: number;
   is_primary: boolean;
   parent_card_id?: string;
-  bill_gen_day?: number;
-  bill_due_day?: number;
 }
 
 interface CardAccess {
@@ -113,7 +110,7 @@ const expandVars: Variants = {
   exit: { height: 0, opacity: 0, marginTop: 0, transition: { duration: 0.22, ease: "easeInOut" } }
 };
 
-export default function TransactionsPage() {
+export default function TestTransactionsPage() {
   const [activeTab, setActiveTab] = useState<"all" | "rotations" | "spends" | "bill_paid">("all");
   const [filterUser, setFilterUser] = useState<string>("all");
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -121,7 +118,7 @@ export default function TransactionsPage() {
   const [customDateRange, setCustomDateRange] = useState<{ start: string; end: string }>({ start: "", end: "" });
 
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [isCardDropdownOpen, setIsCardDropdownOpen] = useState(false); 
+  const [isCardDropdownOpen, setIsCardDropdownOpen] = useState(false);
   const [txType, setTxType] = useState<"rotate" | "spend" | "bill">("bill");
 
   // Data States
@@ -140,15 +137,10 @@ export default function TransactionsPage() {
 
   const { globalSelectedCardIds, setGlobalSelectedCardIds } = useCardStore();
 
-  // Balances & Insights
+  // Balances
   const [familyLimitsMap, setFamilyLimitsMap] = useState<Record<string, number>>({});
   const [userCashMap, setUserCashMap] = useState<Record<string, number>>({});
   const [userCardCashMap, setUserCardCashMap] = useState<Record<string, Record<string, number>>>({});
-
-  const [cardDueMap, setCardDueMap] = useState<Record<string, number>>({});
-  const [cardDueDateMap, setCardDueDateMap] = useState<Record<string, string>>({});
-  // Changed to Family Spend Map
-  const [userFamilySpendMap, setUserFamilySpendMap] = useState<Record<string, Record<string, number>>>({});
 
   // Form States
   const [amount, setAmount] = useState("");
@@ -157,21 +149,14 @@ export default function TransactionsPage() {
   const [billMethod, setBillMethod] = useState<"cash_on_hand" | "own_pocket">("cash_on_hand");
   const [remarks, setRemarks] = useState("");
   const [selectedUserId, setSelectedUserId] = useState("");
-  const [entryCardId, setEntryCardId] = useState("");      
-  const [billCardId, setBillCardId] = useState("");         
+  const [entryCardId, setEntryCardId] = useState("");     
+  const [billCardId, setBillCardId] = useState("");        
   const [txDate, setTxDate] = useState("");
   const [isDebtRepayment, setIsDebtRepayment] = useState(false);
 
   /* eslint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     fetchInitialData();
-    const channel = supabase.channel('ledger_changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'card_transactions' }, () => fetchLedgerData(allCards))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'spends' }, () => fetchLedgerData(allCards))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'cash_on_hand' }, () => fetchLedgerData(allCards))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'billing_cycles' }, () => fetchLedgerData(allCards))
-      .subscribe();
-    return () => { supabase.removeChannel(channel); };
   }, [JSON.stringify(globalSelectedCardIds)]);
 
   const cleanUrl = (url?: string | null) => {
@@ -254,8 +239,8 @@ export default function TransactionsPage() {
     if (spnds) setSpends(spnds as any);
 
     const allTxsRes = await supabase.from('card_transactions')
-      .select('card_id, amount, type, payment_method, status, qr_id, settled_to_user, remarks, transaction_date');
-    const allSpndsRes = await supabase.from('spends').select('card_id, amount, payment_method, user_id, spend_type');
+      .select('card_id, amount, type, payment_method, status, qr_id, settled_to_user, remarks');
+    const allSpndsRes = await supabase.from('spends').select('card_id, amount, payment_method');
 
     const limitsMap: Record<string, number> = {};
     const primaryCards = currentCards.filter(c => c.is_primary);
@@ -293,54 +278,6 @@ export default function TransactionsPage() {
     });
     setUserCashMap(cashMap);
     setUserCardCashMap(cardCashMap);
-
-    // ================= INSIGHTS CALCULATION =================
-
-    // 1. Map each card to its Primary Card ID
-    const cardToPrimaryMap: Record<string, string> = {};
-    currentCards.forEach(c => {
-       cardToPrimaryMap[c.id] = c.is_primary ? c.id : (c.parent_card_id || c.id);
-    });
-
-    // 2. User & Family Card Specific Total Spend Map (Primary Card Level)
-    const ufSpendMap: Record<string, Record<string, number>> = {};
-    allSpndsRes.data?.forEach(s => {
-       if ((s.spend_type === 'personal' || s.spend_type === 'repayment') && s.card_id && s.user_id) {
-          const primaryId = cardToPrimaryMap[s.card_id] || s.card_id;
-          if (!ufSpendMap[s.user_id]) ufSpendMap[s.user_id] = {};
-          ufSpendMap[s.user_id][primaryId] = (ufSpendMap[s.user_id][primaryId] || 0) + Number(s.amount);
-       }
-    });
-    setUserFamilySpendMap(ufSpendMap);
-
-    // 3. Card Due Map & +20 Days Due Date Calculation
-    const { data: activeCycles } = await supabase.from('billing_cycles').select('card_id, generated_amount, paid_amount, billing_month').in('status', ['unpaid', 'partially_paid']);
-    const dMap: Record<string, number> = {};
-    const dueDateMap: Record<string, string> = {};
-
-    activeCycles?.forEach(c => {
-       if (c.card_id) {
-          const dueAmt = Number(c.generated_amount) - Number(c.paid_amount);
-          dMap[c.card_id] = (dMap[c.card_id] || 0) + dueAmt;
-
-          if (dueAmt > 0) {
-              const cardInfo = currentCards.find(card => card.id === c.card_id);
-              if (cardInfo && cardInfo.bill_gen_day) {
-                  // Create Date object for the generation date based on billing_month
-                  const billMonthDate = new Date(c.billing_month);
-                  const genDateObj = new Date(billMonthDate.getFullYear(), billMonthDate.getMonth(), cardInfo.bill_gen_day);
-
-                  // Add 20 Days to get exact Due Date
-                  const dueDateObj = new Date(genDateObj);
-                  dueDateObj.setDate(dueDateObj.getDate() + 19);
-
-                  dueDateMap[c.card_id] = dueDateObj.toLocaleDateString('en-GB', {day: '2-digit', month: 'short', year: 'numeric'});
-              }
-          }
-       }
-    });
-    setCardDueMap(dMap);
-    setCardDueDateMap(dueDateMap);
   };
 
   const entryUserAccessibleCardIds = allCardAccess.filter(a => a.user_id === selectedUserId).map(a => a.card_id);
@@ -423,55 +360,41 @@ export default function TransactionsPage() {
     }
   }, [amount, totalBillCash, txType, billMethod]);
 
-  // --- Helper: Cash Update with Ledger ---
-  async function updateCashBalance(userId: string, cardId: string, amt: number, type: 'credit' | 'debit', note: string) {
-    const { data: coh } = await supabase.from('cash_on_hand').select('*').eq('user_id', userId).eq('card_id', cardId).maybeSingle();
-    const currentBalance = coh ? Number(coh.current_balance) : 0;
-    const newBalance = type === 'credit' ? currentBalance + amt : currentBalance - amt;
+  // ========================================================
+  // MOCK BILL STATUS CHECKER (Reads from DB, doesn't update)
+  // ========================================================
+  async function getMockBillStatus(cardId: string, amt: number, txDate: string) {
+    let status = 'paid';
+    let remainingDue = 0;
 
-    const { data: updatedRows, error: cashUpdateError } = await supabase
-      .from('cash_on_hand')
-      .update({ current_balance: newBalance })
-      .eq('user_id', userId)
-      .eq('card_id', cardId)
-      .select('user_id');
-    if (cashUpdateError) throw cashUpdateError;
+    const txDateObj = new Date(txDate);
+    const startOfMonth = new Date(txDateObj.getFullYear(), txDateObj.getMonth(), 1).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const endOfMonth = new Date(txDateObj.getFullYear(), txDateObj.getMonth() + 1, 0).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 
-    if (!updatedRows || updatedRows.length === 0) {
-      const { error: cashInsertError } = await supabase.from('cash_on_hand').insert({
-        user_id: userId, card_id: cardId, current_balance: newBalance
-      });
-      if (cashInsertError) throw cashInsertError;
-    }
+    const { data: cycles } = await supabase.from('billing_cycles').select('*')
+      .eq('card_id', cardId).gte('billing_month', startOfMonth).lte('billing_month', endOfMonth);
 
-    const { error: cashLedgerError } = await supabase.from('cash_on_hand_ledger').insert({
-      card_id: cardId, user_id: userId, amount: amt, transaction_type: type,
-      remarks: note, transaction_date: new Date().toISOString()
-    });
-    if (cashLedgerError) throw cashLedgerError;
-  };
+    if (cycles && cycles.length > 0) {
+      const cycle = cycles[0];
+      const generatedAmt = Number(cycle.generated_amount);
+      const paidAmt = Number(cycle.paid_amount);
 
-  async function deductBillCash(userId: string, totalAmt: number, primaryCardId: string, allFamilyCardIds: string[], note: string) {
-    let remaining = totalAmt;
-    const primaryBal = currentUserCashByCard[primaryCardId] || 0;
-    if (primaryBal > 0 && remaining > 0) {
-      const deductFromPrimary = Math.min(primaryBal, remaining);
-      await updateCashBalance(userId, primaryCardId, deductFromPrimary, 'debit', note);
-      remaining -= deductFromPrimary;
-    }
-    for (const cid of allFamilyCardIds.filter(id => id !== primaryCardId)) {
-      if (remaining <= 0) break;
-      const subBal = currentUserCashByCard[cid] || 0;
-      if (subBal > 0) {
-        const deductFromSub = Math.min(subBal, remaining);
-        await updateCashBalance(userId, cid, deductFromSub, 'debit', note);
-        remaining -= deductFromSub;
+      if (paidAmt < generatedAmt) {
+        const newPaidAmt = paidAmt + amt;
+        if (newPaidAmt >= generatedAmt) {
+          status = 'paid';
+          remainingDue = 0;
+        } else if (newPaidAmt > 0) {
+          status = 'partially_paid';
+          remainingDue = generatedAmt - newPaidAmt;
+        }
       }
     }
+    return { status, remainingDue };
   }
 
   // ========================================================
-  // WHATSAPP ALERTS HELPERS
+  // COMPONENTS BUILDER HELPER FOR WHATSAPP
   // ========================================================
   const buildMetaComponents = (headerParam: { name: string, value: string } | null, bodyParams: Record<string, string>) => {
     const comps: any[] = [];
@@ -492,45 +415,18 @@ export default function TransactionsPage() {
 
   const triggerAlert = (phone: string, template: string, components: any[]) => {
     if (!phone || phone.length < 10) return;
+    const payload = { phone, templateName: template, components };
+
+    console.log(`[TEST] Triggering Alert: ${template} to ${phone}`, payload);
+
     fetch('/api/send-whatsapp', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone, templateName: template, components })
-    }).catch(err => console.error(`Failed to send ${template}:`, err));
-  };
-
-  async function processBillPayment(cardId: string, amt: number, txDate: string): Promise<{ cycleId: string | null; status: string | null; remainingDue: number }> {
-    const result: { cycleId: string | null; status: string | null; remainingDue: number } = { cycleId: null, status: null, remainingDue: 0 };
-    const txDateObj = new Date(txDate);
-    const startOfMonth = new Date(txDateObj.getFullYear(), txDateObj.getMonth(), 1).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-    const endOfMonth = new Date(txDateObj.getFullYear(), txDateObj.getMonth() + 1, 0).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-
-    const { data: cycles } = await supabase.from('billing_cycles').select('*')
-      .eq('card_id', cardId).gte('billing_month', startOfMonth).lte('billing_month', endOfMonth);
-
-    if (cycles && cycles.length > 0) {
-      const cycle = cycles[0];
-      const generatedAmt = Number(cycle.generated_amount);
-      const paidAmt = Number(cycle.paid_amount);
-
-      if (paidAmt < generatedAmt) {
-        const newPaidAmt = paidAmt + amt;
-        let cycleStatus = cycle.status;
-
-        if (newPaidAmt >= generatedAmt) { 
-            cycleStatus = 'paid'; 
-            result.remainingDue = 0; 
-        } else if (newPaidAmt > 0) { 
-            cycleStatus = 'partially_paid'; 
-            result.remainingDue = generatedAmt - newPaidAmt; 
-        }
-
-        await supabase.from('billing_cycles').update({ paid_amount: newPaidAmt, status: cycleStatus }).eq('id', cycle.id);
-        result.cycleId = cycle.id;
-        result.status = cycleStatus;
-      }
-    }
-    return result;
+      body: JSON.stringify(payload)
+    })
+    .then(res => res.json())
+    .then(data => console.log(`[TEST] Response for ${template}:`, data))
+    .catch(err => console.error(`[TEST] Failed to send ${template}:`, err));
   };
 
   const handleSave = async () => {
@@ -547,143 +443,47 @@ export default function TransactionsPage() {
     const finalDate = txDate || new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
     const profileData = profiles.find(p => p.id === finalActingUserId) || { name: 'User' };
 
-    const activePrimaryId = txType === 'bill'
-      ? billCardId
-      : (selectedEntryCardObj?.is_primary ? selectedEntryCardObj.id : selectedEntryCardObj?.parent_card_id);
-
+    const activePrimaryId = txType === 'bill' ? billCardId : (selectedEntryCardObj?.is_primary ? selectedEntryCardObj.id : selectedEntryCardObj?.parent_card_id);
     const activeCardObj = allCards.find(c => c.id === activeCardId);
-    const cardDataPayload = activeCardObj ? { card_name: activeCardObj.card_name, last_4_digits: activeCardObj.last_4_digits } : undefined;
-    let billResult: { cycleId: string | null; status: string | null; remainingDue: number } = { cycleId: null, status: null, remainingDue: 0 };
 
     setIsModalOpen(false);
 
-    // 1. OPTIMISTIC UI UPDATES
-    if (txType === "rotate") {
-      const tempTx: any = { id: `temp-${Date.now()}`, type: 'withdrawal', amount: amtNum, status: 'pending_settlement', transaction_date: finalDate, recorded_by: finalActingUserId, qrs: { merchant_name: qrs.find(q => q.id === selectedQrId)?.merchant_name || 'QR' }, profiles: profileData, remarks, card_id: activeCardId, cards: cardDataPayload };
-      setTransactions(prev => [tempTx, ...prev]);
-      if (activePrimaryId) setFamilyLimitsMap(prev => ({ ...prev, [activePrimaryId]: prev[activePrimaryId] - amtNum }));
-    } else if (txType === "spend") {
-      if (isSplitting) {
-        if (cardSplitAmt > 0) {
-          const t: any = { id: `temp-c-${Date.now()}`, user_id: finalActingUserId, amount: cardSplitAmt, payment_method: 'credit_card', remarks, spend_date: finalDate, profiles: profileData, card_id: activeCardId, cards: cardDataPayload };
-          setSpends(prev => [t, ...prev]);
-          if (activePrimaryId) setFamilyLimitsMap(prev => ({ ...prev, [activePrimaryId]: prev[activePrimaryId] - cardSplitAmt }));
-        }
-        if (cashSplitAmt > 0) {
-          const t: any = { id: `temp-h-${Date.now()}`, user_id: finalActingUserId, amount: cashSplitAmt, payment_method: 'cash_on_hand', remarks: remarks + " (Auto-Split)", spend_date: finalDate, profiles: profileData, card_id: activeCardId, cards: cardDataPayload };
-          setSpends(prev => [t, ...prev]);
-          setUserCashMap(prev => ({ ...prev, [finalActingUserId]: (prev[finalActingUserId] || 0) - cashSplitAmt }));
-        }
-      } else {
-        const t: any = { id: `temp-${Date.now()}`, user_id: finalActingUserId, amount: amtNum, payment_method: spendMethod, remarks, spend_date: finalDate, profiles: profileData, card_id: activeCardId, cards: cardDataPayload };
-        setSpends(prev => [t, ...prev]);
-        if (spendMethod === "credit_card" && activePrimaryId) setFamilyLimitsMap(prev => ({ ...prev, [activePrimaryId]: prev[activePrimaryId] - amtNum }));
-        else setUserCashMap(prev => ({ ...prev, [finalActingUserId]: (prev[finalActingUserId] || 0) - amtNum }));
-      }
-    } else if (txType === "bill") {
-      if (isDebtRepayment) {
-        const t: any = { id: `temp-r-${Date.now()}`, user_id: finalActingUserId, amount: -amtNum, spend_type: 'repayment', payment_method: billMethod, remarks: "Debt Cleared" + (remarks ? `: ${remarks}` : ''), spend_date: finalDate, profiles: profileData, card_id: activeCardId, cards: cardDataPayload };
-        setSpends(prev => [t, ...prev]);
-      }
-      if (isSplitting) {
-        if (cashSplitAmt > 0) {
-          const t: any = { id: `temp-cb-${Date.now()}`, type: 'bill_payment', amount: cashSplitAmt, status: 'settled', transaction_date: finalDate, payment_method: 'cash_on_hand', profiles: profileData, remarks, card_id: activeCardId, cards: cardDataPayload };
-          setTransactions(prev => [t, ...prev]);
-          setUserCashMap(prev => ({ ...prev, [finalActingUserId]: (prev[finalActingUserId] || 0) - cashSplitAmt }));
-        }
-        if (pocketSplitAmt > 0) {
-          const t: any = { id: `temp-pb-${Date.now()}`, type: 'bill_payment', amount: pocketSplitAmt, status: 'settled', transaction_date: finalDate, payment_method: 'own_pocket', profiles: profileData, remarks, card_id: activeCardId, cards: cardDataPayload };
-          setTransactions(prev => [t, ...prev]);
-        }
-      } else {
-        const t: any = { id: `temp-b-${Date.now()}`, type: 'bill_payment', amount: amtNum, status: 'settled', transaction_date: finalDate, payment_method: billMethod, profiles: profileData, remarks, card_id: activeCardId, cards: cardDataPayload };
-        setTransactions(prev => [t, ...prev]);
-        if (billMethod === "cash_on_hand") setUserCashMap(prev => ({ ...prev, [finalActingUserId]: (prev[finalActingUserId] || 0) - amtNum }));
-      }
-      if (activePrimaryId) setFamilyLimitsMap(prev => ({ ...prev, [activePrimaryId]: prev[activePrimaryId] + amtNum }));
+    // ==========================================
+    // TEST MODE: DATABASE SYNC SKIPPED
+    // ==========================================
+    console.log("TEST MODE: Bypassing actual database inserts.");
+    alert("Test Mode: Database sync bypassed. Only sending WhatsApp alerts.");
+
+    // MOCK BILL RESULT (Calculated from actual DB data without modifying it)
+    let billResult = { status: 'paid', remainingDue: 0 };
+    if (txType === 'bill') {
+        billResult = await getMockBillStatus(activeCardId, amtNum, finalDate);
+        console.log("[TEST] Mock Bill Calculation Result:", billResult);
     }
 
     resetForm();
 
-    // 2. BACKGROUND DATABASE SYNC & WHATSAPP
-    try {
-      if (txType === "rotate") {
-        await supabase.from('card_transactions').insert({ amount: amtNum, type: 'withdrawal', status: 'pending_settlement', qr_id: selectedQrId, transaction_date: finalDate, recorded_by: finalActingUserId, remarks, card_id: activeCardId });
-      }
-      else if (txType === "spend") {
-        if (isSplitting) {
-          if (cardSplitAmt > 0) await supabase.from('spends').insert({ user_id: finalActingUserId, amount: cardSplitAmt, spend_type: 'personal', payment_method: 'credit_card', remarks, spend_date: finalDate, card_id: activeCardId });
-          if (cashSplitAmt > 0) {
-            await supabase.from('spends').insert({ user_id: finalActingUserId, amount: cashSplitAmt, spend_type: 'personal', payment_method: 'cash_on_hand', remarks: remarks + " (Auto-Split)", spend_date: finalDate, card_id: activeCardId });
-            await updateCashBalance(finalActingUserId, activeCardId, cashSplitAmt, 'debit', `Personal spend ${remarks ? '- ' + remarks : ''} (Auto-Split)`);
-          }
-        } else {
-          await supabase.from('spends').insert({ user_id: finalActingUserId, amount: amtNum, spend_type: 'personal', payment_method: spendMethod, remarks, spend_date: finalDate, card_id: activeCardId });
-          if (spendMethod === "cash_on_hand") await updateCashBalance(finalActingUserId, activeCardId, amtNum, 'debit', `Personal spend ${remarks ? '- ' + remarks : ''}`);
-        }
-      }
-      else if (txType === "bill") {
-        billResult = await processBillPayment(activeCardId, amtNum, finalDate);
-        let activeCycleId = billResult.cycleId;
+    // ==========================================
+    // WHATSAPP ALERTS (Using proper Components)
+    // ==========================================
+    const sendAlerts = () => {
+      const sanitize = (v: string) => (v || '').normalize('NFC').replace(/[^\x20-\x7E\u00A0-\uFFFF]/g, '').trim().substring(0, 60);
 
-        if (isDebtRepayment) await supabase.from('spends').insert({ user_id: finalActingUserId, amount: -amtNum, spend_type: 'repayment', payment_method: billMethod, remarks: "Debt Cleared" + (remarks ? `: ${remarks}` : ''), spend_date: finalDate, card_id: activeCardId });
+      const rawPhone = profiles.find(p => p.id === finalActingUserId)?.phone;
+      const targetPhone = (rawPhone || "").replace(/[^0-9]/g, '');
 
-        if (isSplitting) {
-          if (cashSplitAmt > 0) {
-            await supabase.from('card_transactions').insert({ amount: cashSplitAmt, type: 'bill_payment', status: 'settled', transaction_date: finalDate, recorded_by: finalActingUserId, payment_method: 'cash_on_hand', remarks, card_id: activeCardId, billing_cycle_id: activeCycleId });
-            await deductBillCash(finalActingUserId, cashSplitAmt, activeCardId, billFamilyCardIds, `Bill payment ${remarks ? '- ' + remarks : ''}`);
-          }
-          if (pocketSplitAmt > 0) await supabase.from('card_transactions').insert({ amount: pocketSplitAmt, type: 'bill_payment', status: 'settled', transaction_date: finalDate, recorded_by: finalActingUserId, payment_method: 'own_pocket', remarks, card_id: activeCardId, billing_cycle_id: activeCycleId });
-        } else {
-          await supabase.from('card_transactions').insert({ amount: amtNum, type: 'bill_payment', status: 'settled', transaction_date: finalDate, recorded_by: finalActingUserId, payment_method: billMethod, remarks, card_id: activeCardId, billing_cycle_id: activeCycleId });
-          if (billMethod === "cash_on_hand") await deductBillCash(finalActingUserId, amtNum, activeCardId, billFamilyCardIds, `Bill payment ${remarks ? '- ' + remarks : ''}`);
-        }
+      if (!targetPhone || targetPhone.length < 10) {
+        console.warn("[TEST] Alert Aborted: Target phone is missing or invalid.");
+        return;
       }
 
-      // WHATSAPP ALERTS 
-      const sendAlerts = () => {
-        const sanitize = (v: string) => (v || '').normalize('NFC').replace(/[^\x20-\x7E\u00A0-\uFFFF]/g, '').trim().substring(0, 60);
-        const rawPhone = profiles.find(p => p.id === finalActingUserId)?.phone;
-        const targetPhone = (rawPhone || "").replace(/[^0-9]/g, '');
-        if (!targetPhone || targetPhone.length < 10) return;
+      const nowTimeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }).replace(/[\u202F\u00A0]/g, ' ').toLowerCase();
 
-        const nowTimeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }).replace(/[\u202F\u00A0]/g, ' ').toLowerCase();
+      if (txType === "bill" && billResult.status) {
+        const cardNameSafe = sanitize(activeCardObj?.card_name || 'Card');
 
-        if (txType === "bill" && billResult?.status) {
-          const cardNameSafe = sanitize(activeCardObj?.card_name || 'Card');
-
-          if (billResult.status === 'partially_paid') {
-            const comps = buildMetaComponents(
-              { name: "card_name", value: cardNameSafe },
-              {
-                greeting_user: sanitize(profileData.name),
-                card_name: cardNameSafe,
-                last_4: sanitize(activeCardObj?.last_4_digits || '0000'),
-                entry_user: sanitize(currentUser?.name || '-'),
-                time: nowTimeStr,
-                paid_amount: String(amtNum),
-                due_date: cardDueDateMap[activeCardId] || "Updated Soon",
-                remaining_due: String(billResult.remainingDue)
-              }
-            );
-            triggerAlert(targetPhone, "partial_bill_pay_alert", comps);
-
-          } else if (billResult.status === 'paid') {
-            const comps = buildMetaComponents(
-              { name: "card_name", value: cardNameSafe },
-              {
-                greeting_user: sanitize(profileData.name),
-                card_name: cardNameSafe,
-                last_4: sanitize(activeCardObj?.last_4_digits || '0000'),
-                entry_user: sanitize(currentUser?.name || '-'),
-                time: nowTimeStr,
-                available_limit: String((familyLimitsMap[activePrimaryId || ''] || 0) + amtNum)
-              }
-            );
-            triggerAlert(targetPhone, "full_billpay_complete", comps);
-          }
-
-          const creditComps = buildMetaComponents(
+        if (billResult.status === 'partially_paid') {
+          const comps = buildMetaComponents(
             { name: "card_name", value: cardNameSafe },
             {
               greeting_user: sanitize(profileData.name),
@@ -691,88 +491,112 @@ export default function TransactionsPage() {
               last_4: sanitize(activeCardObj?.last_4_digits || '0000'),
               entry_user: sanitize(currentUser?.name || '-'),
               time: nowTimeStr,
-              amount: String(amtNum),
-              remarks: sanitize(remarks || "Bill Pay"),
-              current_balance: String((familyLimitsMap[activePrimaryId || ''] || 0) + amtNum)
+              paid_amount: String(amtNum),
+              due_date: "Updated Soon",
+              remaining_due: String(billResult.remainingDue)
             }
           );
-          triggerAlert(targetPhone, "credit_transaction_alert", creditComps);
+          triggerAlert(targetPhone, "partial_bill_pay_alert", comps);
 
-        } else if (txType === "rotate") {
-          const qrName = sanitize(qrs.find(q => q.id === selectedQrId)?.merchant_name || 'QR');
-
-          const rotateComps = buildMetaComponents(
-            null,
+        } else if (billResult.status === 'paid') {
+          const comps = buildMetaComponents(
+            { name: "card_name", value: cardNameSafe },
             {
               greeting_user: sanitize(profileData.name),
-              card_name: sanitize(activeCardObj?.card_name || 'Card'),
+              card_name: cardNameSafe,
               last_4: sanitize(activeCardObj?.last_4_digits || '0000'),
-              mode: "QR",
-              provider: qrName,
               entry_user: sanitize(currentUser?.name || '-'),
               time: nowTimeStr,
-              amount: String(amtNum),
-              current_balance: String((familyLimitsMap[activePrimaryId || ''] || 0) - amtNum)
+              available_limit: String((familyLimitsMap[activePrimaryId || ''] || 0) + amtNum)
             }
           );
-          triggerAlert(targetPhone, "rotation_withdraw_alert", rotateComps);
+          triggerAlert(targetPhone, "full_billpay_complete", comps);
+        }
 
-          if (process.env.NEXT_PUBLIC_QSTASH_TOKEN) {
-            const coolingEndTime = new Date(Date.now() + (24 * 60 * 60 * 1000) + (5 * 60 * 1000));
-            const coolingTimeStr = coolingEndTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }).toLowerCase();
-
-            const coolingComps = buildMetaComponents(
-              { name: "cooling_user", value: sanitize(currentUser?.name || '-') },
-              {
-                greeting_user: sanitize(profileData.name),
-                cooling_user: sanitize(currentUser?.name || '-'),
-                card_name_with_last4: sanitize(`${activeCardObj?.card_name} ${activeCardObj?.last_4_digits}`),
-                qr_name: qrName,
-                time: coolingTimeStr
-              }
-            );
-
-            fetch('https://qstash-us-east-1.upstash.io/v2/publish/https://credics.vercel.app/api/send-whatsapp', {
-              method: 'POST',
-              headers: { 
-                  'Content-Type': 'application/json', 
-                  'Authorization': `Bearer ${process.env.NEXT_PUBLIC_QSTASH_TOKEN}`, 
-                  'Upstash-Delay': '24h5m' 
-              },
-              body: JSON.stringify({ phone: targetPhone, templateName: "qr_cooling_period_alert", components: coolingComps })
-            }).catch(console.error);
+        const creditComps = buildMetaComponents(
+          { name: "card_name", value: cardNameSafe },
+          {
+            greeting_user: sanitize(profileData.name),
+            card_name: cardNameSafe,
+            last_4: sanitize(activeCardObj?.last_4_digits || '0000'),
+            entry_user: sanitize(currentUser?.name || '-'),
+            time: nowTimeStr,
+            amount: String(amtNum),
+            remarks: sanitize(remarks || "Bill Pay"),
+            current_balance: String((familyLimitsMap[activePrimaryId || ''] || 0) + amtNum)
           }
-        } else if (txType === "spend") {
-          const sourceName = spendMethod === 'credit_card' ? sanitize(activeCardObj?.card_name || 'Card') : 'Cash on Hand';
-          const remainingBal = spendMethod === 'credit_card'
-            ? String((familyLimitsMap[activePrimaryId || ''] || 0) - amtNum)
-            : String((userCashMap[finalActingUserId] || 0) - amtNum);
+        );
+        triggerAlert(targetPhone, "credit_transaction_alert", creditComps);
 
-          const spendUserName = sanitize(currentUser?.name || '-');
-          const currentFamilySpend = userFamilySpendMap[finalActingUserId]?.[activePrimaryId || ''] || 0;
+      } else if (txType === "rotate") {
+        const qrName = sanitize(qrs.find(q => q.id === selectedQrId)?.merchant_name || 'QR');
 
-          const spendComps = buildMetaComponents(
-            { name: "entry_user", value: spendUserName },
+        const rotateComps = buildMetaComponents(
+          null, // No header variables for this template
+          {
+            greeting_user: sanitize(profileData.name),
+            card_name: sanitize(activeCardObj?.card_name || 'Card'),
+            last_4: sanitize(activeCardObj?.last_4_digits || '0000'),
+            mode: "QR",
+            provider: qrName,
+            entry_user: sanitize(currentUser?.name || '-'),
+            time: nowTimeStr,
+            amount: String(amtNum),
+            current_balance: String((familyLimitsMap[activePrimaryId || ''] || 0) - amtNum)
+          }
+        );
+        triggerAlert(targetPhone, "rotation_withdraw_alert", rotateComps);
+
+        if (process.env.NEXT_PUBLIC_QSTASH_TOKEN) {
+          const coolingEnd = new Date(Date.now() + (1 * 60 * 1000));
+          const coolingTimeStr = coolingEnd.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }).toLowerCase();
+
+          const coolingComponents = buildMetaComponents(
+            { name: "cooling_user", value: sanitize(currentUser?.name || '-') },
             {
               greeting_user: sanitize(profileData.name),
-              entry_user: spendUserName,
-              time: nowTimeStr,
-              amount: String(amtNum),
-              source_name: sourceName,
-              remarks: sanitize(remarks || "N/A"),
-              remaining_balance: remainingBal,
-              entry_user_duplicate: spendUserName,
-              total_spend: String(currentFamilySpend + amtNum) // Optimistic addition for Family Total
+              cooling_user: sanitize(currentUser?.name || '-'),
+              card_name_with_last4: sanitize(`${activeCardObj?.card_name} ${activeCardObj?.last_4_digits}`),
+              qr_name: qrName,
+              time: coolingTimeStr
             }
           );
-          triggerAlert(targetPhone, "personal_spend_alert", spendComps);
-        }
-      };
-      sendAlerts();
 
-    } catch (error: any) {
-      console.error("Save Error:", error);
-    }
+          fetch('https://qstash-us-east-1.upstash.io/v2/publish/https://b55a7bc9-9bd9-4a2d-a2a8-8b5748e5145d-00-14f7jw2krp3d.riker.replit.dev/api/send-whatsapp', {
+            method: 'POST',
+            headers: { 
+                'Content-Type': 'application/json', 
+                'Authorization': `Bearer ${process.env.NEXT_PUBLIC_QSTASH_TOKEN}`, 
+                'Upstash-Delay': '1m'
+            },
+            body: JSON.stringify({ phone: targetPhone, templateName: "qr_cooling_period_alert", components: coolingComponents })
+          }).catch(console.error);
+        }
+      } else if (txType === "spend") {
+        const sourceName = spendMethod === 'credit_card' ? sanitize(activeCardObj?.card_name || 'Card') : 'Cash on Hand';
+        const remainingBal = spendMethod === 'credit_card'
+          ? String((familyLimitsMap[activePrimaryId || ''] || 0) - amtNum)
+          : String((userCashMap[finalActingUserId] || 0) - amtNum);
+
+        const spendUserName = sanitize(currentUser?.name || '-');
+        const spendComps = buildMetaComponents(
+          { name: "entry_user", value: spendUserName },
+          {
+            greeting_user: sanitize(profileData.name),
+            entry_user: spendUserName,
+            time: nowTimeStr,
+            amount: String(amtNum),
+            source_name: sourceName,
+            remarks: sanitize(remarks || "N/A"),
+            remaining_balance: remainingBal,
+            entry_user_duplicate: spendUserName,
+            total_spend: "Updated Soon"
+          }
+        );
+        triggerAlert(targetPhone, "personal_spend_alert", spendComps);
+      }
+    };
+    sendAlerts();
   };
 
   const resetForm = () => {
@@ -921,12 +745,14 @@ export default function TransactionsPage() {
             <motion.div
               animate={{ backgroundPosition: ['0% 50%', '100% 50%', '0% 50%'] }}
               transition={{ duration: 5, ease: "linear", repeat: Infinity }}
-              className="bg-[length:200%_200%] bg-gradient-to-r from-[#0ea5e9] via-[#a855f7] to-[#0ea5e9] bg-clip-text"
+              className="bg-[length:200%_200%] bg-gradient-to-r from-[#ef4444] via-[#f59e0b] to-[#ef4444] bg-clip-text"
             >
-              <p className="text-[10px] font-black uppercase tracking-widest leading-none mb-0.5 text-transparent">Live Ledger</p>
+              <p className="text-[10px] flex items-center gap-1 font-black uppercase tracking-widest leading-none mb-0.5 text-transparent">
+                  <Beaker className="w-3 h-3 text-[#f59e0b]" /> Test Mode
+              </p>
             </motion.div>
             <h1 className="text-xl font-black tracking-tight bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent leading-none drop-shadow-[0_0_15px_rgba(255,255,255,0.3)]">
-              Transactions
+              Test Transactions
             </h1>
           </div>
         </div>
@@ -1205,8 +1031,9 @@ export default function TransactionsPage() {
           <div className="max-h-[85vh] overflow-y-auto custom-scrollbar p-6">
 
             <DialogHeader className="mb-6">
-              <DialogTitle className="text-2xl font-space font-black bg-gradient-to-r from-[#0ea5e9] to-[#a855f7] bg-clip-text text-transparent">
+              <DialogTitle className="text-2xl font-space font-black bg-gradient-to-r from-[#0ea5e9] to-[#a855f7] bg-clip-text text-transparent flex flex-col">
                 Record Entry
+                <span className="text-[10px] text-amber-500 font-bold uppercase mt-1 tracking-widest">(Test Mode Active)</span>
               </DialogTitle>
               <DialogDescription className="hidden">Record new transaction</DialogDescription>
             </DialogHeader>
@@ -1297,21 +1124,6 @@ export default function TransactionsPage() {
                     </select>
                     <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
                   </div>
-
-                  {/* BEAUTIFIED: Due Amount and Due Date (Gen+20 Days logic) */}
-                  {billCardId && (
-                    <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="flex justify-between items-center px-4 py-3 mt-3 bg-gradient-to-r from-rose-500/20 to-pink-500/10 border border-rose-500/40 rounded-2xl overflow-hidden shadow-[0_0_20px_rgba(244,63,94,0.15)]">
-                      <div className="flex flex-col">
-                        <span className="text-[10px] font-black text-rose-500 uppercase tracking-widest mb-0.5 flex items-center gap-1"><AlertTriangle className="w-3.5 h-3.5" /> Total Due</span>
-                        <span className="text-lg font-black text-rose-400 drop-shadow-md">₹{(cardDueMap[billCardId] || 0).toLocaleString()}</span>
-                      </div>
-                      <div className="h-8 w-px bg-rose-500/30 mx-3"></div>
-                      <div className="flex flex-col text-right">
-                        <span className="text-[10px] font-black text-rose-500 uppercase flex items-center justify-end gap-1 tracking-widest mb-0.5"><CalendarClock className="w-3.5 h-3.5" /> Due Date</span>
-                        <span className="text-sm font-black text-rose-300 drop-shadow-md">{cardDueDateMap[billCardId] || 'Not Available'}</span>
-                      </div>
-                    </motion.div>
-                  )}
                 </div>
               ) : (
                 /* Rotate / Spend: all accessible cards */
@@ -1330,20 +1142,6 @@ export default function TransactionsPage() {
                     </select>
                     <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
                   </div>
-
-                  {/* BEAUTIFIED: Family-level total personal spend correctly mapped to selected card's primary family */}
-                  {txType === 'spend' && selectedUserId && entryCardId && (() => {
-                    const activePrimaryIdForSpend = selectedEntryCardObj?.is_primary ? selectedEntryCardObj.id : (selectedEntryCardObj?.parent_card_id || entryCardId);
-                    const familySpend = userFamilySpendMap[selectedUserId]?.[activePrimaryIdForSpend] || 0;
-                    return (
-                      <motion.div initial={{ opacity: 0, y: -5 }} animate={{ opacity: 1, y: 0 }} className="flex items-center justify-between px-4 py-3 mt-3 bg-gradient-to-r from-amber-500/20 to-orange-500/10 border border-amber-500/40 rounded-2xl shadow-[0_0_15px_rgba(245,158,11,0.15)]">
-                        <span className="text-[10px] font-black text-amber-500 uppercase tracking-widest flex items-center gap-1.5">
-                           <AlertCircle className="w-4 h-4" /> Personal Spend <span className="text-[8px] text-amber-500/60 lowercase tracking-normal">(Family Level)</span>
-                        </span>
-                        <span className="text-sm font-black text-amber-400 drop-shadow-md">₹{familySpend.toLocaleString()}</span>
-                      </motion.div>
-                    );
-                  })()}
                 </div>
               )}
 
@@ -1456,7 +1254,7 @@ export default function TransactionsPage() {
                 </div>
               </div>
 
-              {/* Save Button */}
+              {/* Save Button (Test Mode) */}
               <div className="pt-4">
                 <Button
                   onClick={handleSave}
@@ -1466,7 +1264,7 @@ export default function TransactionsPage() {
                     'bg-gradient-to-r from-[#a855f7] to-[#d946ef] shadow-[0_0_30px_rgba(168,85,247,0.3)]'
                   }`}
                 >
-                  {txType === 'bill' ? "Record Payment" : txType === 'rotate' ? "Record Rotation" : "Record Spend"}
+                  {txType === 'bill' ? "Simulate Payment" : txType === 'rotate' ? "Simulate Rotation" : "Simulate Spend"}
                 </Button>
               </div>
 
