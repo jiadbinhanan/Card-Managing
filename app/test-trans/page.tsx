@@ -30,6 +30,9 @@ import { BottomNav } from "@/components/BottomNav";
 import { supabase } from "@/lib/supabase";
 import Link from "next/link";
 
+// WaAlert ফাইল থেকে Alert লজিক ইমপোর্ট করা হলো
+import { sendTransactionAlerts } from "@/app/transactions/WaAlert";
+
 // --- Interfaces ---
 interface Transaction {
   id: string;
@@ -393,42 +396,6 @@ export default function TestTransactionsPage() {
     return { status, remainingDue };
   }
 
-  // ========================================================
-  // COMPONENTS BUILDER HELPER FOR WHATSAPP
-  // ========================================================
-  const buildMetaComponents = (headerParam: { name: string, value: string } | null, bodyParams: Record<string, string>) => {
-    const comps: any[] = [];
-    if (headerParam) {
-      comps.push({
-        type: "header",
-        parameters: [{ type: "text", parameter_name: headerParam.name, text: headerParam.value }]
-      });
-    }
-    comps.push({
-      type: "body",
-      parameters: Object.entries(bodyParams).map(([k, v]) => ({
-        type: "text", parameter_name: k, text: String(v)
-      }))
-    });
-    return comps;
-  };
-
-  const triggerAlert = (phone: string, template: string, components: any[]) => {
-    if (!phone || phone.length < 10) return;
-    const payload = { phone, templateName: template, components };
-
-    console.log(`[TEST] Triggering Alert: ${template} to ${phone}`, payload);
-
-    fetch('/api/send-whatsapp', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    })
-    .then(res => res.json())
-    .then(data => console.log(`[TEST] Response for ${template}:`, data))
-    .catch(err => console.error(`[TEST] Failed to send ${template}:`, err));
-  };
-
   const handleSave = async () => {
     if (!amount || isNaN(amtNum) || amtNum <= 0) {
       alert("Please enter a valid amount"); return;
@@ -441,7 +408,6 @@ export default function TestTransactionsPage() {
 
     const finalActingUserId = actingUserId;
     const finalDate = txDate || new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-    const profileData = profiles.find(p => p.id === finalActingUserId) || { name: 'User' };
 
     const activePrimaryId = txType === 'bill' ? billCardId : (selectedEntryCardObj?.is_primary ? selectedEntryCardObj.id : selectedEntryCardObj?.parent_card_id);
     const activeCardObj = allCards.find(c => c.id === activeCardId);
@@ -464,139 +430,37 @@ export default function TestTransactionsPage() {
     resetForm();
 
     // ==========================================
-    // WHATSAPP ALERTS (Using proper Components)
+    // WHATSAPP ALERTS (Using Shared WaAlert)
     // ==========================================
-    const sendAlerts = () => {
-      const sanitize = (v: string) => (v || '').normalize('NFC').replace(/[^\x20-\x7E\u00A0-\uFFFF]/g, '').trim().substring(0, 60);
+    const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }).replace(/[\u202F\u00A0]/g, ' ').toLowerCase();
+    const sanitize = (v: string) => (v || '').normalize('NFC').replace(/[^\x20-\x7E\u00A0-\uFFFF]/g, '').trim().substring(0, 60);
 
-      const rawPhone = profiles.find(p => p.id === finalActingUserId)?.phone;
-      const targetPhone = (rawPhone || "").replace(/[^0-9]/g, '');
+    const cardNameSafe = sanitize(activeCardObj?.card_name || 'Card');
+    const cardLast4Safe = sanitize(activeCardObj?.last_4_digits || '0000');
 
-      if (!targetPhone || targetPhone.length < 10) {
-        console.warn("[TEST] Alert Aborted: Target phone is missing or invalid.");
-        return;
-      }
+    const remainingBal = spendMethod === 'credit_card'
+      ? String((familyLimitsMap[activePrimaryId || ''] || 0) - amtNum)
+      : String((userCashMap[finalActingUserId] || 0) - amtNum);
 
-      const nowTimeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }).replace(/[\u202F\u00A0]/g, ' ').toLowerCase();
-
-      if (txType === "bill" && billResult.status) {
-        const cardNameSafe = sanitize(activeCardObj?.card_name || 'Card');
-
-        if (billResult.status === 'partially_paid') {
-          const comps = buildMetaComponents(
-            { name: "card_name", value: cardNameSafe },
-            {
-              greeting_user: sanitize(profileData.name),
-              card_name: cardNameSafe,
-              last_4: sanitize(activeCardObj?.last_4_digits || '0000'),
-              entry_user: sanitize(currentUser?.name || '-'),
-              time: nowTimeStr,
-              paid_amount: String(amtNum),
-              due_date: "Updated Soon",
-              remaining_due: String(billResult.remainingDue)
-            }
-          );
-          triggerAlert(targetPhone, "partial_bill_pay_alert", comps);
-
-        } else if (billResult.status === 'paid') {
-          const comps = buildMetaComponents(
-            { name: "card_name", value: cardNameSafe },
-            {
-              greeting_user: sanitize(profileData.name),
-              card_name: cardNameSafe,
-              last_4: sanitize(activeCardObj?.last_4_digits || '0000'),
-              entry_user: sanitize(currentUser?.name || '-'),
-              time: nowTimeStr,
-              available_limit: String((familyLimitsMap[activePrimaryId || ''] || 0) + amtNum)
-            }
-          );
-          triggerAlert(targetPhone, "full_billpay_complete", comps);
-        }
-
-        const creditComps = buildMetaComponents(
-          { name: "card_name", value: cardNameSafe },
-          {
-            greeting_user: sanitize(profileData.name),
-            card_name: cardNameSafe,
-            last_4: sanitize(activeCardObj?.last_4_digits || '0000'),
-            entry_user: sanitize(currentUser?.name || '-'),
-            time: nowTimeStr,
-            amount: String(amtNum),
-            remarks: sanitize(remarks || "Bill Pay"),
-            current_balance: String((familyLimitsMap[activePrimaryId || ''] || 0) + amtNum)
-          }
-        );
-        triggerAlert(targetPhone, "credit_transaction_alert", creditComps);
-
-      } else if (txType === "rotate") {
-        const qrName = sanitize(qrs.find(q => q.id === selectedQrId)?.merchant_name || 'QR');
-
-        const rotateComps = buildMetaComponents(
-          null, // No header variables for this template
-          {
-            greeting_user: sanitize(profileData.name),
-            card_name: sanitize(activeCardObj?.card_name || 'Card'),
-            last_4: sanitize(activeCardObj?.last_4_digits || '0000'),
-            mode: "QR",
-            provider: qrName,
-            entry_user: sanitize(currentUser?.name || '-'),
-            time: nowTimeStr,
-            amount: String(amtNum),
-            current_balance: String((familyLimitsMap[activePrimaryId || ''] || 0) - amtNum)
-          }
-        );
-        triggerAlert(targetPhone, "rotation_withdraw_alert", rotateComps);
-
-        if (process.env.NEXT_PUBLIC_QSTASH_TOKEN) {
-          const coolingEnd = new Date(Date.now() + (1 * 60 * 1000));
-          const coolingTimeStr = coolingEnd.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }).toLowerCase();
-
-          const coolingComponents = buildMetaComponents(
-            { name: "cooling_user", value: sanitize(currentUser?.name || '-') },
-            {
-              greeting_user: sanitize(profileData.name),
-              cooling_user: sanitize(currentUser?.name || '-'),
-              card_name_with_last4: sanitize(`${activeCardObj?.card_name} ${activeCardObj?.last_4_digits}`),
-              qr_name: qrName,
-              time: coolingTimeStr
-            }
-          );
-
-          fetch('https://qstash-us-east-1.upstash.io/v2/publish/https://b55a7bc9-9bd9-4a2d-a2a8-8b5748e5145d-00-14f7jw2krp3d.riker.replit.dev/api/send-whatsapp', {
-            method: 'POST',
-            headers: { 
-                'Content-Type': 'application/json', 
-                'Authorization': `Bearer ${process.env.NEXT_PUBLIC_QSTASH_TOKEN}`, 
-                'Upstash-Delay': '1m'
-            },
-            body: JSON.stringify({ phone: targetPhone, templateName: "qr_cooling_period_alert", components: coolingComponents })
-          }).catch(console.error);
-        }
-      } else if (txType === "spend") {
-        const sourceName = spendMethod === 'credit_card' ? sanitize(activeCardObj?.card_name || 'Card') : 'Cash on Hand';
-        const remainingBal = spendMethod === 'credit_card'
-          ? String((familyLimitsMap[activePrimaryId || ''] || 0) - amtNum)
-          : String((userCashMap[finalActingUserId] || 0) - amtNum);
-
-        const spendUserName = sanitize(currentUser?.name || '-');
-        const spendComps = buildMetaComponents(
-          { name: "entry_user", value: spendUserName },
-          {
-            greeting_user: sanitize(profileData.name),
-            entry_user: spendUserName,
-            time: nowTimeStr,
-            amount: String(amtNum),
-            source_name: sourceName,
-            remarks: sanitize(remarks || "N/A"),
-            remaining_balance: remainingBal,
-            entry_user_duplicate: spendUserName,
-            total_spend: "Updated Soon"
-          }
-        );
-        triggerAlert(targetPhone, "personal_spend_alert", spendComps);
-      }
-    };
-    sendAlerts();
+    sendTransactionAlerts({
+      txType,
+      profiles,
+      entryUserName: sanitize(currentUser?.name || '-'),
+      amount: amtNum,
+      remarks: sanitize(remarks || "N/A"),
+      timeStr,
+      cardNameSafe,
+      cardLast4Safe,
+      billStatus: billResult?.status,
+      dueDate: "Updated Soon", 
+      remainingDue: billResult?.remainingDue,
+      availableLimitAfterBill: String((familyLimitsMap[activePrimaryId || ''] || 0) + amtNum),
+      qrName: sanitize(qrs.find(q => q.id === selectedQrId)?.merchant_name || 'QR'),
+      availableLimitAfterRotate: String((familyLimitsMap[activePrimaryId || ''] || 0) - amtNum),
+      sourceName: spendMethod === 'credit_card' ? cardNameSafe : 'Cash on Hand',
+      remainingBalAfterSpend: remainingBal,
+      totalSpendAfterSpend: "Updated Soon" 
+    });
   };
 
   const resetForm = () => {

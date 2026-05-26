@@ -15,6 +15,7 @@ import {
 import { BottomNav } from "@/components/BottomNav";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import { sendWhatsAppAlert } from "@/lib/whatsapp";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import DashboardQRs from "./qrs";
@@ -46,6 +47,9 @@ interface BillingCycle {
   generated_amount: number;
   paid_amount: number;
   status: string;
+  // joined from cards
+  bill_gen_day?: number;
+  bill_due_day?: number;
 }
 
 // ─── Smoke Reveal: per-character ─────────────────────────────────────────
@@ -181,7 +185,10 @@ export default function Dashboard() {
       let txQuery = supabase.from('card_transactions')
         .select('amount, type, payment_method, card_id, status, qr_id, settled_to_user, remarks');
       let spendsQuery = supabase.from('spends').select('amount, payment_method, user_id, card_id');
-      let billsQuery = supabase.from('billing_cycles').select('*').neq('status', 'paid');
+      // প্রতি card এর শুধু latest bill — billing_month DESC sort করে JS তে dedupe
+      let billsQuery = supabase.from('billing_cycles')
+        .select('*, cards(bill_gen_day, bill_due_day)')
+        .order('billing_month', { ascending: false });
 
       if (activeCardIds.length > 0) {
          txQuery = txQuery.in('card_id', activeCardIds);
@@ -193,7 +200,18 @@ export default function Dashboard() {
       const { data: spends } = await spendsQuery;
       const { data: bills } = await billsQuery;
 
-      if (bills) setActiveBills(bills);
+      if (bills) {
+        // প্রতি card এর শুধু latest bill রাখো
+        const latestPerCard = new Map<string, any>();
+        bills.forEach((b: any) => {
+          if (!latestPerCard.has(b.card_id)) latestPerCard.set(b.card_id, b);
+        });
+        setActiveBills(Array.from(latestPerCard.values()).map((b: any) => ({
+          ...b,
+          bill_gen_day: b.cards?.bill_gen_day,
+          bill_due_day: b.cards?.bill_due_day,
+        })));
+      }
 
       const withdrawals = txs?.filter(t => {
         if (t.type !== 'withdrawal') return false;
@@ -245,7 +263,11 @@ export default function Dashboard() {
   };
 
   const openBillModal = () => {
-     setBillFormCardId(selectedCardId !== 'all' ? selectedCardId : (accessibleCards[0]?.id || ""));
+     const primaryCards = accessibleCards.filter(c => c.is_primary);
+     const defaultCard = selectedCardId !== 'all' && accessibleCards.find(c => c.id === selectedCardId && c.is_primary)
+       ? selectedCardId
+       : (primaryCards[0]?.id || "");
+     setBillFormCardId(defaultCard);
      setBillFormMonth(new Date().toISOString().slice(0, 7));
      setBillFormGenAmount("");
      setBillFormPaidAmount("");
@@ -266,6 +288,51 @@ export default function Dashboard() {
              paid_amount: paid,
              status: status
          });
+
+         // WhatsApp alert — সব user এর phone এ পাঠাও (WaAlert structure)
+         const selectedCard = accessibleCards.find(c => c.id === billFormCardId);
+         const { data: allProfiles } = await supabase.from('profiles').select('name, phone');
+         if (selectedCard && allProfiles) {
+           const sanitizeText = (val: string | number | undefined | null) => {
+             if (val === undefined || val === null || val === '') return 'N/A';
+             return String(val).replace(/[\u202F\u00A0]/g, ' ').replace(/[\r\n\t]+/g, ' ').trim();
+           };
+           const billDate = new Date(billFormMonth + '-01');
+           const billMonthName = billDate.toLocaleString('en-US', { month: 'long' });
+           const genTime = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }).toLowerCase();
+           const dueDay = selectedCard.bill_due_day || 26;
+
+           const alertPromises = allProfiles.map(async (profile) => {
+             const cleanPhone = (profile.phone || '').replace(/[^0-9]/g, '');
+             if (cleanPhone.length < 10) return;
+
+             const alertComponents = [
+               {
+                 type: 'header',
+                 parameters: [
+                   { type: 'text', parameter_name: 'card_name', text: sanitizeText(selectedCard.card_name) }
+                 ]
+               },
+               {
+                 type: 'body',
+                 parameters: [
+                   { type: 'text', parameter_name: 'greeting_user', text: sanitizeText(profile.name) },
+                   { type: 'text', parameter_name: 'bill_month',    text: sanitizeText(billMonthName) },
+                   { type: 'text', parameter_name: 'card_name',     text: sanitizeText(selectedCard.card_name) },
+                   { type: 'text', parameter_name: 'last_4',        text: sanitizeText(selectedCard.last_4_digits) },
+                   { type: 'text', parameter_name: 'time',          text: sanitizeText(genTime) },
+                   { type: 'text', parameter_name: 'bill_amount',   text: sanitizeText(generated) },
+                   { type: 'text', parameter_name: 'due_date',      text: sanitizeText(dueDay) },
+                 ]
+               }
+             ];
+
+             await sendWhatsAppAlert(cleanPhone, 'bill_entry_alert', alertComponents);
+           });
+
+           await Promise.all(alertPromises);
+         }
+
          setIsBillModalOpen(false);
          fetchDashboardData();
      } catch (err: any) { alert("Error: " + err.message); }
@@ -278,10 +345,6 @@ export default function Dashboard() {
   const circumference = 2 * Math.PI * radius;
   const strokeDashoffset = circumference - (percentage / 100) * circumference;
   const utilized = totalLimit - availableLimit;
-
-  const totalGenerated = activeBills.reduce((acc, b) => acc + Number(b.generated_amount), 0);
-  const totalPaid = activeBills.reduce((acc, b) => acc + Number(b.paid_amount), 0);
-  const totalDue = totalGenerated - totalPaid;
 
 
   return (
@@ -508,7 +571,9 @@ export default function Dashboard() {
                </div>
                <div>
                  <p className="text-[10px] font-bold text-emerald-300/80 uppercase tracking-wider mb-0.5">Active Bills</p>
-                 <p className="text-sm font-black text-white">{activeBills.length} Bills Pending</p>
+                 <p className="text-sm font-black text-white">
+                   {activeBills.filter(b => b.status !== 'paid').length} Bills Pending
+                 </p>
                </div>
              </div>
              <Button onClick={openBillModal} size="icon" className="w-10 h-10 rounded-full bg-[#10b981]/20 text-[#10b981] border border-[#10b981]/40 hover:bg-[#10b981]/40 shadow-[0_0_15px_rgba(16,185,129,0.3)] transition-all">
@@ -516,62 +581,87 @@ export default function Dashboard() {
              </Button>
           </div>
 
-          {selectedCardId === 'all' ? (
-             <div className="space-y-3 relative z-10 border-t border-white/10 pt-4 max-h-56 overflow-y-auto custom-scrollbar">
-                {activeBills.length > 0 ? activeBills.map((bill, idx) => {
-                   const card = accessibleCards.find(c => c.id === bill.card_id);
-                   const due = Number(bill.generated_amount) - Number(bill.paid_amount);
-                   return (
-                      <motion.div
-                        key={bill.id}
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: idx * 0.06 }}
-                        className="bg-white/[0.03] border border-white/5 rounded-2xl p-3"
-                      >
-                        <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-2">
-                          {card?.card_name || 'Card'} {card ? `(**${card.last_4_digits})` : ''}
-                        </p>
-                        <div className="grid grid-cols-3 gap-2">
-                          <div className="text-center">
-                            <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Generated</p>
-                            <p className="text-xs font-black text-slate-300">₹{Number(bill.generated_amount).toLocaleString()}</p>
-                          </div>
-                          <div className="text-center border-l border-white/5">
-                            <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Paid</p>
-                            <p className="text-xs font-black text-emerald-400">₹{Number(bill.paid_amount).toLocaleString()}</p>
-                          </div>
-                          <div className="text-center border-l border-white/5">
-                            <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Due</p>
-                            <p className="text-xs font-black text-rose-400">₹{due.toLocaleString()}</p>
-                          </div>
-                        </div>
-                      </motion.div>
-                   );
-                }) : (
-                   <p className="text-xs text-center text-slate-500 font-bold py-2">No active bills found.</p>
-                )}
-             </div>
-          ) : (
-             <div className="grid grid-cols-3 gap-2 relative z-10 border-t border-white/10 pt-4">
-                <div className="text-center">
-                   <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Generated</p>
-                   <p className="text-sm font-black text-slate-300">₹{totalGenerated.toLocaleString()}</p>
-                </div>
-                <div className="text-center border-l border-white/5">
-                   <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Paid</p>
-                   <p className="text-sm font-black text-emerald-400">₹{totalPaid.toLocaleString()}</p>
-                </div>
-                <div className="text-center border-l border-white/5">
-                   <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Total Due</p>
-                   <p className="text-sm font-black text-rose-400 drop-shadow-[0_0_10px_rgba(244,63,94,0.3)]">₹{totalDue.toLocaleString()}</p>
-                </div>
-             </div>
-          )}
+          <div className="space-y-3 relative z-10 border-t border-white/10 pt-4 max-h-72 overflow-y-auto custom-scrollbar">
+            {activeBills.length > 0 ? activeBills.map((bill, idx) => {
+                const card = accessibleCards.find(c => c.id === bill.card_id);
+                const due = Number(bill.generated_amount) - Number(bill.paid_amount);
+                const isPaid = bill.status === 'paid' || due <= 0;
+
+                // Generate date: billing_month + card gen_day
+                const billMonth = new Date(bill.billing_month);
+                const genDay = bill.bill_gen_day || card?.bill_gen_day || 7;
+                const genDate = new Date(billMonth.getFullYear(), billMonth.getMonth(), genDay);
+
+                // Due date calculation: exactly 19 days after generate date
+                const dueDate = new Date(genDate);
+                dueDate.setDate(dueDate.getDate() + 19);
+
+                // Precise days calculation (ignoring time of day for accuracy)
+                const now = new Date();
+                const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                const dueDayStart = new Date(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate());
+
+                const daysLeft = Math.round((dueDayStart.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                const fmtDate = (d: Date) => d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+
+                return (
+                  <motion.div
+                    key={bill.id}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: idx * 0.06 }}
+                    className={`border rounded-2xl p-3 ${isPaid ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-white/[0.03] border-white/5'}`}
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">
+                        {card?.card_name || 'Card'} {card ? `(**${card.last_4_digits})` : ''}
+                      </p>
+                      {isPaid ? (
+                        <span className="text-[9px] font-black text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full">✓ PAID</span>
+                      ) : (
+                        <span className={`text-[9px] font-black px-2 py-0.5 rounded-full border ${daysLeft <= 3 ? 'text-rose-400 bg-rose-500/10 border-rose-500/20' : daysLeft <= 7 ? 'text-amber-400 bg-amber-500/10 border-amber-500/20' : 'text-slate-400 bg-white/5 border-white/10'}`}>
+                          {daysLeft > 0 ? `${daysLeft}d left` : daysLeft === 0 ? 'Due today!' : `Overdue by ${Math.abs(daysLeft)}d`}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Paid Alert Message - Shown above the stats instead of hiding them */}
+                    {isPaid && (
+                      <div className="text-center py-2 mb-3 bg-emerald-500/10 rounded-xl border border-emerald-500/20">
+                        <p className="text-sm font-black text-emerald-400">🎉 Congratulations!</p>
+                        <p className="text-[10px] text-emerald-500/80 mt-0.5">Bill fully cleared</p>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-3 gap-2 mb-2">
+                      <div className="text-center">
+                        <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Generated</p>
+                        <p className="text-xs font-black text-slate-300">₹{Number(bill.generated_amount).toLocaleString()}</p>
+                      </div>
+                      <div className="text-center border-l border-white/5">
+                        <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Paid</p>
+                        <p className="text-xs font-black text-emerald-400">₹{Number(bill.paid_amount).toLocaleString()}</p>
+                      </div>
+                      <div className="text-center border-l border-white/5">
+                        <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Due</p>
+                        <p className="text-xs font-black text-rose-400">₹{due > 0 ? due.toLocaleString() : 0}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between pt-2 border-t border-white/5">
+                      <span className="text-[9px] text-slate-500">📅 Gen: <span className="text-slate-400 font-bold">{fmtDate(genDate)}</span></span>
+                      <span className="text-[9px] text-slate-500">⏰ Due: <span className={`font-bold ${daysLeft <= 3 && !isPaid ? 'text-rose-400' : 'text-slate-400'}`}>{fmtDate(dueDate)}</span></span>
+                    </div>
+
+                  </motion.div>
+                );
+            }) : (
+                <p className="text-xs text-center text-slate-500 font-bold py-2">No active bills found.</p>
+            )}
+          </div>
         </motion.section>
 
         {/* ================= ANALYTICS MODULE ================= */}
-        <DashboardAnalytics userStats={userStats} selectedCardId={selectedCardId} accessibleCards={accessibleCards} />
+        <DashboardAnalytics userStats={userStats} selectedCardId={selectedCardId} accessibleCards={accessibleCards} currentUserId={currentUser?.id} />
 
         {/* ================= QR SUGGESTION MODULE ================= */}
         <DashboardQRs firstName={firstName} currentUser={currentUser} accessibleCards={accessibleCards} globalSelectedCardId={selectedCardId} />
@@ -590,7 +680,7 @@ export default function Dashboard() {
              <div className="space-y-1.5">
                 <label className="text-[11px] font-bold text-slate-400 uppercase ml-1">Select Card</label>
                 <select value={billFormCardId} onChange={(e) => setBillFormCardId(e.target.value)} className="w-full h-12 bg-white/[0.05] border border-white/10 rounded-xl px-3 text-xs font-bold text-white outline-none focus:border-[#10b981]">
-                   {accessibleCards.map(c => <option key={c.id} value={c.id} className="bg-[#050505]">{c.card_name} (**{c.last_4_digits})</option>)}
+                   {accessibleCards.filter(c => c.is_primary).map(c => <option key={c.id} value={c.id} className="bg-[#050505]">{c.card_name} (**{c.last_4_digits})</option>)}
                 </select>
              </div>
              <div className="space-y-1.5">
