@@ -1,0 +1,4 @@
+{
+  "login": ["auth", "signin", "authentication"],
+  "receipt": ["invoice", "billing", "pdf-generator"]
+}
