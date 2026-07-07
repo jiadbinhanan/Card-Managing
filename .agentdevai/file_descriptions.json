@@ -1,5 +1,0 @@
-{
-  "app/api/auth/route.ts": "Handles user authentication logic via Supabase",
-  "components/ui/button.tsx": "Reusable button component",
-  "lib/utils.ts": "Utility functions for class merging and formatting"
-}
