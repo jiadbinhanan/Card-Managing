@@ -74,7 +74,7 @@ BEGIN
 END;
 $$;
 
--- Function-টা public accessible করুন (service role ছাড়াও anon read করতে পারবে)
+-- Function-টা accessible করুন
 GRANT EXECUTE ON FUNCTION get_db_schema() TO anon;
 GRANT EXECUTE ON FUNCTION get_db_schema() TO authenticated;
 GRANT EXECUTE ON FUNCTION get_db_schema() TO service_role;

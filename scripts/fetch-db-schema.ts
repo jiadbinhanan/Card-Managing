@@ -1,13 +1,11 @@
 /**
  * DB Schema Fetcher Script
  * ─────────────────────────
- * Run: npx tsx scripts/fetch-db-schema.ts
+ * Run: npm run db:schema
  *
- * Prerequisite: Run .agendevai/sql/create_get_db_schema_fn.sql in Supabase SQL Editor once.
+ * Prerequisite: Run supabase/sql/create_get_db_schema_fn.sql in Supabase SQL Editor once.
  *
- * এই script টি Supabase থেকে live schema fetch করে
- * .agendevai/db-schema.json ফাইলে লিখে দেয়।
- * Agent কোড পরিবর্তনের আগে এই ফাইল পড়ে নেয়।
+ * Supabase থেকে live schema fetch করে supabase/db-schema.json এ লিখে দেয়।
  */
 
 import { createClient } from "@supabase/supabase-js";
@@ -34,12 +32,12 @@ async function main() {
   if (error) {
     console.error("❌ Error:", error.message);
     console.error(
-      "💡 Hint: .agendevai/sql/create_get_db_schema_fn.sql টি Supabase SQL Editor-এ রান করুন।"
+      "💡 Hint: supabase/sql/create_get_db_schema_fn.sql টি Supabase SQL Editor-এ রান করুন।"
     );
     process.exit(1);
   }
 
-  const outputPath = path.join(process.cwd(), ".agendevai", "db-schema.json");
+  const outputPath = path.join(process.cwd(), "supabase", "db-schema.json");
   await fs.writeFile(outputPath, JSON.stringify(data, null, 2), "utf-8");
 
   const schema = data as any;
@@ -49,7 +47,7 @@ async function main() {
     0
   );
 
-  console.log(`✅ Schema saved to .agendevai/db-schema.json`);
+  console.log(`✅ Schema saved → supabase/db-schema.json`);
   console.log(`   📦 Tables: ${tableCount}`);
   console.log(`   📋 Total columns: ${totalColumns}`);
 
