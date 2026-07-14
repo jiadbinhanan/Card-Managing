@@ -2,9 +2,10 @@
 
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { User, Plus, Wallet, X, Loader2, FileDown } from "lucide-react";
+import { User, Plus, Wallet, Loader2, FileDown } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import BorrowerProfilePanel, { Borrower, Profile } from "./BorrowerProfilePanel";
+import BorrowerPicker from "./BorrowerPicker";
 import { exportBorrowerListPdf } from "./pdfExport";
 
 interface BorrowerSummary extends Borrower {
@@ -21,10 +22,7 @@ export default function LentsFromPocket() {
   const [selectedBorrower, setSelectedBorrower] = useState<Borrower | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
 
-  const [isAddOpen, setIsAddOpen] = useState(false);
-  const [newName, setNewName] = useState("");
-  const [newPhone, setNewPhone] = useState("");
-  const [isSavingBorrower, setIsSavingBorrower] = useState(false);
+  const [isPickerOpen, setIsPickerOpen] = useState(false);
   const [isExportingList, setIsExportingList] = useState(false);
 
   useEffect(() => {
@@ -72,38 +70,37 @@ export default function LentsFromPocket() {
 
   const totalPocketDue = borrowers.reduce((s, b) => s + Math.max(0, b.netDue), 0);
 
-  const handleCreateBorrower = async () => {
-    if (!newName.trim() || !currentUser) {
-      alert("নাম দিন।");
+  const openBorrower = (b: Borrower) => {
+    setSelectedBorrower(b);
+    setPanelOpen(true);
+  };
+
+  const handlePickExisting = (b: Borrower) => {
+    setIsPickerOpen(false);
+    openBorrower(b);
+  };
+
+  const handleCreateNewBorrower = async (name: string, phone: string) => {
+    if (!currentUser) {
+      alert("Profile লোড হয়নি, একটু পরে চেষ্টা করো।");
       return;
     }
-    setIsSavingBorrower(true);
     try {
       const { data, error } = await supabase
         .from("borrowers")
-        .insert({ name: newName.trim(), phone: newPhone.trim() || null, created_by: currentUser.id })
+        .insert({ name, phone: phone || null, created_by: currentUser.id })
         .select()
         .single();
       if (error) throw error;
 
-      setIsAddOpen(false);
-      setNewName("");
-      setNewPhone("");
+      setIsPickerOpen(false);
       await fetchAll();
 
       // নতুন borrower তৈরি হওয়ার সাথে সাথেই তার profile panel খুলে যাবে
-      setSelectedBorrower(data as Borrower);
-      setPanelOpen(true);
+      openBorrower(data as Borrower);
     } catch (err: any) {
       alert("Error: " + err.message);
-    } finally {
-      setIsSavingBorrower(false);
     }
-  };
-
-  const openBorrower = (b: Borrower) => {
-    setSelectedBorrower(b);
-    setPanelOpen(true);
   };
 
   const handleExportListPdf = async () => {
@@ -149,12 +146,12 @@ export default function LentsFromPocket() {
         </div>
       </motion.section>
 
-      {/* Add Borrower */}
+      {/* Borrower যোগ/বেছে নাও */}
       <button
-        onClick={() => setIsAddOpen(true)}
+        onClick={() => setIsPickerOpen(true)}
         className="w-full mb-5 py-3.5 rounded-2xl border border-dashed border-white/15 text-slate-300 text-sm font-bold flex items-center justify-center gap-2 hover:bg-white/[0.03] transition-colors"
       >
-        <Plus className="w-4 h-4" /> নতুন Borrower যোগ করো
+        <Plus className="w-4 h-4" /> Borrower যোগ/বেছে নাও
       </button>
 
       {/* Borrower List */}
@@ -226,46 +223,13 @@ export default function LentsFromPocket() {
         </div>
       )}
 
-      {/* Add Borrower Modal */}
-      <AnimatePresence>
-        {isAddOpen && (
-          <>
-            <motion.div
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              onClick={() => setIsAddOpen(false)}
-              className="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm"
-            />
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 10 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="fixed inset-x-6 top-1/3 z-50 max-w-sm mx-auto bg-[#0d0d0d] border border-white/10 rounded-3xl p-5 shadow-2xl"
-            >
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-sm font-black text-white">নতুন Borrower</h3>
-                <button onClick={() => setIsAddOpen(false)} className="text-slate-400"><X className="w-4 h-4" /></button>
-              </div>
-              <input
-                type="text" placeholder="নাম"
-                value={newName} onChange={(e) => setNewName(e.target.value)}
-                className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white outline-none focus:border-emerald-400 mb-3"
-              />
-              <input
-                type="text" placeholder="ফোন নম্বর (optional)"
-                value={newPhone} onChange={(e) => setNewPhone(e.target.value)}
-                className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white outline-none focus:border-emerald-400 mb-4"
-              />
-              <button
-                disabled={isSavingBorrower}
-                onClick={handleCreateBorrower}
-                className="w-full py-3 rounded-xl text-sm font-black text-black bg-emerald-400 flex items-center justify-center gap-2 disabled:opacity-50"
-              >
-                {isSavingBorrower && <Loader2 className="w-4 h-4 animate-spin" />} Add & Open Profile
-              </button>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
+      <BorrowerPicker
+        open={isPickerOpen}
+        onClose={() => setIsPickerOpen(false)}
+        onSelectExisting={handlePickExisting}
+        onCreateNew={handleCreateNewBorrower}
+        accent="emerald"
+      />
 
       <BorrowerProfilePanel
         open={panelOpen}

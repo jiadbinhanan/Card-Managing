@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "motion/react";
 import {
   X,
@@ -95,6 +96,10 @@ export default function BorrowerProfilePanel({
   const [exportFrom, setExportFrom] = useState("");
   const [exportTo, setExportTo] = useState("");
   const [exportPanelOpen, setExportPanelOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  // Portal-এ mount করার আগে document অবশ্যই ready থাকতে হবে (SSR-safe)
+  useEffect(() => setMounted(true), []);
 
   // --- form fields (shared) ---
   const [amount, setAmount] = useState("");
@@ -110,6 +115,19 @@ export default function BorrowerProfilePanel({
       fetchEntries();
       resetForm();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, borrower?.id]);
+
+  // Tab আবার visible হলে (e.g. অন্য অ্যাপ থেকে ফিরে এলে) fresh ডেটা fetch —
+  // realtime event miss হয়ে গেলেও ledger যেন stale না থাকে
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && open && borrower) {
+        fetchEntries();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, borrower?.id]);
 
@@ -474,9 +492,9 @@ export default function BorrowerProfilePanel({
     }
   };
 
-  if (!borrower) return null;
+  if (!borrower || !mounted) return null;
 
-  return (
+  return createPortal(
     <AnimatePresence>
       {open && (
         <>
@@ -852,6 +870,7 @@ export default function BorrowerProfilePanel({
           </motion.div>
         </>
       )}
-    </AnimatePresence>
+    </AnimatePresence>,
+    document.body
   );
 }
