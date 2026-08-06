@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { User, Plus, Wallet, Loader2, FileDown } from "lucide-react";
+import { User, Plus, Wallet, Loader2, FileDown, AlertCircle } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import BorrowerProfilePanel, { Borrower, Profile } from "./BorrowerProfilePanel";
 import BorrowerPicker from "./BorrowerPicker";
@@ -11,9 +11,16 @@ import { exportBorrowerListPdf } from "./pdfExport";
 interface BorrowerSummary extends Borrower {
   netDue: number;
   totalGiven: number;
+  lastActivity: string;
 }
 
-export default function LentsFromPocket() {
+interface LentsFromPocketProps {
+  // page.tsx থেকে আসে — প্রতিবার Pocket ট্যাব active হলে বাড়ে, এটাই key হিসেবে
+  // ব্যবহার করে summary/list কার্ডগুলো প্রতি ট্যাব-সুইচে আবার animate করে
+  animKey?: number;
+}
+
+export default function LentsFromPocket({ animKey = 0 }: LentsFromPocketProps) {
   const [currentUser, setCurrentUser] = useState<Profile | null>(null);
   const [allProfiles, setAllProfiles] = useState<Profile[]>([]);
   const [borrowers, setBorrowers] = useState<BorrowerSummary[]>([]);
@@ -52,17 +59,20 @@ export default function LentsFromPocket() {
     // এটা সম্পূর্ণ ব্যক্তিগত — শুধু নিজের রেকর্ড করা এন্ট্রিই দেখা যাবে, পরিবারের অন্য কেউ না
     const { data: ledgerRows } = await supabase
       .from("pocket_lent_ledger")
-      .select("borrower_id, entry_type, amount")
+      .select("borrower_id, entry_type, amount, updated_at")
       .eq("recorded_by", myId);
 
     const summaries: BorrowerSummary[] = (borrowerRows || []).map((b) => {
       const rows = (ledgerRows || []).filter((r) => r.borrower_id === b.id);
       const totalGiven = rows.filter((r) => r.entry_type === "given").reduce((s, r) => s + Number(r.amount), 0);
       const totalCollected = rows.filter((r) => r.entry_type === "collected").reduce((s, r) => s + Number(r.amount), 0);
-      return { ...b, totalGiven, netDue: totalGiven - totalCollected };
+      const lastActivity = rows.reduce((latest, r: any) => (r.updated_at > latest ? r.updated_at : latest), "");
+      return { ...b, totalGiven, netDue: totalGiven - totalCollected, lastActivity };
     })
     // শুধু যাদের নিজের রেকর্ড করা এন্ট্রি অন্তত একটা আছে
-    .filter((b) => (ledgerRows || []).some((r) => r.borrower_id === b.id));
+    .filter((b) => (ledgerRows || []).some((r) => r.borrower_id === b.id))
+    // সদ্য এন্ট্রি/এডিট হওয়া borrower সবার আগে
+    .sort((a, b) => b.lastActivity.localeCompare(a.lastActivity));
 
     setBorrowers(summaries);
     setIsLoading(false);
@@ -125,24 +135,42 @@ export default function LentsFromPocket() {
 
   return (
     <div className="relative">
-      {/* Summary */}
+      {/* Summary — Card/Combined ট্যাবের মতোই glow-bar + staggered entrance, নিজস্ব emerald/teal রং */}
       <motion.section
-        initial={{ opacity: 0, y: 10 }}
+        key={`pocket-summary-${animKey}`}
+        initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="relative overflow-hidden rounded-[28px] border border-white/10 bg-white/[0.03] p-6 mb-6"
+        transition={{ duration: 0.5 }}
+        className="relative p-6 rounded-[32px] overflow-hidden border border-white/10 bg-white/[0.02] backdrop-blur-xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] mb-6"
       >
-        <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/10 to-[#f59e0b]/5 z-0" />
-        <div className="relative z-10 flex flex-col items-center text-center">
-          <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-1">
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-40 h-1 bg-gradient-to-r from-transparent via-emerald-400 to-transparent opacity-50 blur-[2px]" />
+        <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/10 to-teal-400/5 z-0" />
+        <div className="relative z-10 flex flex-col items-center text-center mt-2">
+          <motion.span
+            initial={{ opacity: 0, letterSpacing: "0.4em" }}
+            animate={{ opacity: 1, letterSpacing: "0.2em" }}
+            transition={{ duration: 0.7, delay: 0.2 }}
+            className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-1"
+          >
             Personal Pocket — Total Due
-          </span>
-          <div className="text-4xl font-black tracking-tight bg-gradient-to-r from-emerald-400 via-teal-300 to-[#f59e0b] bg-clip-text text-transparent">
+          </motion.span>
+          <motion.div
+            initial={{ opacity: 0, scale: 0.85, filter: "blur(10px)" }}
+            animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
+            transition={{ duration: 0.6, delay: 0.35, ease: [0.22, 1, 0.36, 1] }}
+            className="text-4xl font-black tracking-tight bg-gradient-to-r from-emerald-400 via-teal-300 to-emerald-500 bg-clip-text text-transparent drop-shadow-[0_0_20px_rgba(52,211,153,0.5)]"
+          >
             ₹{totalPocketDue.toLocaleString("en-IN")}
-          </div>
-          <div className="mt-3 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/5 border border-white/10 text-[10px] font-bold text-slate-300">
+          </motion.div>
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.5 }}
+            className="mt-4 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/5 border border-white/10 text-[10px] font-bold text-slate-300 shadow-inner"
+          >
             <Wallet className="w-3.5 h-3.5 text-emerald-400" />
-            কার্ড বা কার্ড-নগদ থেকে সম্পূর্ণ আলাদা — ব্যক্তিগত টাকার হিসাব
-          </div>
+            <span>কার্ড বা কার্ড-নগদ থেকে সম্পূর্ণ আলাদা — ব্যক্তিগত টাকার হিসাব</span>
+          </motion.div>
         </div>
       </motion.section>
 
@@ -177,7 +205,7 @@ export default function LentsFromPocket() {
       ) : borrowers.length === 0 ? (
         <p className="text-center text-sm text-slate-500 py-10">এখনো কোনো personal lending entry নেই</p>
       ) : (
-        <div className="space-y-3">
+        <div key={`pocket-list-${animKey}`} className="space-y-3">
           <div className="flex justify-end">
             <button
               onClick={handleExportListPdf}
@@ -189,13 +217,14 @@ export default function LentsFromPocket() {
             </button>
           </div>
           <AnimatePresence>
-            {borrowers.map((b) => (
+            {borrowers.map((b, i) => (
               <motion.div
                 key={b.id}
                 layout
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0 }}
+                transition={{ delay: i * 0.03 }}
                 onClick={() => openBorrower(b)}
                 className="p-4 bg-white/[0.03] border border-white/5 rounded-[22px] flex items-center justify-between cursor-pointer hover:bg-white/[0.05] transition-colors"
               >
@@ -206,13 +235,21 @@ export default function LentsFromPocket() {
                   <div className="min-w-0">
                     <h3 className="text-sm font-bold text-slate-100 truncate">{b.name}</h3>
                     <p className="text-[10px] text-slate-400">Total Given: ₹{b.totalGiven.toLocaleString("en-IN")}</p>
+                    {b.netDue < 0 && (
+                      <span className="inline-block mt-1 text-[9px] font-bold uppercase tracking-wide text-emerald-400 bg-emerald-400/10 px-1.5 py-0.5 rounded-full border border-emerald-400/20">
+                        আমি নিয়েছি
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="text-right shrink-0">
+                  {/* যাকে দিয়েছি (netDue>0) → red, যার থেকে নিয়েছি (netDue<0) → green */}
                   {b.netDue > 0 ? (
-                    <span className="text-base font-black text-[#f59e0b]">₹{b.netDue.toLocaleString("en-IN")}</span>
+                    <span className="text-base font-black text-[#ef4444]">₹{b.netDue.toLocaleString("en-IN")}</span>
+                  ) : b.netDue < 0 ? (
+                    <span className="text-base font-black text-emerald-400">₹{Math.abs(b.netDue).toLocaleString("en-IN")}</span>
                   ) : (
-                    <span className="text-[10px] font-bold uppercase tracking-wider bg-emerald-500/10 text-emerald-400 px-2 py-1 rounded-full border border-emerald-500/20">
+                    <span className="text-[10px] font-bold uppercase tracking-wider bg-white/5 text-slate-400 px-2 py-1 rounded-full border border-white/10">
                       Settled
                     </span>
                   )}

@@ -418,12 +418,13 @@ export interface LedgerRowForPdf {
   remarks?: string | null;
   recorded_by?: string | null;
   balanceAfter: number;
+  ledgerSource?: "card" | "pocket"; // শুধু combined mode-এ ব্যবহৃত — কোন ledger থেকে এসেছে
 }
 
 export async function exportLedgerPdf(params: {
   borrower: { name: string; phone?: string | null };
   entries: LedgerRowForPdf[];
-  mode: "card" | "pocket";
+  mode: "card" | "pocket" | "combined";
   dateFrom: string | null;
   dateTo: string | null;
   getCardLabel: (id?: string | null) => string;
@@ -444,7 +445,8 @@ export async function exportLedgerPdf(params: {
       ? `${dateFrom ? new Date(dateFrom).toLocaleDateString("en-GB") : "Start"} – ${dateTo ? new Date(dateTo).toLocaleDateString("en-GB") : "Today"}`
       : "All Time";
 
-  const state = await createBuilder(borrower.name, `${mode === "card" ? "Card & Cash" : "Personal Pocket"} Ledger  •  ${rangeLabel}`);
+  const modeLabel = mode === "card" ? "Card & Cash" : mode === "pocket" ? "Personal Pocket" : "Combined (Card + Pocket)";
+  const state = await createBuilder(borrower.name, `${modeLabel} Ledger  •  ${rangeLabel}`);
 
   const totalGiven = filtered.filter((e) => e.entry_type === "given").reduce((s, e) => s + Number(e.amount), 0);
   const totalCollected = filtered.filter((e) => e.entry_type === "collected").reduce((s, e) => s + Number(e.amount), 0);
@@ -456,27 +458,27 @@ export async function exportLedgerPdf(params: {
     { label: "Net Due", value: money(netDue), color: netDue > 0 ? AMBER : EMERALD },
   ]);
 
-  const columns: Column[] =
-    mode === "card"
-      ? [
-          { header: "Date", width: CONTENT_W * 0.1, align: "left" },
-          { header: "Time", width: CONTENT_W * 0.1, align: "left" },
-          { header: "Type", width: CONTENT_W * 0.1, align: "left" },
-          { header: "Source", width: CONTENT_W * 0.22, align: "left" },
-          { header: "Amount", width: CONTENT_W * 0.1, align: "right" },
-          { header: "Balance", width: CONTENT_W * 0.1, align: "right" },
-          { header: "Recorded By", width: CONTENT_W * 0.12, align: "left" },
-          { header: "Remarks", width: CONTENT_W * 0.16, align: "left" },
-        ]
-      : [
-          { header: "Date", width: CONTENT_W * 0.12, align: "left" },
-          { header: "Time", width: CONTENT_W * 0.12, align: "left" },
-          { header: "Type", width: CONTENT_W * 0.12, align: "left" },
-          { header: "Amount", width: CONTENT_W * 0.14, align: "right" },
-          { header: "Balance", width: CONTENT_W * 0.14, align: "right" },
-          { header: "Recorded By", width: CONTENT_W * 0.16, align: "left" },
-          { header: "Remarks", width: CONTENT_W * 0.2, align: "left" },
-        ];
+  const hasSourceCol = mode === "card" || mode === "combined";
+  const columns: Column[] = hasSourceCol
+    ? [
+        { header: "Date", width: CONTENT_W * 0.09, align: "left" },
+        { header: "Time", width: CONTENT_W * 0.09, align: "left" },
+        { header: "Type", width: CONTENT_W * 0.09, align: "left" },
+        { header: "Source", width: CONTENT_W * 0.2, align: "left" },
+        { header: "Amount", width: CONTENT_W * 0.08, align: "right" },
+        { header: "Balance", width: CONTENT_W * 0.08, align: "right" },
+        { header: "User", width: CONTENT_W * 0.08, align: "left" },
+        { header: "Remarks", width: CONTENT_W * 0.29, align: "left" },
+      ]
+    : [
+        { header: "Date", width: CONTENT_W * 0.1, align: "left" },
+        { header: "Time", width: CONTENT_W * 0.1, align: "left" },
+        { header: "Type", width: CONTENT_W * 0.1, align: "left" },
+        { header: "Amount", width: CONTENT_W * 0.09, align: "right" },
+        { header: "Balance", width: CONTENT_W * 0.09, align: "right" },
+        { header: "User", width: CONTENT_W * 0.09, align: "left" },
+        { header: "Remarks", width: CONTENT_W * 0.43, align: "left" },
+      ];
 
   const typeColIndex = 2;
 
@@ -488,6 +490,12 @@ export async function exportLedgerPdf(params: {
     ];
     if (mode === "card") {
       row.push(`${e.source_type === "credit_card" ? "Card" : "Cash"}: ${getCardLabel(e.card_id)}`);
+    } else if (mode === "combined") {
+      row.push(
+        e.ledgerSource === "pocket"
+          ? "Pocket"
+          : `Card: ${e.source_type === "credit_card" ? "Card" : "Cash"} · ${getCardLabel(e.card_id)}`
+      );
     }
     row.push(money(e.amount));
     row.push(money(e.balanceAfter));
@@ -501,5 +509,5 @@ export async function exportLedgerPdf(params: {
     return undefined;
   });
 
-  await finalize(state, `Credics_${borrower.name.replace(/\s+/g, "_")}_Ledger_${todayStamp()}.pdf`);
+  await finalize(state, `Credics_${borrower.name.replace(/\s+/g, "_")}_${mode === "combined" ? "Combined" : mode === "card" ? "CardCash" : "Pocket"}_Ledger_${todayStamp()}.pdf`);
 }

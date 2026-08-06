@@ -48,13 +48,36 @@ interface CardAccess {
 interface BorrowerSummary extends Borrower {
   netDue: number;
   totalGiven: number;
+  lastActivity: string; // সর্বশেষ entry/edit-এর timestamp — এই দিয়ে লিস্ট সাজানো হয়
 }
 
 export default function LentsPage() {
-  const [activeTab, setActiveTab] = useState<"card" | "pocket">("card");
-  // পকেট ট্যাব প্রথমবার দেখা হলে true হয়ে যাবে, তারপর কখনো unmount হবে না —
-  // শুধু CSS দিয়ে show/hide হবে, তাই বারবার ট্যাব সুইচ করলেও ডেটা আবার fetch হবে না
+  // Combined-ই ডিফল্ট ট্যাব — লোড হওয়ার সাথে সাথেই "current user-এর দৃষ্টিকোণ থেকে
+  // সম্পূর্ণ ছবি" (card + নিজের pocket মিলিয়ে) দেখা যাবে
+  const [activeTab, setActiveTab] = useState<"card" | "combined" | "pocket">("combined");
+  // পকেট/কম্বাইন্ড ট্যাব প্রথমবার দেখা হলে true হয়ে যাবে, তারপর কখনো unmount হবে না —
+  // শুধু CSS দিয়ে show/hide হবে, তাই বারবার ট্যাব সুইচ করলেও ডেটা আবার fetch হয় না
   const [pocketVisited, setPocketVisited] = useState(false);
+  const [combinedVisited, setCombinedVisited] = useState(true); // যেহেতু ডিফল্ট ট্যাবই এটা
+
+  // প্রতিবার একটা ট্যাব active হলে তার counter বাড়ে — এই counter-টাই key হিসেবে
+  // ব্যবহার হয় যাতে সেই ট্যাবের summary/ledger কার্ডগুলো প্রতিবার নতুন করে animate করে
+  // (ডেটা fetch আবার হয় না, শুধু ছোট্ট motion wrapper remount হয়)
+  const [tabAnimKey, setTabAnimKey] = useState({ card: 0, combined: 0, pocket: 0 });
+  const switchTab = (tab: "card" | "combined" | "pocket") => {
+    setActiveTab(tab);
+    setTabAnimKey((prev) => ({ ...prev, [tab]: prev[tab] + 1 }));
+    if (tab === "pocket") setPocketVisited(true);
+    if (tab === "combined") setCombinedVisited(true);
+  };
+
+  // --- Combined tab: card_lent_ledger (shared) + নিজের pocket_lent_ledger মিলিয়ে per-borrower summary ---
+  const [combinedBorrowers, setCombinedBorrowers] = useState<BorrowerSummary[]>([]);
+  const [combinedLoading, setCombinedLoading] = useState(true);
+  const [combinedSelectedBorrower, setCombinedSelectedBorrower] = useState<Borrower | null>(null);
+  const [combinedPanelOpen, setCombinedPanelOpen] = useState(false);
+  const [isCombinedPickerOpen, setIsCombinedPickerOpen] = useState(false);
+  const [isExportingCombinedList, setIsExportingCombinedList] = useState(false);
 
   const [currentUser, setCurrentUser] = useState<Profile | null>(null);
   const [allProfiles, setAllProfiles] = useState<Profile[]>([]);
@@ -94,16 +117,18 @@ export default function LentsPage() {
 
   useEffect(() => {
     fetchInitialData();
+    const refreshCombined = () => { if (currentUser) fetchCombinedBorrowerSummaries(currentUser.id); };
     const channel = supabase
       .channel("lents_ledger_changes_v2")
-      .on("postgres_changes", { event: "*", schema: "public", table: "card_lent_ledger" }, () => fetchBorrowerSummaries(allCards))
-      .on("postgres_changes", { event: "*", schema: "public", table: "borrowers" }, () => fetchBorrowerSummaries(allCards))
+      .on("postgres_changes", { event: "*", schema: "public", table: "card_lent_ledger" }, () => { fetchBorrowerSummaries(allCards); refreshCombined(); })
+      .on("postgres_changes", { event: "*", schema: "public", table: "pocket_lent_ledger" }, refreshCombined)
+      .on("postgres_changes", { event: "*", schema: "public", table: "borrowers" }, () => { fetchBorrowerSummaries(allCards); refreshCombined(); })
       .on("postgres_changes", { event: "*", schema: "public", table: "cash_on_hand" }, () => fetchBalanceMaps(allCards))
       .on("postgres_changes", { event: "*", schema: "public", table: "card_transactions" }, () => fetchBalanceMaps(allCards))
       .subscribe();
     return () => { supabase.removeChannel(channel); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCardIds]);
+  }, [selectedCardIds, currentUser?.id]);
 
   const cleanUrl = (url?: string | null) => {
     if (!url) return "";
@@ -139,7 +164,31 @@ export default function LentsPage() {
 
     await fetchBalanceMaps(cardsList);
     await fetchBorrowerSummaries(cardsList);
+    if (user) await fetchCombinedBorrowerSummaries(user.id);
     setIsLoading(false);
+    setCombinedLoading(false);
+  };
+
+  // --- Combined summary: card ledger (সবার shared) + pocket ledger (শুধু নিজের) মিলিয়ে ---
+  const fetchCombinedBorrowerSummaries = async (myId: string) => {
+    const { data: borrowerRows } = await supabase.from("borrowers").select("*").order("name");
+    const { data: cardLedgerRows } = await supabase.from("card_lent_ledger").select("borrower_id, entry_type, amount, updated_at");
+    const { data: pocketLedgerRows } = await supabase.from("pocket_lent_ledger").select("borrower_id, entry_type, amount, updated_at").eq("recorded_by", myId);
+
+    const allRows = [...(cardLedgerRows || []), ...(pocketLedgerRows || [])];
+    const summaries: BorrowerSummary[] = (borrowerRows || [])
+      .map((b) => {
+        const rows = allRows.filter((r) => r.borrower_id === b.id);
+        const totalGiven = rows.filter((r) => r.entry_type === "given").reduce((s, r) => s + Number(r.amount), 0);
+        const totalCollected = rows.filter((r) => r.entry_type === "collected").reduce((s, r) => s + Number(r.amount), 0);
+        const lastActivity = rows.reduce((latest, r: any) => (r.updated_at > latest ? r.updated_at : latest), "");
+        return { ...b, totalGiven, netDue: totalGiven - totalCollected, lastActivity };
+      })
+      .filter((b) => allRows.some((r) => r.borrower_id === b.id))
+      // সদ্য এন্ট্রি/এডিট হওয়া borrower সবার আগে
+      .sort((a, b) => b.lastActivity.localeCompare(a.lastActivity));
+
+    setCombinedBorrowers(summaries);
   };
 
   // --- Cash / Card available balance maps (calculation অপরিবর্তিত) ---
@@ -192,7 +241,7 @@ export default function LentsPage() {
 
     const { data: borrowerRows } = await supabase.from("borrowers").select("*").order("name");
 
-    let ledgerQuery = supabase.from("card_lent_ledger").select("borrower_id, entry_type, amount, card_id");
+    let ledgerQuery = supabase.from("card_lent_ledger").select("borrower_id, entry_type, amount, card_id, updated_at");
     if (!isAllSelected && targetCardIds.length > 0) {
       ledgerQuery = ledgerQuery.in("card_id", targetCardIds);
     }
@@ -203,9 +252,11 @@ export default function LentsPage() {
         const rows = (ledgerRows || []).filter((r) => r.borrower_id === b.id);
         const totalGiven = rows.filter((r) => r.entry_type === "given").reduce((s, r) => s + Number(r.amount), 0);
         const totalCollected = rows.filter((r) => r.entry_type === "collected").reduce((s, r) => s + Number(r.amount), 0);
-        return { ...b, totalGiven, netDue: totalGiven - totalCollected };
+        const lastActivity = rows.reduce((latest, r: any) => (r.updated_at > latest ? r.updated_at : latest), "");
+        return { ...b, totalGiven, netDue: totalGiven - totalCollected, lastActivity };
       })
-      .filter((b) => (ledgerRows || []).some((r) => r.borrower_id === b.id));
+      .filter((b) => (ledgerRows || []).some((r) => r.borrower_id === b.id))
+      .sort((a, b) => b.lastActivity.localeCompare(a.lastActivity));
 
     setBorrowers(summaries);
   };
@@ -213,6 +264,7 @@ export default function LentsPage() {
   const refreshAll = async () => {
     await fetchBalanceMaps(allCards);
     await fetchBorrowerSummaries(allCards);
+    if (currentUser) await fetchCombinedBorrowerSummaries(currentUser.id);
   };
 
   const getUserCashForCard = (userId: string, cardId: string): number => {
@@ -254,6 +306,62 @@ export default function LentsPage() {
       openBorrower(data as Borrower);
     } catch (err: any) {
       alert("Error: " + err.message);
+    }
+  };
+
+  const refreshCombinedAll = async () => {
+    await fetchBalanceMaps(allCards);
+    await fetchBorrowerSummaries(allCards);
+    if (currentUser) await fetchCombinedBorrowerSummaries(currentUser.id);
+  };
+
+  const openCombinedBorrower = (b: Borrower) => {
+    setCombinedSelectedBorrower(b);
+    setCombinedPanelOpen(true);
+  };
+
+  const handlePickExistingCombined = (b: Borrower) => {
+    setIsCombinedPickerOpen(false);
+    openCombinedBorrower(b);
+  };
+
+  const handleCreateNewBorrowerCombined = async (name: string, phone: string) => {
+    if (!currentUser) {
+      alert("Profile লোড হয়নি, একটু পরে চেষ্টা করো।");
+      return;
+    }
+    try {
+      const { data, error } = await supabase
+        .from("borrowers")
+        .insert({ name, phone: phone || null, created_by: currentUser.id })
+        .select()
+        .single();
+      if (error) throw error;
+      setIsCombinedPickerOpen(false);
+      await fetchCombinedBorrowerSummaries(currentUser.id);
+      openCombinedBorrower(data as Borrower);
+    } catch (err: any) {
+      alert("Error: " + err.message);
+    }
+  };
+
+  const handleExportCombinedListPdf = async () => {
+    setIsExportingCombinedList(true);
+    try {
+      await exportBorrowerListPdf({
+        mode: "card", // লিস্ট-লেভেল সামারি টেমপ্লেট card/pocket দুটোতেই একই — লেবেল প্রভাবিত করে না
+        borrowers: combinedBorrowers.map((b) => ({
+          name: b.name,
+          phone: b.phone,
+          totalGiven: b.totalGiven,
+          totalCollected: b.totalGiven - b.netDue,
+          netDue: b.netDue,
+        })),
+      });
+    } catch (err: any) {
+      alert("PDF Export Error: " + err.message);
+    } finally {
+      setIsExportingCombinedList(false);
     }
   };
 
@@ -389,7 +497,7 @@ export default function LentsPage() {
         {/* Tab Switcher */}
         <div className="flex p-1 bg-white/[0.03] border border-white/10 rounded-2xl">
           <button
-            onClick={() => setActiveTab("card")}
+            onClick={() => switchTab("card")}
             className={`flex-1 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-colors ${
               activeTab === "card" ? "bg-[#f59e0b] text-black" : "text-slate-400"
             }`}
@@ -397,7 +505,15 @@ export default function LentsPage() {
             Card & Cash
           </button>
           <button
-            onClick={() => { setActiveTab("pocket"); setPocketVisited(true); }}
+            onClick={() => switchTab("combined")}
+            className={`flex-1 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-colors ${
+              activeTab === "combined" ? "bg-gradient-to-r from-[#f59e0b] to-emerald-400 text-black" : "text-slate-400"
+            }`}
+          >
+            Combined
+          </button>
+          <button
+            onClick={() => switchTab("pocket")}
             className={`flex-1 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-colors ${
               activeTab === "pocket" ? "bg-emerald-400 text-black" : "text-slate-400"
             }`}
@@ -410,13 +526,137 @@ export default function LentsPage() {
             তাই ট্যাব সুইচ করলে বারবার নতুন করে ডেটা লোড হয় না */}
         {pocketVisited && (
           <div className={activeTab === "pocket" ? "" : "hidden"}>
-            <LentsFromPocket />
+            <LentsFromPocket animKey={tabAnimKey.pocket} />
+          </div>
+        )}
+
+        {/* Combined: card (shared) + নিজের pocket entries মিলিয়ে — ডিফল্ট ট্যাব, তাই
+            প্রথম রেন্ডারেই mount হয়ে যায় */}
+        {combinedVisited && (
+          <div className={activeTab === "combined" ? "space-y-6" : "hidden"}>
+            {/* Summary — Card tab-এর মতোই glow-bar + staggered entrance, নিজস্ব রং (amber→emerald ব্লেন্ড, কারণ card+pocket দুটো মিলিয়েই এই ট্যাব) */}
+            <motion.section
+              key={`combined-summary-${tabAnimKey.combined}`}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5 }}
+              className="relative p-6 rounded-[32px] overflow-hidden border border-white/10 bg-white/[0.02] backdrop-blur-xl shadow-[0_20px_50px_rgba(0,0,0,0.5)]"
+            >
+              <div className="absolute top-0 left-1/2 -translate-x-1/2 w-40 h-1 bg-gradient-to-r from-transparent via-emerald-400 to-transparent opacity-50 blur-[2px]" />
+              <div className="absolute inset-0 bg-gradient-to-br from-[#f59e0b]/10 to-emerald-400/10 z-0" />
+              <div className="relative z-10 flex flex-col items-center text-center mt-2">
+                <motion.span
+                  initial={{ opacity: 0, letterSpacing: "0.4em" }}
+                  animate={{ opacity: 1, letterSpacing: "0.2em" }}
+                  transition={{ duration: 0.7, delay: 0.2 }}
+                  className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-1"
+                >
+                  Combined — Total Due
+                </motion.span>
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.85, filter: "blur(10px)" }}
+                  animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
+                  transition={{ duration: 0.6, delay: 0.35, ease: [0.22, 1, 0.36, 1] }}
+                  className="text-4xl font-black font-space tracking-tight bg-gradient-to-r from-[#f59e0b] via-white to-emerald-400 bg-clip-text text-transparent drop-shadow-[0_0_20px_rgba(52,211,153,0.4)]"
+                >
+                  ₹{combinedBorrowers.reduce((s, b) => s + Math.max(0, b.netDue), 0).toLocaleString("en-IN")}
+                </motion.div>
+                <motion.div
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.5, delay: 0.5 }}
+                  className="mt-4 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/5 border border-white/10 text-[10px] font-bold text-slate-300 shadow-inner"
+                >
+                  <AlertCircle className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Card + তোমার Pocket — একসাথে, time অনুযায়ী মিশিয়ে</span>
+                </motion.div>
+              </div>
+            </motion.section>
+
+            <button
+              onClick={() => setIsCombinedPickerOpen(true)}
+              className="w-full py-3.5 rounded-2xl border border-dashed border-white/15 text-slate-300 text-sm font-bold flex items-center justify-center gap-2 hover:bg-white/[0.03] transition-colors"
+            >
+              <Plus className="w-4 h-4" /> Borrower যোগ/বেছে নাও
+            </button>
+
+            <section>
+              <div className="flex items-center justify-between mb-4 px-1">
+                <h2 className="text-xs font-black text-transparent bg-clip-text bg-gradient-to-r from-[#f59e0b] to-emerald-400 uppercase tracking-wider">
+                  Combined Ledger
+                </h2>
+                {combinedBorrowers.length > 0 && (
+                  <button
+                    onClick={handleExportCombinedListPdf}
+                    disabled={isExportingCombinedList}
+                    className="flex items-center gap-1.5 text-[10px] font-bold text-slate-300 bg-white/5 border border-white/10 px-2.5 py-1.5 rounded-lg hover:bg-white/10 transition-colors disabled:opacity-50"
+                  >
+                    {isExportingCombinedList ? <Loader2 className="w-3 h-3 animate-spin" /> : <FileDown className="w-3 h-3" />}
+                    Export PDF
+                  </button>
+                )}
+              </div>
+              {combinedLoading ? (
+                <div className="space-y-3 pb-6">
+                  {[0, 1, 2, 3].map((i) => (
+                    <div key={i} className="p-4 bg-white/[0.03] border border-white/5 rounded-[24px] h-16 animate-pulse" style={{ animationDelay: `${i * 0.08}s` }} />
+                  ))}
+                </div>
+              ) : combinedBorrowers.length === 0 ? (
+                <p className="text-center text-sm text-slate-500 py-10">এখনো কোনো lending entry নেই</p>
+              ) : (
+                <div key={`combined-list-${tabAnimKey.combined}`} className="space-y-3 pb-6">
+                  <AnimatePresence>
+                    {combinedBorrowers.map((b, i) => (
+                      <motion.div
+                        key={b.id}
+                        layout
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ delay: i * 0.03 }}
+                        onClick={() => openCombinedBorrower(b)}
+                        className="p-4 bg-white/[0.03] border border-white/5 rounded-[24px] flex items-center justify-between cursor-pointer hover:bg-white/[0.05] transition-colors"
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-11 h-11 shrink-0 rounded-[14px] bg-white/10 border border-white/5 flex items-center justify-center">
+                            <User className="w-5 h-5 text-white" />
+                          </div>
+                          <div className="min-w-0">
+                            <h3 className="text-sm font-bold text-slate-100 truncate">{b.name}</h3>
+                            <p className="text-[10px] text-slate-400">Total Given: ₹{b.totalGiven.toLocaleString("en-IN")}</p>
+                            {b.netDue < 0 && (
+                              <span className="inline-block mt-1 text-[9px] font-bold uppercase tracking-wide text-emerald-400 bg-emerald-400/10 px-1.5 py-0.5 rounded-full border border-emerald-400/20">
+                                আমি নিয়েছি
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          {/* যাকে দিয়েছি (netDue>0) → red, যার থেকে নিয়েছি (netDue<0) → green */}
+                          {b.netDue > 0 ? (
+                            <span className="text-base font-black text-[#ef4444]">₹{b.netDue.toLocaleString("en-IN")}</span>
+                          ) : b.netDue < 0 ? (
+                            <span className="text-base font-black text-emerald-400">₹{Math.abs(b.netDue).toLocaleString("en-IN")}</span>
+                          ) : (
+                            <span className="text-[10px] font-bold uppercase tracking-wider bg-white/5 text-slate-400 px-2 py-1 rounded-full border border-white/10">
+                              Settled
+                            </span>
+                          )}
+                        </div>
+                      </motion.div>
+                    ))}
+                  </AnimatePresence>
+                </div>
+              )}
+            </section>
           </div>
         )}
 
         <div className={activeTab === "card" ? "space-y-6" : "hidden"}>
             {/* Summary */}
             <motion.section
+              key={`card-summary-${tabAnimKey.card}`}
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.5 }}
@@ -500,15 +740,16 @@ export default function LentsPage() {
               ) : borrowers.length === 0 ? (
                 <p className="text-center text-sm text-slate-500 py-10">এখনো কোনো lending entry নেই</p>
               ) : (
-                <div className="space-y-3 pb-6">
+                <div key={`card-list-${tabAnimKey.card}`} className="space-y-3 pb-6">
                   <AnimatePresence>
-                    {borrowers.map((b) => (
+                    {borrowers.map((b, i) => (
                       <motion.div
                         key={b.id}
                         layout
                         initial={{ opacity: 0, y: 10 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0 }}
+                        transition={{ delay: i * 0.03 }}
                         onClick={() => openBorrower(b)}
                         className="p-4 bg-white/[0.03] border border-white/5 rounded-[24px] flex items-center justify-between cursor-pointer hover:bg-white/[0.05] transition-colors"
                       >
@@ -519,13 +760,21 @@ export default function LentsPage() {
                           <div className="min-w-0">
                             <h3 className="text-sm font-bold text-slate-100 truncate">{b.name}</h3>
                             <p className="text-[10px] text-slate-400">Total Given: ₹{b.totalGiven.toLocaleString("en-IN")}</p>
+                            {b.netDue < 0 && (
+                              <span className="inline-block mt-1 text-[9px] font-bold uppercase tracking-wide text-emerald-400 bg-emerald-400/10 px-1.5 py-0.5 rounded-full border border-emerald-400/20">
+                                আমি নিয়েছি
+                              </span>
+                            )}
                           </div>
                         </div>
                         <div className="text-right shrink-0">
+                          {/* যাকে দিয়েছি (netDue>0) → red, যার থেকে নিয়েছি (netDue<0) → green */}
                           {b.netDue > 0 ? (
-                            <span className="text-base font-black text-white">₹{b.netDue.toLocaleString("en-IN")}</span>
+                            <span className="text-base font-black text-[#ef4444]">₹{b.netDue.toLocaleString("en-IN")}</span>
+                          ) : b.netDue < 0 ? (
+                            <span className="text-base font-black text-emerald-400">₹{Math.abs(b.netDue).toLocaleString("en-IN")}</span>
                           ) : (
-                            <span className="text-[10px] font-bold uppercase tracking-wider bg-emerald-500/10 text-emerald-400 px-2 py-1 rounded-full border border-emerald-500/20">
+                            <span className="text-[10px] font-bold uppercase tracking-wider bg-white/5 text-slate-400 px-2 py-1 rounded-full border border-white/10">
                               Settled
                             </span>
                           )}
@@ -559,6 +808,28 @@ export default function LentsPage() {
         cardAvailableMap={cardAvailableMap}
         getUserCashForCard={getUserCashForCard}
         onDataChanged={refreshAll}
+      />
+
+      <BorrowerPicker
+        open={isCombinedPickerOpen}
+        onClose={() => setIsCombinedPickerOpen(false)}
+        onSelectExisting={handlePickExistingCombined}
+        onCreateNew={handleCreateNewBorrowerCombined}
+        accent="amber"
+      />
+
+      <BorrowerProfilePanel
+        open={combinedPanelOpen}
+        onClose={() => setCombinedPanelOpen(false)}
+        borrower={combinedSelectedBorrower}
+        mode="combined"
+        currentUser={currentUser}
+        allProfiles={allProfiles}
+        accessibleCards={accessibleCards}
+        cardCashMap={cardCashMap}
+        cardAvailableMap={cardAvailableMap}
+        getUserCashForCard={getUserCashForCard}
+        onDataChanged={refreshCombinedAll}
       />
 
       <BottomNav />

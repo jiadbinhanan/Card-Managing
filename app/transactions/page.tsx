@@ -3,38 +3,35 @@
 import { useState, useEffect, useMemo } from "react";
 import { useCardStore } from "@/store/cardStore";
 import { motion, AnimatePresence, type Variants } from "motion/react";
-import { 
-  ArrowDownLeft, 
-  CreditCard, 
-  Plus, 
-  Wallet, 
-  Banknote,
+import {
+  ArrowDownLeft,
+  CreditCard,
+  Plus,
+  Wallet,
   Receipt,
   AlertCircle,
   CheckCircle2,
-  QrCode,
   ChevronDown,
-  Edit3,
   Filter,
-  Zap,
   CalendarClock,
-  ShieldCheck,
   CalendarDays,
   Check,
-  AlertTriangle,
-  Info
+  FileDown,
 } from "lucide-react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
 import { BottomNav } from "@/components/BottomNav";
 import { supabase } from "@/lib/supabase";
 import Link from "next/link";
 
 // WaAlert ফাইল থেকে Alert লজিক ইমপোর্ট করা হলো
 import { sendTransactionAlerts } from "./WaAlert";
+// এন্ট্রি ফর্ম মোডাল আলাদা ফাইলে
+import RecordEntryModal, { type CardData, type Profile, type QR, type CashSourceRow } from "./RecordEntryModal";
+// PDF export বিল্ডার আলাদা ফাইলে
+import { exportTransactionsPdf, type TransactionPdfRow } from "./pdfExport";
 
 // --- Interfaces ---
+interface CashSourceBreakdownEntry { card_id: string; amount: number; }
+
 interface Transaction {
   id: string;
   type: 'withdrawal' | 'bill_payment';
@@ -47,6 +44,7 @@ interface Transaction {
   settled_to_user?: string;
   card_id?: string;
   remarks?: string;
+  cash_source_breakdown?: CashSourceBreakdownEntry[] | null;
   qrs?: { merchant_name: string };
   profiles?: { name: string; avatar_url?: string };
   cards?: { card_name: string; last_4_digits: string };
@@ -65,34 +63,14 @@ interface Spend {
   cards?: { card_name: string; last_4_digits: string };
 }
 
-interface QR {
-  id: string;
-  merchant_name: string;
-  status: string;
-}
-
-interface Profile {
-  id: string;
-  name: string;
-  avatar_url?: string;
-  phone?: string;
-}
-
-interface CardData {
-  id: string;
-  card_name: string;
-  last_4_digits: string;
-  total_limit: number;
-  is_primary: boolean;
-  parent_card_id?: string;
-  bill_gen_day?: number;
-  bill_due_day?: number;
-}
-
 interface CardAccess {
   card_id: string;
   user_id: string;
   role: string;
+}
+
+function uid() {
+  return Math.random().toString(36).slice(2, 10);
 }
 
 // Stagger Animation Variants
@@ -124,7 +102,7 @@ export default function TransactionsPage() {
   const [customDateRange, setCustomDateRange] = useState<{ start: string; end: string }>({ start: "", end: "" });
 
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [isCardDropdownOpen, setIsCardDropdownOpen] = useState(false); 
+  const [isCardDropdownOpen, setIsCardDropdownOpen] = useState(false);
   const [txType, setTxType] = useState<"rotate" | "spend" | "bill">("bill");
 
   // Data States
@@ -140,6 +118,7 @@ export default function TransactionsPage() {
   const [currentUser, setCurrentUser] = useState<Profile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [imgError, setImgError] = useState(false);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
 
   const { globalSelectedCardIds, setGlobalSelectedCardIds } = useCardStore();
 
@@ -159,10 +138,13 @@ export default function TransactionsPage() {
   const [billMethod, setBillMethod] = useState<"cash_on_hand" | "own_pocket">("cash_on_hand");
   const [remarks, setRemarks] = useState("");
   const [selectedUserId, setSelectedUserId] = useState("");
-  const [entryCardId, setEntryCardId] = useState("");      
-  const [billCardId, setBillCardId] = useState("");         
+  const [entryCardId, setEntryCardId] = useState("");
+  const [billCardId, setBillCardId] = useState("");
   const [txDate, setTxDate] = useState("");
   const [isDebtRepayment, setIsDebtRepayment] = useState(false);
+
+  // ── নতুন: ম্যানুয়াল multi-source cash-on-hand allocation (শুধু বিল পে) ──
+  const [cashSources, setCashSources] = useState<CashSourceRow[]>([{ uid: uid(), cardId: "", amount: "" }]);
 
   /* eslint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
@@ -377,45 +359,62 @@ export default function TransactionsPage() {
   const entryFamilyCardIds = entryPrimaryId ? allCards.filter(c => c.id === entryPrimaryId || c.parent_card_id === entryPrimaryId).map(c => c.id) : [];
   const currentActorCardCash = entryFamilyCardIds.reduce((sum, id) => sum + (actorCashByCard[id] || 0), 0);
 
-  const billFamilyCardIds = billCardId ? allCards.filter(c => c.id === billCardId || c.parent_card_id === billCardId).map(c => c.id) : [];
+  // Bill-পে-এর জন্য: currentUser-এর সব কার্ড জুড়ে cash_on_hand ব্যালেন্স (এখন আর
+  // শুধু বিল-কার্ডের ফ্যামিলিতে সীমাবদ্ধ না — যেকোনো কার্ডের ক্যাশ সোর্স হিসেবে বাছা যাবে)
   const currentUserCashByCard = userCardCashMap[currentUser?.id || ''] || {};
-  const totalBillCash = billFamilyCardIds.reduce((sum, id) => sum + (currentUserCashByCard[id] || 0), 0);
 
   const amtNum = Number(amount) || 0;
-  let cardSplitAmt = 0;
-  let cashSplitAmt = 0;
-  let pocketSplitAmt = 0;
-  let isSplitting = false;
 
+  // ── SPEND split logic (অপরিবর্তিত আচরণ) ──
+  let cardSplitAmt = 0;
+  let spendCashSplitAmt = 0;
+  let isSpendSplitting = false;
   if (txType === 'spend') {
     if (spendMethod === 'credit_card') {
       if (amtNum > currentFamilyLimit && currentFamilyLimit > 0) {
         cardSplitAmt = currentFamilyLimit;
-        cashSplitAmt = amtNum - currentFamilyLimit;
-        isSplitting = true;
+        spendCashSplitAmt = amtNum - currentFamilyLimit;
+        isSpendSplitting = true;
       } else { cardSplitAmt = amtNum; }
     } else {
       if (amtNum > currentActorCardCash && currentActorCardCash > 0) {
-        cashSplitAmt = currentActorCardCash;
+        spendCashSplitAmt = currentActorCardCash;
         cardSplitAmt = amtNum - currentActorCardCash;
-        isSplitting = true;
-      } else { cashSplitAmt = amtNum; }
+        isSpendSplitting = true;
+      } else { spendCashSplitAmt = amtNum; }
     }
-  } else if (txType === 'bill') {
-    if (billMethod === 'cash_on_hand') {
-      if (amtNum > totalBillCash && totalBillCash > 0) {
-        cashSplitAmt = totalBillCash;
-        pocketSplitAmt = amtNum - totalBillCash;
-        isSplitting = true;
-      } else { cashSplitAmt = amtNum; }
-    } else { pocketSplitAmt = amtNum; }
   }
 
+  // ── BILL: ম্যানুয়াল multi-source cash allocation ──
+  const validCashSources = cashSources
+    .filter(s => s.cardId && Number(s.amount) > 0)
+    .map(s => ({ cardId: s.cardId, amount: Number(s.amount) }));
+  const cashAllocatedTotal = validCashSources.reduce((sum, s) => sum + s.amount, 0);
+  const pocketSplitAmt = billMethod === 'cash_on_hand'
+    ? Math.max(0, amtNum - cashAllocatedTotal)
+    : (billMethod === 'own_pocket' ? amtNum : 0);
+
+  const allocationValid = billMethod !== 'cash_on_hand' || (
+    cashAllocatedTotal <= amtNum &&
+    validCashSources.every(s => s.amount <= (currentUserCashByCard[s.cardId] || 0))
+  );
+
+  const canSave = amtNum > 0 &&
+    (txType !== 'bill' || (!!billCardId && allocationValid)) &&
+    (txType !== 'spend' || !!entryCardId) &&
+    (txType !== 'rotate' || !!entryCardId);
+
+  // মোডাল খোলা অবস্থায় বিল-কার্ড বদলালে বা প্রথমবার খুললে ডিফল্ট সোর্স-রো সেট করা
   useEffect(() => {
-    if (txType === 'bill' && billMethod === 'cash_on_hand' && (Number(amount) || 0) > totalBillCash) {
-      setBillMethod('own_pocket');
+    if (!isModalOpen || txType !== 'bill') return;
+    const hasAnyCardSelected = cashSources.some(s => s.cardId);
+    if (!hasAnyCardSelected) {
+      const defaultCardId = (currentUserCashByCard[billCardId] || 0) > 0
+        ? billCardId
+        : (Object.keys(currentUserCashByCard).find(id => currentUserCashByCard[id] > 0) || '');
+      setCashSources([{ uid: uid(), cardId: defaultCardId, amount: '' }]);
     }
-  }, [amount, totalBillCash, txType, billMethod]);
+  }, [isModalOpen, txType, billCardId]);
 
   async function updateCashBalance(userId: string, cardId: string, amt: number, type: 'credit' | 'debit', note: string) {
     const { data: coh } = await supabase.from('cash_on_hand').select('*').eq('user_id', userId).eq('card_id', cardId).maybeSingle();
@@ -444,21 +443,12 @@ export default function TransactionsPage() {
     if (cashLedgerError) throw cashLedgerError;
   };
 
-  async function deductBillCash(userId: string, totalAmt: number, primaryCardId: string, allFamilyCardIds: string[], note: string) {
-    let remaining = totalAmt;
-    const primaryBal = currentUserCashByCard[primaryCardId] || 0;
-    if (primaryBal > 0 && remaining > 0) {
-      const deductFromPrimary = Math.min(primaryBal, remaining);
-      await updateCashBalance(userId, primaryCardId, deductFromPrimary, 'debit', note);
-      remaining -= deductFromPrimary;
-    }
-    for (const cid of allFamilyCardIds.filter(id => id !== primaryCardId)) {
-      if (remaining <= 0) break;
-      const subBal = currentUserCashByCard[cid] || 0;
-      if (subBal > 0) {
-        const deductFromSub = Math.min(subBal, remaining);
-        await updateCashBalance(userId, cid, deductFromSub, 'debit', note);
-        remaining -= deductFromSub;
+  // পুরনো family-cascading deductBillCash() এর বদলে — ইউজার নিজে যে কার্ড+amount
+  // বেছেছে ঠিক সেখান থেকেই কাটা হবে, কোনো implicit family fallback নেই।
+  async function deductBillCashFromSources(userId: string, sources: { cardId: string; amount: number }[], note: string) {
+    for (const src of sources) {
+      if (src.amount > 0) {
+        await updateCashBalance(userId, src.cardId, src.amount, 'debit', note);
       }
     }
   }
@@ -481,12 +471,12 @@ export default function TransactionsPage() {
         const newPaidAmt = paidAmt + amt;
         let cycleStatus = cycle.status;
 
-        if (newPaidAmt >= generatedAmt) { 
-            cycleStatus = 'paid'; 
-            result.remainingDue = 0; 
-        } else if (newPaidAmt > 0) { 
-            cycleStatus = 'partially_paid'; 
-            result.remainingDue = generatedAmt - newPaidAmt; 
+        if (newPaidAmt >= generatedAmt) {
+            cycleStatus = 'paid';
+            result.remainingDue = 0;
+        } else if (newPaidAmt > 0) {
+            cycleStatus = 'partially_paid';
+            result.remainingDue = generatedAmt - newPaidAmt;
         }
 
         await supabase.from('billing_cycles').update({ paid_amount: newPaidAmt, status: cycleStatus }).eq('id', cycle.id);
@@ -507,6 +497,11 @@ export default function TransactionsPage() {
       alert("Please select a card."); return;
     }
 
+    if (txType === 'bill' && billMethod === 'cash_on_hand' && !allocationValid) {
+      alert("Cash allocation invalid — check per-card balances and total doesn't exceed the bill amount.");
+      return;
+    }
+
     const finalActingUserId = actingUserId;
     const finalDate = txDate || new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
     const profileData = profiles.find(p => p.id === finalActingUserId) || { name: 'User' };
@@ -519,6 +514,12 @@ export default function TransactionsPage() {
     const cardDataPayload = activeCardObj ? { card_name: activeCardObj.card_name, last_4_digits: activeCardObj.last_4_digits } : undefined;
     let billResult: { cycleId: string | null; status: string | null; remainingDue: number } = { cycleId: null, status: null, remainingDue: 0 };
 
+    // বিল-পে-এর cash অংশ ও pocket অংশ (multi-source থেকে)
+    const billCashAmt = txType === 'bill' && billMethod === 'cash_on_hand' ? cashAllocatedTotal : 0;
+    const billPocketAmt = txType === 'bill' ? pocketSplitAmt : 0;
+    const billIsSplitting = billCashAmt > 0 && billPocketAmt > 0;
+    const breakdownForInsert = billCashAmt > 0 ? validCashSources.map(s => ({ card_id: s.cardId, amount: s.amount })) : null;
+
     setIsModalOpen(false);
 
     // 1. OPTIMISTIC UI UPDATES
@@ -527,16 +528,16 @@ export default function TransactionsPage() {
       setTransactions(prev => [tempTx, ...prev]);
       if (activePrimaryId) setFamilyLimitsMap(prev => ({ ...prev, [activePrimaryId]: prev[activePrimaryId] - amtNum }));
     } else if (txType === "spend") {
-      if (isSplitting) {
+      if (isSpendSplitting) {
         if (cardSplitAmt > 0) {
           const t: any = { id: `temp-c-${Date.now()}`, user_id: finalActingUserId, amount: cardSplitAmt, payment_method: 'credit_card', remarks, spend_date: finalDate, profiles: profileData, card_id: activeCardId, cards: cardDataPayload };
           setSpends(prev => [t, ...prev]);
           if (activePrimaryId) setFamilyLimitsMap(prev => ({ ...prev, [activePrimaryId]: prev[activePrimaryId] - cardSplitAmt }));
         }
-        if (cashSplitAmt > 0) {
-          const t: any = { id: `temp-h-${Date.now()}`, user_id: finalActingUserId, amount: cashSplitAmt, payment_method: 'cash_on_hand', remarks: remarks + " (Auto-Split)", spend_date: finalDate, profiles: profileData, card_id: activeCardId, cards: cardDataPayload };
+        if (spendCashSplitAmt > 0) {
+          const t: any = { id: `temp-h-${Date.now()}`, user_id: finalActingUserId, amount: spendCashSplitAmt, payment_method: 'cash_on_hand', remarks: remarks + " (Auto-Split)", spend_date: finalDate, profiles: profileData, card_id: activeCardId, cards: cardDataPayload };
           setSpends(prev => [t, ...prev]);
-          setUserCashMap(prev => ({ ...prev, [finalActingUserId]: (prev[finalActingUserId] || 0) - cashSplitAmt }));
+          setUserCashMap(prev => ({ ...prev, [finalActingUserId]: (prev[finalActingUserId] || 0) - spendCashSplitAmt }));
         }
       } else {
         const t: any = { id: `temp-${Date.now()}`, user_id: finalActingUserId, amount: amtNum, payment_method: spendMethod, remarks, spend_date: finalDate, profiles: profileData, card_id: activeCardId, cards: cardDataPayload };
@@ -549,20 +550,32 @@ export default function TransactionsPage() {
         const t: any = { id: `temp-r-${Date.now()}`, user_id: finalActingUserId, amount: -amtNum, spend_type: 'repayment', payment_method: billMethod, remarks: "Debt Cleared" + (remarks ? `: ${remarks}` : ''), spend_date: finalDate, profiles: profileData, card_id: activeCardId, cards: cardDataPayload };
         setSpends(prev => [t, ...prev]);
       }
-      if (isSplitting) {
-        if (cashSplitAmt > 0) {
-          const t: any = { id: `temp-cb-${Date.now()}`, type: 'bill_payment', amount: cashSplitAmt, status: 'settled', transaction_date: finalDate, payment_method: 'cash_on_hand', profiles: profileData, remarks, card_id: activeCardId, cards: cardDataPayload };
+      if (billIsSplitting) {
+        if (billCashAmt > 0) {
+          const t: any = { id: `temp-cb-${Date.now()}`, type: 'bill_payment', amount: billCashAmt, status: 'settled', transaction_date: finalDate, payment_method: 'cash_on_hand', profiles: profileData, remarks, card_id: activeCardId, cards: cardDataPayload, cash_source_breakdown: breakdownForInsert };
           setTransactions(prev => [t, ...prev]);
-          setUserCashMap(prev => ({ ...prev, [finalActingUserId]: (prev[finalActingUserId] || 0) - cashSplitAmt }));
+          validCashSources.forEach(s => {
+            setUserCardCashMap(prev => ({
+              ...prev,
+              [finalActingUserId]: { ...(prev[finalActingUserId] || {}), [s.cardId]: (prev[finalActingUserId]?.[s.cardId] || 0) - s.amount }
+            }));
+          });
         }
-        if (pocketSplitAmt > 0) {
-          const t: any = { id: `temp-pb-${Date.now()}`, type: 'bill_payment', amount: pocketSplitAmt, status: 'settled', transaction_date: finalDate, payment_method: 'own_pocket', profiles: profileData, remarks, card_id: activeCardId, cards: cardDataPayload };
+        if (billPocketAmt > 0) {
+          const t: any = { id: `temp-pb-${Date.now()}`, type: 'bill_payment', amount: billPocketAmt, status: 'settled', transaction_date: finalDate, payment_method: 'own_pocket', profiles: profileData, remarks, card_id: activeCardId, cards: cardDataPayload };
           setTransactions(prev => [t, ...prev]);
         }
       } else {
-        const t: any = { id: `temp-b-${Date.now()}`, type: 'bill_payment', amount: amtNum, status: 'settled', transaction_date: finalDate, payment_method: billMethod, profiles: profileData, remarks, card_id: activeCardId, cards: cardDataPayload };
+        const t: any = { id: `temp-b-${Date.now()}`, type: 'bill_payment', amount: amtNum, status: 'settled', transaction_date: finalDate, payment_method: billMethod, profiles: profileData, remarks, card_id: activeCardId, cards: cardDataPayload, cash_source_breakdown: billMethod === 'cash_on_hand' ? breakdownForInsert : undefined };
         setTransactions(prev => [t, ...prev]);
-        if (billMethod === "cash_on_hand") setUserCashMap(prev => ({ ...prev, [finalActingUserId]: (prev[finalActingUserId] || 0) - amtNum }));
+        if (billMethod === "cash_on_hand") {
+          validCashSources.forEach(s => {
+            setUserCardCashMap(prev => ({
+              ...prev,
+              [finalActingUserId]: { ...(prev[finalActingUserId] || {}), [s.cardId]: (prev[finalActingUserId]?.[s.cardId] || 0) - s.amount }
+            }));
+          });
+        }
       }
       if (activePrimaryId) setFamilyLimitsMap(prev => ({ ...prev, [activePrimaryId]: prev[activePrimaryId] + amtNum }));
     }
@@ -575,11 +588,11 @@ export default function TransactionsPage() {
         await supabase.from('card_transactions').insert({ amount: amtNum, type: 'withdrawal', status: 'pending_settlement', qr_id: selectedQrId, transaction_date: finalDate, recorded_by: finalActingUserId, remarks, card_id: activeCardId });
       }
       else if (txType === "spend") {
-        if (isSplitting) {
+        if (isSpendSplitting) {
           if (cardSplitAmt > 0) await supabase.from('spends').insert({ user_id: finalActingUserId, amount: cardSplitAmt, spend_type: 'personal', payment_method: 'credit_card', remarks, spend_date: finalDate, card_id: activeCardId });
-          if (cashSplitAmt > 0) {
-            await supabase.from('spends').insert({ user_id: finalActingUserId, amount: cashSplitAmt, spend_type: 'personal', payment_method: 'cash_on_hand', remarks: remarks + " (Auto-Split)", spend_date: finalDate, card_id: activeCardId });
-            await updateCashBalance(finalActingUserId, activeCardId, cashSplitAmt, 'debit', `Personal spend ${remarks ? '- ' + remarks : ''} (Auto-Split)`);
+          if (spendCashSplitAmt > 0) {
+            await supabase.from('spends').insert({ user_id: finalActingUserId, amount: spendCashSplitAmt, spend_type: 'personal', payment_method: 'cash_on_hand', remarks: remarks + " (Auto-Split)", spend_date: finalDate, card_id: activeCardId });
+            await updateCashBalance(finalActingUserId, activeCardId, spendCashSplitAmt, 'debit', `Personal spend ${remarks ? '- ' + remarks : ''} (Auto-Split)`);
           }
         } else {
           await supabase.from('spends').insert({ user_id: finalActingUserId, amount: amtNum, spend_type: 'personal', payment_method: spendMethod, remarks, spend_date: finalDate, card_id: activeCardId });
@@ -592,15 +605,15 @@ export default function TransactionsPage() {
 
         if (isDebtRepayment) await supabase.from('spends').insert({ user_id: finalActingUserId, amount: -amtNum, spend_type: 'repayment', payment_method: billMethod, remarks: "Debt Cleared" + (remarks ? `: ${remarks}` : ''), spend_date: finalDate, card_id: activeCardId });
 
-        if (isSplitting) {
-          if (cashSplitAmt > 0) {
-            await supabase.from('card_transactions').insert({ amount: cashSplitAmt, type: 'bill_payment', status: 'settled', transaction_date: finalDate, recorded_by: finalActingUserId, payment_method: 'cash_on_hand', remarks, card_id: activeCardId, billing_cycle_id: activeCycleId });
-            await deductBillCash(finalActingUserId, cashSplitAmt, activeCardId, billFamilyCardIds, `Bill payment ${remarks ? '- ' + remarks : ''}`);
+        if (billIsSplitting) {
+          if (billCashAmt > 0) {
+            await supabase.from('card_transactions').insert({ amount: billCashAmt, type: 'bill_payment', status: 'settled', transaction_date: finalDate, recorded_by: finalActingUserId, payment_method: 'cash_on_hand', remarks, card_id: activeCardId, billing_cycle_id: activeCycleId, cash_source_breakdown: breakdownForInsert });
+            await deductBillCashFromSources(finalActingUserId, validCashSources, `Bill payment ${remarks ? '- ' + remarks : ''}`);
           }
-          if (pocketSplitAmt > 0) await supabase.from('card_transactions').insert({ amount: pocketSplitAmt, type: 'bill_payment', status: 'settled', transaction_date: finalDate, recorded_by: finalActingUserId, payment_method: 'own_pocket', remarks, card_id: activeCardId, billing_cycle_id: activeCycleId });
+          if (billPocketAmt > 0) await supabase.from('card_transactions').insert({ amount: billPocketAmt, type: 'bill_payment', status: 'settled', transaction_date: finalDate, recorded_by: finalActingUserId, payment_method: 'own_pocket', remarks, card_id: activeCardId, billing_cycle_id: activeCycleId });
         } else {
-          await supabase.from('card_transactions').insert({ amount: amtNum, type: 'bill_payment', status: 'settled', transaction_date: finalDate, recorded_by: finalActingUserId, payment_method: billMethod, remarks, card_id: activeCardId, billing_cycle_id: activeCycleId });
-          if (billMethod === "cash_on_hand") await deductBillCash(finalActingUserId, amtNum, activeCardId, billFamilyCardIds, `Bill payment ${remarks ? '- ' + remarks : ''}`);
+          await supabase.from('card_transactions').insert({ amount: amtNum, type: 'bill_payment', status: 'settled', transaction_date: finalDate, recorded_by: finalActingUserId, payment_method: billMethod, remarks, card_id: activeCardId, billing_cycle_id: activeCycleId, cash_source_breakdown: billMethod === 'cash_on_hand' ? breakdownForInsert : null });
+          if (billMethod === "cash_on_hand") await deductBillCashFromSources(finalActingUserId, validCashSources, `Bill payment ${remarks ? '- ' + remarks : ''}`);
         }
       }
 
@@ -648,6 +661,7 @@ export default function TransactionsPage() {
     setSpendMethod("credit_card");
     setBillMethod("cash_on_hand");
     setIsDebtRepayment(false);
+    setCashSources([{ uid: uid(), cardId: "", amount: "" }]);
     setTxDate(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }));
   };
 
@@ -657,11 +671,20 @@ export default function TransactionsPage() {
     setIsModalOpen(true);
   };
 
+  // কার্ড আইডি → লেবেল (breakdown ডিসপ্লে/PDF-এর জন্য)
+  const cardLabel = (cardId?: string | null) => {
+    if (!cardId) return "Unknown Card";
+    const c = allCards.find(cc => cc.id === cardId);
+    return c ? `${c.card_name} (**${c.last_4_digits})` : "Unknown Card";
+  };
+
   const groupedLedger = useMemo(() => {
     const list: any[] = [];
 
     transactions.forEach(t => {
       const cardInfo = t.cards ? `${t.cards.card_name} (**${t.cards.last_4_digits})` : 'Card Not Linked';
+      const hasCrossCardCash = !!(t.cash_source_breakdown && t.cash_source_breakdown.length > 0 &&
+        t.cash_source_breakdown.some(b => b.card_id !== t.card_id));
       list.push({
         id: `tx-${t.id}`,
         userId: t.recorded_by,
@@ -677,7 +700,12 @@ export default function TransactionsPage() {
         bg: t.type === 'withdrawal' ? 'bg-rose-500/10' : 'bg-emerald-500/10',
         remarks: t.remarks || '',
         cardDetails: cardInfo,
-        paymentMethod: t.type === 'withdrawal' ? 'Credit Card' : (t.payment_method === 'own_pocket' ? 'Own Pocket' : 'Cash on Hand')
+        paymentMethod: t.type === 'withdrawal' ? 'Credit Card' : (t.payment_method === 'own_pocket' ? 'Own Pocket' : 'Cash on Hand'),
+        cashSourceBreakdown: t.cash_source_breakdown && t.cash_source_breakdown.length > 0
+          ? t.cash_source_breakdown.map(b => ({ cardLabel: cardLabel(b.card_id), amount: b.amount }))
+          : undefined,
+        isCrossCardCash: hasCrossCardCash,
+        recordedBy: t.profiles?.name || 'User',
       });
     });
 
@@ -700,7 +728,8 @@ export default function TransactionsPage() {
         isRepaymentFlag: isRepayment,
         remarks: s.remarks || '',
         cardDetails: cardInfo,
-        paymentMethod: s.payment_method === 'credit_card' ? 'Credit Card' : 'Cash on Hand'
+        paymentMethod: s.payment_method === 'credit_card' ? 'Credit Card' : 'Cash on Hand',
+        recordedBy: s.profiles?.name || 'User',
       });
     });
 
@@ -732,7 +761,7 @@ export default function TransactionsPage() {
       acc[dateStr].push(item);
       return acc;
     }, {} as Record<string, any[]>);
-  }, [transactions, spends, filterUser, activeTab, filterDateType, customDateRange]);
+  }, [transactions, spends, filterUser, activeTab, filterDateType, customDateRange, allCards]);
 
   const sortedVaultCards = useMemo(() => {
     const primaries = accessibleCards.filter(c => c.is_primary);
@@ -749,6 +778,36 @@ export default function TransactionsPage() {
 
   const toggleExpand = (id: string) => {
     setExpandedId(expandedId === id ? null : id);
+  };
+
+  const handleExportPdf = async () => {
+    setIsExportingPdf(true);
+    try {
+      const allItems: any[] = Object.values(groupedLedger).flat();
+      const rows: TransactionPdfRow[] = allItems.map((item: any) => ({
+        date: item.displayDate.split('-').reverse().join('/'),
+        type: item.type === 'withdrawal' ? 'Rotation' : item.type === 'bill_payment' ? 'Bill Payment' : item.isRepaymentFlag ? 'Repayment' : 'Spend',
+        title: item.title,
+        direction: (item.type === 'withdrawal' || (item.type === 'spend' && !item.isRepaymentFlag)) ? 'debit' : 'credit',
+        amount: item.amount,
+        cardDetails: item.cardDetails,
+        paymentMethod: item.paymentMethod,
+        cashBreakdown: item.cashSourceBreakdown,
+        recordedBy: item.recordedBy,
+        remarks: item.remarks,
+      }));
+
+      const tabLabel = { all: "All", rotations: "Rotations", spends: "Spends", bill_paid: "Bill Paid" }[activeTab];
+      const userLabel = filterUser === 'all' ? 'All Users' : (profiles.find(p => p.id === filterUser)?.name || 'User');
+      const dateLabel = { all: "All Time", today: "Today", month: "This Month", custom: "Custom Range" }[filterDateType];
+
+      await exportTransactionsPdf({ rows, filterLabel: `${tabLabel} • ${userLabel} • ${dateLabel}` });
+    } catch (e) {
+      console.error("PDF export failed:", e);
+      alert("PDF export failed. Please try again.");
+    } finally {
+      setIsExportingPdf(false);
+    }
   };
 
   const animationKey = `${activeTab}-${filterUser}-${filterDateType}-${customDateRange.start}-${customDateRange.end}`;
@@ -797,81 +856,97 @@ export default function TransactionsPage() {
           </div>
         </div>
 
-        {/* Custom Header Dropdown — Multi-Select */}
-        <div className="relative">
+        <div className="flex items-center gap-2">
+          {/* PDF Export */}
           <button
-            onClick={() => setIsCardDropdownOpen(!isCardDropdownOpen)}
-            className="flex items-center gap-2 bg-white/[0.03] border border-white/10 text-white text-[10px] font-bold py-2 pl-3 pr-3 rounded-xl outline-none focus:border-[#0ea5e9] shadow-[0_0_20px_rgba(14,165,233,0.15)] backdrop-blur-md"
+            onClick={handleExportPdf}
+            disabled={isExportingPdf}
+            className="h-9 w-9 flex items-center justify-center bg-white/[0.03] border border-white/10 text-white rounded-xl outline-none focus:border-[#0ea5e9] shadow-[0_0_20px_rgba(14,165,233,0.15)] backdrop-blur-md disabled:opacity-40"
+            title="Export PDF"
           >
-            <span className="truncate max-w-[120px]">
-              {globalSelectedCardIds.includes('all')
-                ? 'All Vault Cards'
-                : globalSelectedCardIds.length === 1
-                  ? (() => {
-                      const card = allCards.find(c => c.id === globalSelectedCardIds[0]);
-                      return card ? `${card.card_name} (**${card.last_4_digits})` : 'Select Card';
-                    })()
-                  : `${globalSelectedCardIds.length} Cards`
-              }
-            </span>
-            <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-300 ${isCardDropdownOpen ? 'rotate-180' : ''}`} />
+            {isExportingPdf ? (
+              <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: "linear" }} className="w-3.5 h-3.5 rounded-full border-b-2 border-[#0ea5e9]" />
+            ) : (
+              <FileDown className="w-4 h-4" />
+            )}
           </button>
 
-          <AnimatePresence>
-            {isCardDropdownOpen && (
-              <>
-                <div className="fixed inset-0 z-40" onClick={() => setIsCardDropdownOpen(false)} />
-                <motion.div
-                  initial={{ opacity: 0, y: -10, scaleY: 0.95 }}
-                  animate={{ opacity: 1, y: 0, scaleY: 1 }}
-                  exit={{ opacity: 0, y: -10, scaleY: 0.95 }}
-                  transition={{ duration: 0.15, ease: "easeOut" }}
-                  className="absolute right-0 top-[calc(100%+8px)] w-60 bg-[#050505]/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-[0_15px_40px_rgba(0,0,0,0.8)] overflow-hidden z-50 py-1"
-                  style={{ transformOrigin: 'top right' }}
-                >
-                  <button
-                    onClick={() => setGlobalSelectedCardIds(['all'])}
-                    className={`w-full text-left px-4 py-3 text-xs font-bold transition-colors border-b border-white/5 flex items-center justify-between ${globalSelectedCardIds.includes('all') ? 'text-[#0ea5e9] bg-[#0ea5e9]/10' : 'text-slate-300 hover:bg-white/5'}`}
+          {/* Custom Header Dropdown — Multi-Select */}
+          <div className="relative">
+            <button
+              onClick={() => setIsCardDropdownOpen(!isCardDropdownOpen)}
+              className="flex items-center gap-2 bg-white/[0.03] border border-white/10 text-white text-[10px] font-bold py-2 pl-3 pr-3 rounded-xl outline-none focus:border-[#0ea5e9] shadow-[0_0_20px_rgba(14,165,233,0.15)] backdrop-blur-md"
+            >
+              <span className="truncate max-w-[120px]">
+                {globalSelectedCardIds.includes('all')
+                  ? 'All Vault Cards'
+                  : globalSelectedCardIds.length === 1
+                    ? (() => {
+                        const card = allCards.find(c => c.id === globalSelectedCardIds[0]);
+                        return card ? `${card.card_name} (**${card.last_4_digits})` : 'Select Card';
+                      })()
+                    : `${globalSelectedCardIds.length} Cards`
+                }
+              </span>
+              <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-300 ${isCardDropdownOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            <AnimatePresence>
+              {isCardDropdownOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setIsCardDropdownOpen(false)} />
+                  <motion.div
+                    initial={{ opacity: 0, y: -10, scaleY: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scaleY: 1 }}
+                    exit={{ opacity: 0, y: -10, scaleY: 0.95 }}
+                    transition={{ duration: 0.15, ease: "easeOut" }}
+                    className="absolute right-0 top-[calc(100%+8px)] w-60 bg-[#050505]/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-[0_15px_40px_rgba(0,0,0,0.8)] overflow-hidden z-50 py-1"
+                    style={{ transformOrigin: 'top right' }}
                   >
-                    All Vault Cards
-                    <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${globalSelectedCardIds.includes('all') ? 'bg-[#0ea5e9] border-[#0ea5e9]' : 'border-white/20'}`}>
-                      {globalSelectedCardIds.includes('all') && <Check className="w-2.5 h-2.5 text-white" />}
+                    <button
+                      onClick={() => setGlobalSelectedCardIds(['all'])}
+                      className={`w-full text-left px-4 py-3 text-xs font-bold transition-colors border-b border-white/5 flex items-center justify-between ${globalSelectedCardIds.includes('all') ? 'text-[#0ea5e9] bg-[#0ea5e9]/10' : 'text-slate-300 hover:bg-white/5'}`}
+                    >
+                      All Vault Cards
+                      <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${globalSelectedCardIds.includes('all') ? 'bg-[#0ea5e9] border-[#0ea5e9]' : 'border-white/20'}`}>
+                        {globalSelectedCardIds.includes('all') && <Check className="w-2.5 h-2.5 text-white" />}
+                      </div>
+                    </button>
+                    <div className="max-h-[50vh] overflow-y-auto custom-scrollbar">
+                      {sortedVaultCards.map((c: any) => {
+                        const isSub = c._isSub;
+                        const isSelected = !globalSelectedCardIds.includes('all') && globalSelectedCardIds.includes(c.id);
+                        return (
+                          <button
+                            key={c.id}
+                            onClick={() => {
+                              if (globalSelectedCardIds.includes('all')) {
+                                setGlobalSelectedCardIds([c.id]);
+                              } else {
+                                const next = isSelected
+                                  ? globalSelectedCardIds.filter(id => id !== c.id)
+                                  : [...globalSelectedCardIds, c.id];
+                                setGlobalSelectedCardIds(next.length === 0 ? ['all'] : next);
+                              }
+                            }}
+                            className={`w-full text-left px-4 py-2.5 text-xs transition-colors flex items-center gap-2 ${
+                              isSelected ? 'text-[#0ea5e9] bg-[#0ea5e9]/5' : 'text-slate-300 hover:bg-white/5'
+                            } ${isSub ? 'pl-8 bg-white/[0.01]' : 'font-bold mt-1'}`}
+                          >
+                            <span className="truncate flex-1">{c.card_name} <span className="opacity-60 text-[10px]">(**{c.last_4_digits})</span></span>
+                            {isSub && <span className="text-[8px] font-black uppercase text-slate-500 bg-white/5 px-1.5 py-0.5 rounded shrink-0">(Sub)</span>}
+                            <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${isSelected ? 'bg-[#0ea5e9] border-[#0ea5e9]' : 'border-white/20'}`}>
+                              {isSelected && <Check className="w-2.5 h-2.5 text-white" />}
+                            </div>
+                          </button>
+                        );
+                      })}
                     </div>
-                  </button>
-                  <div className="max-h-[50vh] overflow-y-auto custom-scrollbar">
-                    {sortedVaultCards.map((c: any) => {
-                      const isSub = c._isSub;
-                      const isSelected = !globalSelectedCardIds.includes('all') && globalSelectedCardIds.includes(c.id);
-                      return (
-                        <button
-                          key={c.id}
-                          onClick={() => {
-                            if (globalSelectedCardIds.includes('all')) {
-                              setGlobalSelectedCardIds([c.id]);
-                            } else {
-                              const next = isSelected
-                                ? globalSelectedCardIds.filter(id => id !== c.id)
-                                : [...globalSelectedCardIds, c.id];
-                              setGlobalSelectedCardIds(next.length === 0 ? ['all'] : next);
-                            }
-                          }}
-                          className={`w-full text-left px-4 py-2.5 text-xs transition-colors flex items-center gap-2 ${
-                            isSelected ? 'text-[#0ea5e9] bg-[#0ea5e9]/5' : 'text-slate-300 hover:bg-white/5'
-                          } ${isSub ? 'pl-8 bg-white/[0.01]' : 'font-bold mt-1'}`}
-                        >
-                          <span className="truncate flex-1">{c.card_name} <span className="opacity-60 text-[10px]">(**{c.last_4_digits})</span></span>
-                          {isSub && <span className="text-[8px] font-black uppercase text-slate-500 bg-white/5 px-1.5 py-0.5 rounded shrink-0">(Sub)</span>}
-                          <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${isSelected ? 'bg-[#0ea5e9] border-[#0ea5e9]' : 'border-white/20'}`}>
-                            {isSelected && <Check className="w-2.5 h-2.5 text-white" />}
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </motion.div>
-              </>
-            )}
-          </AnimatePresence>
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
+          </div>
         </div>
       </motion.header>
 
@@ -989,7 +1064,12 @@ export default function TransactionsPage() {
                               <Icon className={`w-4 h-4 ${item.color}`} />
                             </div>
                             <div className="flex-1 min-w-0">
-                              <h3 className="text-sm font-bold text-slate-100 mb-0.5 truncate">{item.title}</h3>
+                              <h3 className="text-sm font-bold text-slate-100 mb-0.5 truncate flex items-center gap-1.5">
+                                {item.title}
+                                {item.isCrossCardCash && (
+                                  <span className="text-[7px] font-black uppercase text-amber-400 bg-amber-500/10 border border-amber-500/30 px-1.5 py-0.5 rounded-full shrink-0">Cross-Card</span>
+                                )}
+                              </h3>
                               <div className="flex flex-col gap-0.5 leading-tight">
                                 {item.remarks && <span className="text-[10px] text-slate-300 italic truncate">&quot;{item.remarks}&quot;</span>}
                                 <span className="text-[9px] font-medium text-slate-400">{item.subtitle}</span>
@@ -1006,7 +1086,7 @@ export default function TransactionsPage() {
                           </div>
                         </div>
 
-                        {/* ── Expanded: NO id/status row ── */}
+                        {/* ── Expanded ── */}
                         <AnimatePresence>
                           {isExpanded && (
                             <motion.div
@@ -1025,6 +1105,19 @@ export default function TransactionsPage() {
                                   <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Fund Source</p>
                                   <p className="font-bold text-slate-200">{item.paymentMethod}</p>
                                 </div>
+                                {item.cashSourceBreakdown && (
+                                  <div className="col-span-2">
+                                    <p className="text-[9px] font-bold text-amber-500 uppercase tracking-widest mb-1">Cash Source Breakdown</p>
+                                    <div className="space-y-1">
+                                      {item.cashSourceBreakdown.map((b: any, i: number) => (
+                                        <div key={i} className="flex justify-between bg-amber-500/5 border border-amber-500/20 rounded-lg px-2.5 py-1.5">
+                                          <span className="text-slate-300 font-medium">{b.cardLabel}</span>
+                                          <span className="text-amber-400 font-black">₹{b.amount.toLocaleString('en-IN')}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
                                 <div className="col-span-2">
                                   <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Remarks</p>
                                   <p className="font-medium text-slate-300 bg-black/20 p-2 rounded-lg border border-white/5">
@@ -1065,281 +1158,57 @@ export default function TransactionsPage() {
         <Plus className="w-7 h-7 text-white" />
       </motion.button>
 
-      {/* ================= ENTRY MODAL ================= */}
-      <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
-        <DialogContent className="bg-[#050505]/95 backdrop-blur-3xl border border-white/10 text-slate-50 rounded-[40px] w-[95vw] max-w-md p-0 overflow-hidden shadow-[0_0_80px_rgba(0,0,0,0.9)]">
-          <div className="max-h-[85vh] overflow-y-auto custom-scrollbar p-6">
-
-            <DialogHeader className="mb-6">
-              <DialogTitle className="text-2xl font-space font-black bg-gradient-to-r from-[#0ea5e9] to-[#a855f7] bg-clip-text text-transparent">
-                Record Entry
-              </DialogTitle>
-              <DialogDescription className="hidden">Record new transaction</DialogDescription>
-            </DialogHeader>
-
-            <div className="space-y-6">
-
-              {/* Type Segmented Control — Bill Pay first */}
-              <div className="flex p-1.5 bg-white/[0.03] border border-white/10 rounded-2xl shadow-inner">
-                {[
-                  { id: "bill", label: "Pay Bill", icon: CheckCircle2, color: "#10b981" },
-                  { id: "rotate", label: "Rotate Limit", icon: ArrowDownLeft, color: "#0ea5e9" },
-                  { id: "spend", label: "Add Spend", icon: Receipt, color: "#a855f7" },
-                ].map((type) => {
-                  const Icon = type.icon;
-                  const isActive = txType === type.id;
-                  return (
-                    <button
-                      key={type.id}
-                      onClick={() => setTxType(type.id as any)}
-                      className={`flex-1 flex flex-col items-center justify-center py-2.5 relative rounded-xl transition-all ${isActive ? "text-white" : "text-slate-500"}`}
-                    >
-                      {isActive && (
-                        <motion.div
-                          layoutId="txTypeBg"
-                          className="absolute inset-0 bg-white/10 border border-white/10 rounded-xl shadow-md"
-                          transition={{ type: "spring", bounce: 0.2, duration: 0.45 }}
-                        />
-                      )}
-                      <Icon className="w-4 h-4 mb-1 relative z-10" style={{ color: isActive ? type.color : undefined }} />
-                      <span className="text-[10px] font-bold relative z-10">{type.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Amount Input */}
-              <div className="bg-gradient-to-br from-white/[0.05] to-transparent border border-white/10 rounded-[32px] p-5 flex flex-col items-center justify-center shadow-inner relative overflow-hidden">
-                <div className={`absolute top-0 right-0 w-32 h-32 rounded-full blur-[50px] pointer-events-none opacity-20 ${txType === 'bill' ? 'bg-[#10b981]' : txType === 'rotate' ? 'bg-[#0ea5e9]' : 'bg-[#a855f7]'}`} />
-                <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2 relative z-10">Amount (₹)</label>
-                <input
-                  type="text" inputMode="numeric" pattern="[0-9]*" autoComplete="off"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value.replace(/[^0-9]/g, ''))}
-                  placeholder="0"
-                  className="w-full bg-transparent text-center text-5xl font-black text-white placeholder:text-white/10 outline-none relative z-10"
-                />
-              </div>
-
-              {/* Date & User */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Date</label>
-                  <div className="relative">
-                    <CalendarDays className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
-                    <input type="date" value={txDate} onChange={(e) => setTxDate(e.target.value)} className="w-full h-12 bg-white/[0.03] border border-white/10 rounded-xl text-[11px] font-bold text-white pl-9 pr-2 outline-none focus:border-[#0ea5e9] transition-all appearance-none" />
-                  </div>
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">
-                    {txType === 'rotate' ? 'Initiated By' : txType === 'bill' ? 'Paid By' : 'Spent By'}
-                  </label>
-                  <div className="relative">
-                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
-                    <select value={selectedUserId} onChange={(e) => setSelectedUserId(e.target.value)} className="w-full h-12 bg-white/[0.03] border border-white/10 rounded-xl text-xs font-bold text-white pl-3 pr-8 outline-none focus:border-[#0ea5e9] transition-all appearance-none">
-                      {profiles.map(p => <option key={p.id} value={p.id} className="bg-black">{p.name.split(' ')[0]}</option>)}
-                    </select>
-                  </div>
-                </div>
-              </div>
-
-              {/* Card Selection */}
-              {txType === 'bill' ? (
-                /* Bill Pay: ONLY primary cards */
-                <div className="space-y-1.5">
-                  <label className="text-[11px] font-bold text-[#10b981] uppercase ml-1 flex items-center gap-1.5">
-                    <CreditCard className="w-3.5 h-3.5" /> Primary Card (Bill Card)
-                  </label>
-                  <div className="relative">
-                    <select
-                      value={billCardId}
-                      onChange={(e) => setBillCardId(e.target.value)}
-                      className="w-full h-14 bg-gradient-to-r from-white/[0.05] to-transparent border border-[#10b981]/30 rounded-2xl px-4 text-sm font-bold text-white outline-none focus:border-[#10b981] appearance-none shadow-[0_0_15px_rgba(16,185,129,0.1)]"
-                    >
-                      <option value="" disabled className="bg-black">Select Primary Card...</option>
-                      {billPrimaryCards.map(c => (
-                        <option key={c.id} value={c.id} className="bg-black">{c.card_name} (**{c.last_4_digits})</option>
-                      ))}
-                    </select>
-                    <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
-                  </div>
-
-                  {/* BEAUTIFIED: Due Amount and Due Date (Gen+20 Days logic) */}
-                  {billCardId && (
-                    <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="flex justify-between items-center px-4 py-3 mt-3 bg-gradient-to-r from-rose-500/20 to-pink-500/10 border border-rose-500/40 rounded-2xl overflow-hidden shadow-[0_0_20px_rgba(244,63,94,0.15)]">
-                      <div className="flex flex-col">
-                        <span className="text-[10px] font-black text-rose-500 uppercase tracking-widest mb-0.5 flex items-center gap-1"><AlertTriangle className="w-3.5 h-3.5" /> Total Due</span>
-                        <span className="text-lg font-black text-rose-400 drop-shadow-md">₹{(cardDueMap[billCardId] || 0).toLocaleString()}</span>
-                      </div>
-                      <div className="h-8 w-px bg-rose-500/30 mx-3"></div>
-                      <div className="flex flex-col text-right">
-                        <span className="text-[10px] font-black text-rose-500 uppercase flex items-center justify-end gap-1 tracking-widest mb-0.5"><CalendarClock className="w-3.5 h-3.5" /> Due Date</span>
-                        <span className="text-sm font-black text-rose-300 drop-shadow-md">{cardDueDateMap[billCardId] || 'Not Available'}</span>
-                      </div>
-                    </motion.div>
-                  )}
-                </div>
-              ) : (
-                /* Rotate / Spend: all accessible cards */
-                <div className="space-y-1.5">
-                  <label className="text-[11px] font-bold text-[#0ea5e9] uppercase ml-1 flex items-center gap-1.5">
-                    <CreditCard className="w-3.5 h-3.5" /> Attach Card
-                  </label>
-                  <div className="relative">
-                    <select value={entryCardId} onChange={(e) => setEntryCardId(e.target.value)} className="w-full h-14 bg-gradient-to-r from-white/[0.05] to-transparent border border-white/10 rounded-2xl px-4 text-sm font-bold text-white outline-none focus:border-[#0ea5e9] appearance-none shadow-[0_0_15px_rgba(14,165,233,0.1)]">
-                      <option value="" disabled className="bg-black">Select a Card...</option>
-                      {entryUserCards.map(c => (
-                        <option key={c.id} value={c.id} className="bg-black">
-                          {c.is_primary ? '' : '↳ '}{c.card_name} (**{c.last_4_digits})
-                        </option>
-                      ))}
-                    </select>
-                    <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
-                  </div>
-
-                  {/* BEAUTIFIED: Family-level total personal spend */}
-                  {txType === 'spend' && selectedUserId && entryCardId && (() => {
-                    const activePrimaryIdForSpend = selectedEntryCardObj?.is_primary ? selectedEntryCardObj.id : (selectedEntryCardObj?.parent_card_id || entryCardId);
-                    const familySpend = userFamilySpendMap[selectedUserId]?.[activePrimaryIdForSpend] || 0;
-                    return (
-                      <motion.div initial={{ opacity: 0, y: -5 }} animate={{ opacity: 1, y: 0 }} className="flex items-center justify-between px-4 py-3 mt-3 bg-gradient-to-r from-amber-500/20 to-orange-500/10 border border-amber-500/40 rounded-2xl shadow-[0_0_15px_rgba(245,158,11,0.15)]">
-                        <span className="text-[10px] font-black text-amber-500 uppercase tracking-widest flex items-center gap-1.5">
-                           <AlertCircle className="w-4 h-4" /> Personal Spend <span className="text-[8px] text-amber-500/60 lowercase tracking-normal">(Family Level)</span>
-                        </span>
-                        <span className="text-sm font-black text-amber-400 drop-shadow-md">₹{familySpend.toLocaleString()}</span>
-                      </motion.div>
-                    );
-                  })()}
-                </div>
-              )}
-
-              {/* ================= CONDITIONAL FIELDS ================= */}
-              <AnimatePresence mode="wait">
-
-                {/* 1. BILL */}
-                {txType === "bill" && (
-                  <motion.div key="bill" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ type: "spring", stiffness: 300, damping: 26 }} className="space-y-5">
-                    <div className="p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl flex items-center justify-between shadow-[0_0_15px_rgba(16,185,129,0.15)]">
-                      <div>
-                        <div className="text-sm font-bold text-emerald-400 flex items-center gap-1.5"><ShieldCheck className="w-4 h-4" /> Clear Personal Debt?</div>
-                        <div className="text-[9px] text-emerald-500/70 mt-0.5">Toggle ON to reduce your &quot;Total Personal Due&quot;</div>
-                      </div>
-                      <Switch checked={isDebtRepayment} onCheckedChange={setIsDebtRepayment} className="data-[state=checked]:bg-[#10b981]" />
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <label className="text-[11px] font-bold text-slate-400 uppercase ml-1 flex justify-between">
-                        Fund Source <span className="text-[9px] lowercase text-emerald-400">(Primary deducted first)</span>
-                      </label>
-                      <div className="grid grid-cols-2 gap-3">
-                        <button 
-                          onClick={() => {
-                            if (amtNum <= totalBillCash) setBillMethod("cash_on_hand")
-                          }} 
-                          disabled={amtNum > totalBillCash}
-                          className={`flex flex-col items-center justify-center p-3 rounded-2xl transition-all border ${
-                            amtNum > totalBillCash 
-                            ? "opacity-40 cursor-not-allowed bg-white/[0.01] text-slate-500 border-white/5"
-                            : (billMethod === "cash_on_hand" 
-                                ? "bg-amber-500/20 text-amber-400 border-amber-500/50 shadow-[0_0_15px_rgba(245,158,11,0.2)]" 
-                                : "bg-white/[0.02] text-slate-400 border-white/5 hover:bg-white/[0.05]")
-                          }`}
-                        >
-                          <div className="flex items-center gap-1.5 mb-1"><Banknote className="w-4 h-4" /><span className="text-xs font-bold">Collected Cash</span></div>
-                          <span className="text-[9px] font-black opacity-70">Bal: ₹{totalBillCash.toLocaleString()}</span>
-                        </button>
-                        <button onClick={() => setBillMethod("own_pocket")} className={`flex flex-col items-center justify-center p-3 rounded-2xl transition-all border ${billMethod === "own_pocket" || isSplitting ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/50 shadow-[0_0_15px_rgba(16,185,129,0.2)]" : "bg-white/[0.02] text-slate-400 border-white/5 hover:bg-white/[0.05]"}`}>
-                          <div className="flex items-center gap-1.5 mb-1"><Wallet className="w-4 h-4" /><span className="text-xs font-bold">Own Pocket</span></div>
-                          {isSplitting ? <span className="text-sm font-black text-white">₹{pocketSplitAmt.toLocaleString()}</span> : <span className="text-[9px] font-black opacity-70">Personal Funds</span>}
-                        </button>
-                      </div>
-                      {isSplitting && (
-                        <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} transition={{ type: "spring", stiffness: 300, damping: 24 }} className="flex items-center justify-center gap-2 mt-2 text-emerald-400">
-                          <Zap className="w-3 h-3 animate-pulse" /> <span className="text-[10px] font-black uppercase tracking-widest">Auto-Split Activated</span>
-                        </motion.div>
-                      )}
-                    </div>
-                  </motion.div>
-                )}
-
-                {/* 2. ROTATE */}
-                {txType === "rotate" && (
-                  <motion.div key="rotate" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ type: "spring", stiffness: 300, damping: 26 }} className="space-y-5">
-                    <div className="p-4 rounded-2xl bg-gradient-to-br from-[#0ea5e9]/10 to-[#38bdf8]/5 border border-[#0ea5e9]/30 shadow-[0_0_15px_rgba(14,165,233,0.1)] flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <CreditCard className="w-4 h-4 text-[#0ea5e9]" />
-                        <span className="text-[10px] font-black text-[#0ea5e9] uppercase tracking-widest">Card Available</span>
-                      </div>
-                      <span className="text-base font-black text-white">₹{currentFamilyLimit.toLocaleString()}</span>
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-[11px] font-bold text-slate-400 uppercase ml-1">Destination QR</label>
-                      <div className="relative">
-                        <select value={selectedQrId} onChange={(e) => setSelectedQrId(e.target.value)} className="w-full appearance-none bg-white/[0.03] border border-white/10 text-white text-sm font-bold h-14 pl-12 pr-10 rounded-2xl outline-none focus:border-[#0ea5e9] shadow-inner">
-                          <option value="" className="bg-[#050505]">Select QR Code</option>
-                          {qrs.map(qr => <option key={qr.id} value={qr.id} className="bg-[#050505]">{qr.merchant_name}</option>)}
-                        </select>
-                        <QrCode className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 pointer-events-none" />
-                        <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 pointer-events-none" />
-                      </div>
-                    </div>
-                  </motion.div>
-                )}
-
-                {/* 3. SPEND */}
-                {txType === "spend" && (
-                  <motion.div key="spend" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ type: "spring", stiffness: 300, damping: 26 }} className="space-y-5">
-                    <div className="space-y-1.5">
-                      <label className="text-[11px] font-bold text-slate-400 uppercase ml-1 flex justify-between">
-                        Payment Source <span className="text-[9px] lowercase text-indigo-400">(Auto-splits if amt exceeds)</span>
-                      </label>
-                      <div className="grid grid-cols-2 gap-3">
-                        <button onClick={() => setSpendMethod("credit_card")} className={`flex flex-col items-center justify-center p-3 rounded-2xl transition-all border ${spendMethod === "credit_card" || isSplitting ? "bg-indigo-500/20 text-indigo-400 border-indigo-500/50 shadow-[0_0_15px_rgba(99,102,241,0.2)]" : "bg-white/[0.02] text-slate-400 border-white/5 hover:bg-white/[0.05]"}`}>
-                          <div className="flex items-center gap-1.5 mb-1"><CreditCard className="w-4 h-4" /><span className="text-xs font-bold">Direct Card</span></div>
-                          {isSplitting ? <span className="text-sm font-black text-white">₹{cardSplitAmt.toLocaleString()}</span> : <span className="text-[9px] font-black opacity-70">Avail: ₹{(currentFamilyLimit / 1000).toFixed(1)}k</span>}
-                        </button>
-                        <button onClick={() => setSpendMethod("cash_on_hand")} className={`flex flex-col items-center justify-center p-3 rounded-2xl transition-all border ${spendMethod === "cash_on_hand" || isSplitting ? "bg-amber-500/20 text-amber-400 border-amber-500/50 shadow-[0_0_15px_rgba(245,158,11,0.2)]" : "bg-white/[0.02] text-slate-400 border-white/5 hover:bg-white/[0.05]"}`}>
-                          <div className="flex items-center gap-1.5 mb-1"><Banknote className="w-4 h-4" /><span className="text-xs font-bold">Cash on Hand</span></div>
-                          {isSplitting ? <span className="text-sm font-black text-white">₹{cashSplitAmt.toLocaleString()}</span> : <span className="text-[9px] font-black opacity-70">Bal: ₹{currentActorCardCash.toLocaleString()}</span>}
-                        </button>
-                      </div>
-                      {isSplitting && (
-                        <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} transition={{ type: "spring", stiffness: 300, damping: 24 }} className="flex items-center justify-center gap-2 mt-2 text-indigo-400">
-                          <Zap className="w-3 h-3 animate-pulse" /> <span className="text-[10px] font-black uppercase tracking-widest">Auto-Split Activated</span>
-                        </motion.div>
-                      )}
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              {/* Remarks */}
-              <div className="space-y-1.5">
-                <label className="text-[11px] font-bold text-slate-400 uppercase ml-1">Remarks (Optional)</label>
-                <div className="relative flex items-center bg-white/[0.03] border border-white/10 rounded-2xl h-14 px-4 focus-within:border-[#0ea5e9] transition-all shadow-inner">
-                  <Edit3 className="w-4 h-4 text-slate-500 mr-3" />
-                  <input type="text" autoComplete="off" value={remarks} onChange={(e) => setRemarks(e.target.value)} placeholder="Add a note..." className="bg-transparent border-none outline-none w-full text-sm text-white placeholder:text-slate-600 font-bold" />
-                </div>
-              </div>
-
-              {/* Save Button */}
-              <div className="pt-4">
-                <Button
-                  onClick={handleSave}
-                  className={`w-full h-14 rounded-2xl text-white font-black text-lg transition-all border-0 ${
-                    txType === 'bill' ? 'bg-gradient-to-r from-[#10b981] to-[#34d399] shadow-[0_0_30px_rgba(16,185,129,0.3)]' :
-                    txType === 'rotate' ? 'bg-gradient-to-r from-[#0ea5e9] to-[#38bdf8] shadow-[0_0_30px_rgba(14,165,233,0.3)]' :
-                    'bg-gradient-to-r from-[#a855f7] to-[#d946ef] shadow-[0_0_30px_rgba(168,85,247,0.3)]'
-                  }`}
-                >
-                  {txType === 'bill' ? "Record Payment" : txType === 'rotate' ? "Record Rotation" : "Record Spend"}
-                </Button>
-              </div>
-
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* ================= ENTRY MODAL (আলাদা ফাইলে) ================= */}
+      <RecordEntryModal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        onSave={handleSave}
+        txType={txType}
+        setTxType={setTxType}
+        amount={amount}
+        setAmount={setAmount}
+        amtNum={amtNum}
+        txDate={txDate}
+        setTxDate={setTxDate}
+        selectedUserId={selectedUserId}
+        setSelectedUserId={setSelectedUserId}
+        profiles={profiles}
+        entryCardId={entryCardId}
+        setEntryCardId={setEntryCardId}
+        entryUserCards={entryUserCards}
+        billCardId={billCardId}
+        setBillCardId={setBillCardId}
+        billPrimaryCards={billPrimaryCards}
+        cardDueMap={cardDueMap}
+        cardDueDateMap={cardDueDateMap}
+        currentFamilyLimit={currentFamilyLimit}
+        currentActorCardCash={currentActorCardCash}
+        userFamilySpendMap={userFamilySpendMap}
+        selectedEntryCardObj={selectedEntryCardObj}
+        entryPrimaryId={entryPrimaryId}
+        selectedQrId={selectedQrId}
+        setSelectedQrId={setSelectedQrId}
+        qrs={qrs}
+        spendMethod={spendMethod}
+        setSpendMethod={setSpendMethod}
+        cardSplitAmt={cardSplitAmt}
+        spendCashSplitAmt={spendCashSplitAmt}
+        isSpendSplitting={isSpendSplitting}
+        billMethod={billMethod}
+        setBillMethod={setBillMethod}
+        isDebtRepayment={isDebtRepayment}
+        setIsDebtRepayment={setIsDebtRepayment}
+        allCards={allCards}
+        currentUserCashByCard={currentUserCashByCard}
+        cashSources={cashSources}
+        setCashSources={setCashSources}
+        cashAllocatedTotal={cashAllocatedTotal}
+        pocketSplitAmt={pocketSplitAmt}
+        allocationValid={allocationValid}
+        canSave={canSave}
+        remarks={remarks}
+        setRemarks={setRemarks}
+      />
 
       <BottomNav />
     </div>

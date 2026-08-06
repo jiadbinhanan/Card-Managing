@@ -14,6 +14,10 @@ import {
   Loader2,
   FileDown,
   UserCircle2,
+  MoreVertical,
+  Pencil,
+  Trash2,
+  AlertTriangle,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { sendLentIssueAlert, sendLentRecoveryAlert } from "./WaAlert";
@@ -53,9 +57,17 @@ export interface LedgerEntry {
   remarks?: string | null;
   recorded_by?: string | null;
   created_at: string;
+  // এই ৪টা শুধু card_lent_ledger row-এ থাকে — edit/delete-এর সময় কোন cash_on_hand_ledger /
+  // card_transactions / spends / billing_cycles row রিভার্স করতে হবে সেটা বোঝার জন্য
+  linked_cash_ledger_id?: string | null;
+  linked_card_transaction_id?: string | null;
+  linked_spend_id?: string | null;
+  linked_billing_cycle_id?: string | null;
+  ledgerSource?: "card" | "pocket"; // শুধু combined mode-এ ব্যবহৃত
 }
 
-type Mode = "card" | "pocket";
+type Mode = "card" | "pocket" | "combined";
+type SourceChoice = "cash_on_hand" | "credit_card" | "pocket";
 
 interface BorrowerProfilePanelProps {
   open: boolean;
@@ -98,6 +110,22 @@ export default function BorrowerProfilePanel({
   const [exportPanelOpen, setExportPanelOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
 
+  // --- Edit / Delete (3-dot menu) ---
+  const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+  const [editingEntry, setEditingEntry] = useState<LedgerEntry | null>(null);
+  const [editAmount, setEditAmount] = useState("");
+  const [editDate, setEditDate] = useState("");
+  const [editRemarks, setEditRemarks] = useState("");
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<LedgerEntry | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  // --- Borrower details edit (name/phone), directly from the panel ---
+  const [borrowerEditOpen, setBorrowerEditOpen] = useState(false);
+  const [editBorrowerName, setEditBorrowerName] = useState("");
+  const [editBorrowerPhone, setEditBorrowerPhone] = useState("");
+  const [isSavingBorrower, setIsSavingBorrower] = useState(false);
+
   // Portal-এ mount করার আগে document অবশ্যই ready থাকতে হবে (SSR-safe)
   useEffect(() => setMounted(true), []);
 
@@ -105,10 +133,12 @@ export default function BorrowerProfilePanel({
   const [amount, setAmount] = useState("");
   const [txDate, setTxDate] = useState(todayIST());
   const [remarks, setRemarks] = useState("");
-  const [sourceType, setSourceType] = useState<"cash_on_hand" | "credit_card">("cash_on_hand");
+  const [sourceType, setSourceType] = useState<SourceChoice>("cash_on_hand");
   const [selectedCardId, setSelectedCardId] = useState("");
 
-  const tableName = mode === "card" ? "card_lent_ledger" : "pocket_lent_ledger";
+  // combined mode-এ যেটা বেছে নেওয়া হয়েছে সেই অনুযায়ী insert routing হয়
+  const isPocketWrite = mode === "pocket" || (mode === "combined" && sourceType === "pocket");
+  const tableName = isPocketWrite ? "pocket_lent_ledger" : "card_lent_ledger";
 
   useEffect(() => {
     if (open && borrower) {
@@ -131,6 +161,13 @@ export default function BorrowerProfilePanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, borrower?.id]);
 
+  useEffect(() => {
+    if (!menuOpenId) return;
+    const closeMenu = () => setMenuOpenId(null);
+    document.addEventListener("click", closeMenu);
+    return () => document.removeEventListener("click", closeMenu);
+  }, [menuOpenId]);
+
   const resetForm = () => {
     setActiveForm(null);
     setAmount("");
@@ -143,6 +180,25 @@ export default function BorrowerProfilePanel({
   const fetchEntries = async () => {
     if (!borrower) return;
     setIsLoading(true);
+
+    if (mode === "combined") {
+      // Card অংশ সবার জন্য shared, Pocket অংশ শুধু নিজের — এই দুইটা মিলিয়েই
+      // "current user-এর দৃষ্টিকোণ থেকে সম্পূর্ণ ছবি" তৈরি হয়
+      const [{ data: cardRows }, { data: pocketRows }] = await Promise.all([
+        supabase.from("card_lent_ledger").select("*").eq("borrower_id", borrower.id),
+        currentUser
+          ? supabase.from("pocket_lent_ledger").select("*").eq("borrower_id", borrower.id).eq("recorded_by", currentUser.id)
+          : Promise.resolve({ data: [] as any[] }),
+      ]);
+      const merged: LedgerEntry[] = [
+        ...((cardRows as any[]) || []).map((r) => ({ ...r, ledgerSource: "card" as const })),
+        ...((pocketRows as any[]) || []).map((r) => ({ ...r, ledgerSource: "pocket" as const })),
+      ].sort((a, b) => b.transaction_date.localeCompare(a.transaction_date) || b.created_at.localeCompare(a.created_at));
+      setEntries(merged);
+      setIsLoading(false);
+      return;
+    }
+
     let query = supabase
       .from(tableName)
       .select("*")
@@ -209,8 +265,10 @@ export default function BorrowerProfilePanel({
     return label;
   };
 
-  // --- Cash balance update (mirrors original updateCashBalance) ---
-  const updateCashBalance = async (userId: string, cardId: string, amt: number, type: "credit" | "debit", note: string) => {
+  // --- Cash balance update (mirrors original updateCashBalance) — এখন insert হওয়া
+  // cash_on_hand_ledger row-এর id রিটার্ন করে, যাতে card_lent_ledger row-এ linked
+  // হিসেবে সেভ করা যায় (edit/delete-এর সময় reverse করতে লাগবে)
+  const updateCashBalance = async (userId: string, cardId: string, amt: number, type: "credit" | "debit", note: string): Promise<string | null> => {
     const { data: coh } = await supabase.from("cash_on_hand").select("*").eq("user_id", userId).eq("card_id", cardId).maybeSingle();
     const currentBalance = coh ? Number(coh.current_balance) : 0;
     const newBalance = type === "credit" ? currentBalance + amt : currentBalance - amt;
@@ -228,15 +286,16 @@ export default function BorrowerProfilePanel({
       if (insertErr) throw insertErr;
     }
 
-    const { error: ledgerErr } = await supabase.from("cash_on_hand_ledger").insert({
+    const { data: ledgerRow, error: ledgerErr } = await supabase.from("cash_on_hand_ledger").insert({
       user_id: userId,
       card_id: cardId,
       amount: amt,
       transaction_type: type,
       remarks: note,
       transaction_date: new Date().toISOString(),
-    });
+    }).select("id").single();
     if (ledgerErr) throw ledgerErr;
+    return ledgerRow?.id || null;
   };
 
   // Fresh available-limit recompute for a card (used for accurate alert numbers)
@@ -264,7 +323,7 @@ export default function BorrowerProfilePanel({
       return;
     }
 
-    if (mode === "card") {
+    if (!isPocketWrite) {
       if (sourceType === "cash_on_hand") {
         const avail = getUserCashForCard(currentUser.id, selectedCardId);
         if (amtNum > avail) {
@@ -286,11 +345,17 @@ export default function BorrowerProfilePanel({
 
     setIsSaving(true);
     try {
-      if (mode === "card") {
+      // এই ৩টা id capture করা হচ্ছে যাতে পরে Edit/Delete করলে ঠিক এই row-গুলোই
+      // reverse করা যায় (card_lent_ledger-এর linked_* কলামে সেভ হবে)
+      let linkedCashLedgerId: string | null = null;
+      let linkedCardTransactionId: string | null = null;
+      let linkedSpendId: string | null = null;
+
+      if (!isPocketWrite) {
         if (sourceType === "cash_on_hand") {
-          await updateCashBalance(currentUser.id, selectedCardId, amtNum, "debit", `Lent given to ${borrower.name}`);
+          linkedCashLedgerId = await updateCashBalance(currentUser.id, selectedCardId, amtNum, "debit", `Lent given to ${borrower.name}`);
         } else {
-          await supabase.from("card_transactions").insert({
+          const { data: txRow } = await supabase.from("card_transactions").insert({
             card_id: selectedCardId,
             amount: amtNum,
             type: "withdrawal",
@@ -298,8 +363,10 @@ export default function BorrowerProfilePanel({
             transaction_date: txDate,
             recorded_by: currentUser.id,
             remarks: `Lent given to ${borrower.name}`,
-          });
-          await supabase.from("spends").insert({
+          }).select("id").single();
+          linkedCardTransactionId = txRow?.id || null;
+
+          const { data: spendRow } = await supabase.from("spends").insert({
             user_id: currentUser.id,
             amount: amtNum,
             spend_type: "personal",
@@ -307,7 +374,8 @@ export default function BorrowerProfilePanel({
             spend_date: txDate,
             card_id: selectedCardId,
             remarks: `Lent to ${borrower.name} from card`,
-          });
+          }).select("id").single();
+          linkedSpendId = spendRow?.id || null;
         }
       }
 
@@ -316,7 +384,13 @@ export default function BorrowerProfilePanel({
         entry_type: "given",
         amount: amtNum,
         transaction_date: txDate,
-        ...(mode === "card" ? { source_type: sourceType, card_id: selectedCardId } : {}),
+        ...(!isPocketWrite ? {
+          source_type: sourceType,
+          card_id: selectedCardId,
+          linked_cash_ledger_id: linkedCashLedgerId,
+          linked_card_transaction_id: linkedCardTransactionId,
+          linked_spend_id: linkedSpendId,
+        } : {}),
         remarks: remarks || null,
         recorded_by: currentUser.id,
       });
@@ -326,7 +400,7 @@ export default function BorrowerProfilePanel({
       await fetchEntries();
       onDataChanged();
 
-      if (mode === "card") {
+      if (!isPocketWrite) {
         const sourceName = sourceType === "credit_card" ? getCardName(selectedCardId) : "Cash on Hand";
         let freshRemainingBalance = 0;
         if (sourceType === "cash_on_hand") {
@@ -366,20 +440,23 @@ export default function BorrowerProfilePanel({
       alert("সঠিক পরিমাণ ও তারিখ দিন।");
       return;
     }
-    if (amtNum > netDue) {
-      alert(`এই borrower-এর বর্তমান বাকি (₹${netDue.toLocaleString()}) থেকে বেশি collect করা যাবে না।`);
-      return;
-    }
-    if (mode === "card" && !selectedCardId) {
+    // নোট: bidirectional feature-এর কারণে amount netDue-এর চেয়ে বেশি হলেও এখন সমস্যা
+    // নেই — তার মানে দাঁড়ায় "তুমি এখন ওর কাছে owe করো" (দিক উল্টে গেছে)
+    if (!isPocketWrite && !selectedCardId) {
       alert("একটা কার্ড সিলেক্ট করুন।");
       return;
     }
 
     setIsSaving(true);
     try {
-      if (mode === "card") {
+      let linkedCashLedgerId: string | null = null;
+      let linkedCardTransactionId: string | null = null;
+      let linkedSpendId: string | null = null;
+      let linkedBillingCycleId: string | null = null;
+
+      if (!isPocketWrite) {
         if (sourceType === "cash_on_hand") {
-          await updateCashBalance(currentUser.id, selectedCardId, amtNum, "credit", `Collected lent from ${borrower.name}`);
+          linkedCashLedgerId = await updateCashBalance(currentUser.id, selectedCardId, amtNum, "credit", `Collected lent from ${borrower.name}`);
         } else {
           let activeCycleId = null;
           const now = new Date();
@@ -400,8 +477,9 @@ export default function BorrowerProfilePanel({
               activeCycleId = cycle.id;
             }
           }
+          linkedBillingCycleId = activeCycleId;
 
-          await supabase.from("card_transactions").insert({
+          const { data: txRow } = await supabase.from("card_transactions").insert({
             card_id: selectedCardId,
             amount: amtNum,
             transaction_date: txDate,
@@ -411,9 +489,10 @@ export default function BorrowerProfilePanel({
             payment_method: "lent_recovery",
             remarks: `Collected lent from ${borrower.name}`,
             billing_cycle_id: activeCycleId,
-          });
+          }).select("id").single();
+          linkedCardTransactionId = txRow?.id || null;
 
-          await supabase.from("spends").insert({
+          const { data: spendRow } = await supabase.from("spends").insert({
             user_id: currentUser.id,
             amount: -amtNum,
             spend_type: "personal",
@@ -421,7 +500,8 @@ export default function BorrowerProfilePanel({
             spend_date: txDate,
             card_id: selectedCardId,
             remarks: `Lent recovery from ${borrower.name}`,
-          });
+          }).select("id").single();
+          linkedSpendId = spendRow?.id || null;
         }
       }
 
@@ -430,7 +510,15 @@ export default function BorrowerProfilePanel({
         entry_type: "collected",
         amount: amtNum,
         transaction_date: txDate,
-        ...(mode === "card" ? { source_type: sourceType, card_id: selectedCardId } : {}),
+        ...(!isPocketWrite ? {
+          source_type: sourceType,
+          card_id: selectedCardId,
+          linked_cash_ledger_id: linkedCashLedgerId,
+          linked_card_transaction_id: linkedCardTransactionId,
+          linked_spend_id: linkedSpendId,
+          linked_billing_cycle_id: linkedBillingCycleId,
+          billing_cycle_delta_amount: linkedBillingCycleId ? amtNum : null,
+        } : {}),
         remarks: remarks || null,
         recorded_by: currentUser.id,
       });
@@ -440,7 +528,7 @@ export default function BorrowerProfilePanel({
       await fetchEntries();
       onDataChanged();
 
-      if (mode === "card") {
+      if (!isPocketWrite) {
         const receivedOn = sourceType === "credit_card" ? getCardName(selectedCardId) : "Cash on hand";
         let freshCurrentBal = 0;
         if (sourceType === "cash_on_hand") {
@@ -468,6 +556,93 @@ export default function BorrowerProfilePanel({
       alert("Error: " + err.message);
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  // --- Edit / Delete (creator-only) ---
+  const handleStartEdit = (entry: LedgerEntry) => {
+    setEditingEntry(entry);
+    setEditAmount(String(entry.amount));
+    setEditDate(entry.transaction_date);
+    setEditRemarks(entry.remarks || "");
+  };
+
+  const handleSaveEditEntry = async () => {
+    if (!editingEntry) return;
+    const amtNum = Number(editAmount);
+    if (isNaN(amtNum) || amtNum <= 0 || !editDate) {
+      alert("সঠিক পরিমাণ ও তারিখ দিন।");
+      return;
+    }
+    const isPocketEntry = mode === "pocket" || editingEntry.ledgerSource === "pocket";
+    setIsSavingEdit(true);
+    try {
+      if (isPocketEntry) {
+        const { error } = await supabase
+          .from("pocket_lent_ledger")
+          .update({ amount: amtNum, transaction_date: editDate, remarks: editRemarks || null })
+          .eq("id", editingEntry.id);
+        if (error) throw error;
+      } else {
+        // Atomic RPC — amount/date/remarks change শুধু, cash/card/billing_cycle সব
+        // এর ভিতরেই delta অনুযায়ী adjust হয়ে যাবে (source/card বদলানো যাবে না)
+        const { error } = await supabase.rpc("edit_card_lent_entry", {
+          p_entry_id: editingEntry.id,
+          p_new_amount: amtNum,
+          p_new_date: editDate,
+          p_new_remarks: editRemarks || null,
+        });
+        if (error) throw error;
+      }
+      setEditingEntry(null);
+      await fetchEntries();
+      onDataChanged();
+    } catch (err: any) {
+      alert("Edit Error: " + err.message);
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deleteTarget) return;
+    const isPocketEntry = mode === "pocket" || deleteTarget.ledgerSource === "pocket";
+    setIsDeleting(true);
+    try {
+      if (isPocketEntry) {
+        const { error } = await supabase.from("pocket_lent_ledger").delete().eq("id", deleteTarget.id);
+        if (error) throw error;
+      } else {
+        // Atomic RPC — cash_on_hand / card_transactions / spends / billing_cycles
+        // সব একসাথে reverse হবে, নাহলে কিছুই হবে না (transaction-wrapped)
+        const { error } = await supabase.rpc("delete_card_lent_entry", { p_entry_id: deleteTarget.id });
+        if (error) throw error;
+      }
+      setDeleteTarget(null);
+      await fetchEntries();
+      onDataChanged();
+    } catch (err: any) {
+      alert("Delete Error: " + err.message);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleSaveBorrowerDetails = async () => {
+    if (!borrower || !editBorrowerName.trim()) return;
+    setIsSavingBorrower(true);
+    try {
+      const { error } = await supabase
+        .from("borrowers")
+        .update({ name: editBorrowerName.trim(), phone: editBorrowerPhone.trim() || null })
+        .eq("id", borrower.id);
+      if (error) throw error;
+      setBorrowerEditOpen(false);
+      onDataChanged(); // parent-এর borrower list refresh হবে (নাম বদলে গেলে ওখানেও দেখাতে হবে)
+    } catch (err: any) {
+      alert("Error: " + err.message);
+    } finally {
+      setIsSavingBorrower(false);
     }
   };
 
@@ -526,7 +701,16 @@ export default function BorrowerProfilePanel({
                   <User className="w-5 h-5 text-[#f59e0b]" />
                 </div>
                 <div className="min-w-0">
-                  <h2 className="text-base font-black text-white truncate">{borrower.name}</h2>
+                  <div className="flex items-center gap-1.5">
+                    <h2 className="text-base font-black text-white truncate">{borrower.name}</h2>
+                    <button
+                      onClick={() => { setEditBorrowerName(borrower.name); setEditBorrowerPhone(borrower.phone || ""); setBorrowerEditOpen(true); }}
+                      title="Borrower Details Edit"
+                      className="p-1 rounded-full hover:bg-white/10 text-slate-500 hover:text-white transition-colors shrink-0"
+                    >
+                      <Pencil className="w-3 h-3" />
+                    </button>
+                  </div>
                   {borrower.phone && <p className="text-[11px] text-slate-400 truncate">{borrower.phone}</p>}
                 </div>
               </div>
@@ -585,18 +769,20 @@ export default function BorrowerProfilePanel({
             <div className="relative z-10 px-5 py-4 border-b border-white/5 shrink-0">
               <div className="grid grid-cols-2 gap-3">
                 <div className="bg-white/[0.03] border border-white/5 rounded-2xl p-3">
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Net Due</p>
-                  <p className={`text-xl font-black ${netDue > 0 ? "text-[#f59e0b]" : "text-emerald-400"}`}>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                    {netDue > 0 ? "Owes You" : netDue < 0 ? "You Owe" : "Net Due"}
+                  </p>
+                  <p className={`text-xl font-black ${netDue > 0 ? "text-[#ef4444]" : netDue < 0 ? "text-emerald-400" : "text-emerald-400"}`}>
                     ₹{Math.abs(netDue).toLocaleString("en-IN")}
                   </p>
-                  {netDue <= 0 && totalGiven > 0 && <p className="text-[10px] text-emerald-400 font-bold mt-0.5">Settled ✓</p>}
+                  {netDue === 0 && totalGiven > 0 && <p className="text-[10px] text-emerald-400 font-bold mt-0.5">Settled ✓</p>}
                 </div>
                 <div className="bg-white/[0.03] border border-white/5 rounded-2xl p-3">
                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Total Given / Got</p>
                   <p className="text-sm font-bold text-white">₹{totalGiven.toLocaleString("en-IN")} <span className="text-slate-500">/</span> ₹{totalCollected.toLocaleString("en-IN")}</p>
                 </div>
               </div>
-              {mode === "card" && (givenByCash > 0 || givenByCard > 0) && (
+              {(mode === "card" || mode === "combined") && (givenByCash > 0 || givenByCard > 0) && (
                 <div className="flex gap-3 mt-2 text-[10px] font-medium text-slate-400">
                   <span className="flex items-center gap-1"><Banknote className="w-3 h-3" /> Cash: ₹{givenByCash.toLocaleString("en-IN")}</span>
                   <span className="flex items-center gap-1"><CreditCard className="w-3 h-3" /> Card: ₹{givenByCard.toLocaleString("en-IN")}</span>
@@ -650,7 +836,7 @@ export default function BorrowerProfilePanel({
                         onChange={(e) => setTxDate(e.target.value)}
                         className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white outline-none focus:border-[#f59e0b]"
                       />
-                      {mode === "card" && (
+                      {(mode === "card" || mode === "combined") && (
                         <>
                           <div className="flex gap-2">
                             <button
@@ -665,41 +851,56 @@ export default function BorrowerProfilePanel({
                             >
                               Credit Card
                             </button>
+                            {mode === "combined" && (
+                              <button
+                                onClick={() => setSourceType("pocket")}
+                                className={`flex-1 py-2 rounded-xl text-xs font-bold border ${sourceType === "pocket" ? "bg-emerald-400/15 border-emerald-400 text-emerald-400" : "border-white/10 text-slate-400"}`}
+                              >
+                                Pocket
+                              </button>
+                            )}
                           </div>
-                          <div className="relative">
-                            <select
-                              value={selectedCardId}
-                              onChange={(e) => setSelectedCardId(e.target.value)}
-                              className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white outline-none focus:border-[#f59e0b]"
-                            >
-                              <option value="" disabled className="bg-[#0d0d0d] text-slate-500">Select a card...</option>
-                              {accessibleCards.map((c) => {
-                                // আগের কোডের মতোই — dropdown-এর ভেতরেই প্রতিটা কার্ডের Available/Cash দেখানো হচ্ছে
-                                const cashBal = currentUser ? (cardCashMap[currentUser.id]?.[c.id] || 0) : 0;
-                                const avail = cardAvailableMap[c.id] || 0;
-                                return (
-                                  <option key={c.id} value={c.id} className="bg-[#0d0d0d]">
-                                    {activeForm === "give"
-                                      ? sourceType === "cash_on_hand"
-                                        ? `${c.card_name} (**${c.last_4_digits}) — Cash: ₹${cashBal.toLocaleString("en-IN")}`
-                                        : `${c.card_name} (**${c.last_4_digits}) — Avail: ₹${avail.toLocaleString("en-IN")}`
-                                      : sourceType === "cash_on_hand"
-                                        ? `${c.card_name} (**${c.last_4_digits}) — Cash: ₹${cashBal.toLocaleString("en-IN")}`
-                                        : `${c.card_name} (**${c.last_4_digits})`}
-                                  </option>
-                                );
-                              })}
-                            </select>
-                          </div>
-                          {/* সিলেক্ট করা কার্ডের বর্তমান Available/Cash — আগের কোডের actorCash/avail badge-এর মতোই */}
-                          {selectedCardId && (
-                            <p className="text-[10px] font-bold text-slate-400 ml-1">
-                              {sourceType === "cash_on_hand"
-                                ? `এই কার্ডে বর্তমান Cash: ₹${(currentUser ? (cardCashMap[currentUser.id]?.[selectedCardId] || 0) : 0).toLocaleString("en-IN")}`
-                                : activeForm === "give"
-                                  ? `এই কার্ডে বর্তমান Available Limit: ₹${(cardAvailableMap[selectedCardId] || 0).toLocaleString("en-IN")}`
-                                  : ""}
-                            </p>
+                          {sourceType === "pocket" && (
+                            <p className="text-[10px] text-slate-500 ml-1">ব্যক্তিগত পকেট থেকে — কোনো card/cash touch হবে না, শুধু তুমিই দেখতে পাবে</p>
+                          )}
+                          {sourceType !== "pocket" && (
+                            <>
+                              <div className="relative">
+                                <select
+                                  value={selectedCardId}
+                                  onChange={(e) => setSelectedCardId(e.target.value)}
+                                  className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white outline-none focus:border-[#f59e0b]"
+                                >
+                                  <option value="" disabled className="bg-[#0d0d0d] text-slate-500">Select a card...</option>
+                                  {accessibleCards.map((c) => {
+                                    // আগের কোডের মতোই — dropdown-এর ভেতরেই প্রতিটা কার্ডের Available/Cash দেখানো হচ্ছে
+                                    const cashBal = currentUser ? (cardCashMap[currentUser.id]?.[c.id] || 0) : 0;
+                                    const avail = cardAvailableMap[c.id] || 0;
+                                    return (
+                                      <option key={c.id} value={c.id} className="bg-[#0d0d0d]">
+                                        {activeForm === "give"
+                                          ? sourceType === "cash_on_hand"
+                                            ? `${c.card_name} (**${c.last_4_digits}) — Cash: ₹${cashBal.toLocaleString("en-IN")}`
+                                            : `${c.card_name} (**${c.last_4_digits}) — Avail: ₹${avail.toLocaleString("en-IN")}`
+                                          : sourceType === "cash_on_hand"
+                                            ? `${c.card_name} (**${c.last_4_digits}) — Cash: ₹${cashBal.toLocaleString("en-IN")}`
+                                            : `${c.card_name} (**${c.last_4_digits})`}
+                                      </option>
+                                    );
+                                  })}
+                                </select>
+                              </div>
+                              {/* সিলেক্ট করা কার্ডের বর্তমান Available/Cash — আগের কোডের actorCash/avail badge-এর মতোই */}
+                              {selectedCardId && (
+                                <p className="text-[10px] font-bold text-slate-400 ml-1">
+                                  {sourceType === "cash_on_hand"
+                                    ? `এই কার্ডে বর্তমান Cash: ₹${(currentUser ? (cardCashMap[currentUser.id]?.[selectedCardId] || 0) : 0).toLocaleString("en-IN")}`
+                                    : activeForm === "give"
+                                      ? `এই কার্ডে বর্তমান Available Limit: ₹${(cardAvailableMap[selectedCardId] || 0).toLocaleString("en-IN")}`
+                                      : ""}
+                                </p>
+                              )}
+                            </>
                           )}
                         </>
                       )}
@@ -722,19 +923,18 @@ export default function BorrowerProfilePanel({
                           const isNoAmount = isNaN(amtNum) || amtNum <= 0;
                           let isInsufficient = false;
                           let insufficientLabel = "";
-                          if (activeForm === "give" && mode === "card" && selectedCardId && !isNoAmount) {
+                          if (activeForm === "give" && !isPocketWrite && selectedCardId && !isNoAmount) {
                             if (sourceType === "cash_on_hand") {
                               const avail = currentUser ? (cardCashMap[currentUser.id]?.[selectedCardId] || 0) : 0;
                               if (amtNum > avail) { isInsufficient = true; insufficientLabel = "Insufficient Cash Balance"; }
-                            } else {
+                            } else if (sourceType === "credit_card") {
                               const avail = cardAvailableMap[selectedCardId] || 0;
                               if (amtNum > avail) { isInsufficient = true; insufficientLabel = "Insufficient Card Limit"; }
                             }
                           }
-                          if (activeForm === "collect" && !isNoAmount && amtNum > netDue) {
-                            isInsufficient = true; insufficientLabel = "বাকির চেয়ে বেশি";
-                          }
-                          const isDisabled = isSaving || isNoAmount || !txDate || isInsufficient || (mode === "card" && !selectedCardId);
+                          // "You Got" amount netDue-কে ছাড়িয়ে গেলেও এখন সমস্যা নেই — bidirectional
+                          // ফিচারে সেটা মানে "দিক উল্টে গেছে, তুমি এখন তার কাছে owe করো"
+                          const isDisabled = isSaving || isNoAmount || !txDate || isInsufficient || (!isPocketWrite && !selectedCardId);
                           return (
                             <button
                               disabled={isDisabled}
@@ -799,15 +999,51 @@ export default function BorrowerProfilePanel({
                       {group.rows.map((e) => {
                         const isExpanded = expandedId === e.id;
                         const isGiven = e.entry_type === "given";
+                        const isOwner = !!currentUser && e.recorded_by === currentUser.id;
+                        const isMenuOpen = menuOpenId === e.id;
                         return (
                           <div
                             key={e.id}
                             onClick={() => setExpandedId(isExpanded ? null : e.id)}
-                            className={`rounded-2xl border cursor-pointer transition-colors overflow-hidden ${
+                            className={`relative rounded-2xl border cursor-pointer transition-colors overflow-visible ${
                               isGiven ? "bg-[#ef4444]/[0.04] border-[#ef4444]/10" : "bg-emerald-400/[0.04] border-emerald-400/10"
                             }`}
                           >
-                            <div className="grid grid-cols-[1fr_auto_auto] gap-2 items-start px-3 pt-2.5">
+                            {isOwner && (
+                              <div className="absolute top-1.5 right-1.5 z-20">
+                                <button
+                                  onClick={(ev) => { ev.stopPropagation(); setMenuOpenId(isMenuOpen ? null : e.id); }}
+                                  className="p-1 rounded-full hover:bg-white/10 text-slate-500 hover:text-white transition-colors"
+                                >
+                                  <MoreVertical className="w-3.5 h-3.5" />
+                                </button>
+                                <AnimatePresence>
+                                  {isMenuOpen && (
+                                    <motion.div
+                                      initial={{ opacity: 0, scale: 0.95, y: -4 }}
+                                      animate={{ opacity: 1, scale: 1, y: 0 }}
+                                      exit={{ opacity: 0, scale: 0.95 }}
+                                      onClick={(ev) => ev.stopPropagation()}
+                                      className="absolute right-0 top-7 bg-[#0d0d0d] border border-white/10 rounded-xl shadow-2xl overflow-hidden min-w-[110px]"
+                                    >
+                                      <button
+                                        onClick={() => { setMenuOpenId(null); handleStartEdit(e); }}
+                                        className="w-full flex items-center gap-2 px-3 py-2 text-xs font-bold text-slate-200 hover:bg-white/5"
+                                      >
+                                        <Pencil className="w-3.5 h-3.5" /> Edit
+                                      </button>
+                                      <button
+                                        onClick={() => { setMenuOpenId(null); setDeleteTarget(e); }}
+                                        className="w-full flex items-center gap-2 px-3 py-2 text-xs font-bold text-[#ef4444] hover:bg-[#ef4444]/10"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" /> Delete
+                                      </button>
+                                    </motion.div>
+                                  )}
+                                </AnimatePresence>
+                              </div>
+                            )}
+                            <div className="grid grid-cols-[1fr_auto_auto] gap-2 items-start px-3 pt-2.5 pr-7">
                               <div className="min-w-0">
                                 {mode === "card" && (
                                   <p className="text-[10px] text-slate-500 flex items-center gap-1">
@@ -815,14 +1051,22 @@ export default function BorrowerProfilePanel({
                                     {e.source_type === "credit_card" ? "Card" : "Cash on Hand"} · {getCardLabel(e.card_id)}
                                   </p>
                                 )}
+                                {mode === "combined" && (
+                                  <p className="text-[10px] text-slate-500 flex items-center gap-1">
+                                    {e.ledgerSource === "pocket" ? (
+                                      <>👛 Pocket</>
+                                    ) : (
+                                      <>
+                                        {e.source_type === "credit_card" ? <CreditCard className="w-3 h-3" /> : <Banknote className="w-3 h-3" />}
+                                        💳 {e.source_type === "credit_card" ? "Card" : "Cash on Hand"} · {getCardLabel(e.card_id)}
+                                      </>
+                                    )}
+                                  </p>
+                                )}
                                 <p className="text-[10px] text-slate-500 flex items-center gap-1 mt-0.5">
                                   <UserCircle2 className="w-3 h-3" />
                                   {getRecorderName(e.recorded_by)} রেকর্ড করেছে
                                 </p>
-                                <span className="inline-block mt-1 text-[10px] font-bold text-[#f59e0b] bg-[#f59e0b]/10 px-2 py-0.5 rounded-full">
-                                  Bal. ₹{Math.abs(e.balanceAfter).toLocaleString("en-IN")}
-                                </span>
-                                {e.remarks && <p className="text-[11px] text-slate-400 mt-1.5 truncate">{e.remarks}</p>}
                               </div>
                               <span className="w-20 text-right text-sm font-black text-[#ef4444]">
                                 {isGiven ? `₹${Number(e.amount).toLocaleString("en-IN")}` : ""}
@@ -831,9 +1075,16 @@ export default function BorrowerProfilePanel({
                                 {!isGiven ? `₹${Number(e.amount).toLocaleString("en-IN")}` : ""}
                               </span>
                             </div>
-                            {/* তারিখ ও সময় — নিচে ডানদিকে (একই সাইজ, শুধু position পরিবর্তিত) */}
-                            <div className="flex justify-end px-3 pb-2 pt-1">
-                              <p className="text-[11px] text-slate-300 font-semibold">
+                            {/* বাঁদিকে শেষ লাইন (balance badge / remarks) আর ডানদিকে date & time — একই লাইনে,
+                                items-end দিয়ে যেন বাঁদিকের block যতই লম্বা হোক ডানদিকেরটা তার নিচের কিনারায় বসে */}
+                            <div className="flex items-end justify-between gap-2 px-3 pb-2 pt-1">
+                              <div className="min-w-0">
+                                <span className="inline-block text-[10px] font-bold text-[#f59e0b] bg-[#f59e0b]/10 px-2 py-0.5 rounded-full">
+                                  Bal. ₹{Math.abs(e.balanceAfter).toLocaleString("en-IN")}
+                                </span>
+                                {e.remarks && <p className="text-[11px] text-slate-400 mt-1.5 truncate">{e.remarks}</p>}
+                              </div>
+                              <p className="shrink-0 text-[11px] text-slate-300 font-semibold whitespace-nowrap">
                                 {new Date(e.transaction_date).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "2-digit" })}
                                 {" • "}
                                 {new Date(e.created_at).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true })}
@@ -868,6 +1119,159 @@ export default function BorrowerProfilePanel({
               )}
             </div>
           </motion.div>
+
+          {/* Borrower Details Edit Modal */}
+          <AnimatePresence>
+            {borrowerEditOpen && (
+              <>
+                <motion.div
+                  initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                  onClick={() => !isSavingBorrower && setBorrowerEditOpen(false)}
+                  className="fixed inset-0 z-[80] bg-black/70 backdrop-blur-sm"
+                />
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.96, y: 10 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.96 }}
+                  className="fixed inset-x-6 top-24 z-[81] max-w-sm mx-auto bg-[#0d0d0d] border border-white/10 rounded-3xl shadow-2xl p-5 space-y-3"
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <h3 className="text-sm font-black text-white">Borrower Details Edit</h3>
+                    <button onClick={() => !isSavingBorrower && setBorrowerEditOpen(false)} className="text-slate-400"><X className="w-4 h-4" /></button>
+                  </div>
+                  <input
+                    type="text" placeholder="নাম" value={editBorrowerName} onChange={(e) => setEditBorrowerName(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white outline-none focus:border-[#f59e0b]"
+                  />
+                  <input
+                    type="text" placeholder="ফোন নম্বর (optional)" value={editBorrowerPhone} onChange={(e) => setEditBorrowerPhone(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white outline-none focus:border-[#f59e0b]"
+                  />
+                  <div className="flex gap-2 pt-1">
+                    <button
+                      onClick={() => setBorrowerEditOpen(false)}
+                      disabled={isSavingBorrower}
+                      className="flex-1 py-2.5 rounded-xl text-sm font-bold text-slate-400 border border-white/10"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleSaveBorrowerDetails}
+                      disabled={isSavingBorrower || !editBorrowerName.trim()}
+                      className="flex-1 py-2.5 rounded-xl text-sm font-bold text-black bg-[#f59e0b] flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      {isSavingBorrower && <Loader2 className="w-4 h-4 animate-spin" />}
+                      Save
+                    </button>
+                  </div>
+                </motion.div>
+              </>
+            )}
+          </AnimatePresence>
+
+          {/* Edit Entry Modal */}
+          <AnimatePresence>
+            {editingEntry && (
+              <>
+                <motion.div
+                  initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                  onClick={() => !isSavingEdit && setEditingEntry(null)}
+                  className="fixed inset-0 z-[80] bg-black/70 backdrop-blur-sm"
+                />
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.96, y: 10 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.96 }}
+                  className="fixed inset-x-6 top-24 z-[81] max-w-sm mx-auto bg-[#0d0d0d] border border-white/10 rounded-3xl shadow-2xl p-5 space-y-3"
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <h3 className="text-sm font-black text-white">
+                      Edit — {editingEntry.entry_type === "given" ? "You Gave" : "You Got"}
+                    </h3>
+                    <button onClick={() => !isSavingEdit && setEditingEntry(null)} className="text-slate-400"><X className="w-4 h-4" /></button>
+                  </div>
+                  <p className="text-[10px] text-slate-500 -mt-2">
+                    Source পরিবর্তন করা যাবে না — শুধু amount, date ও remarks এডিট করা যাবে।
+                  </p>
+                  <input
+                    type="number" placeholder="Amount" value={editAmount} onChange={(e) => setEditAmount(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white outline-none focus:border-[#f59e0b]"
+                  />
+                  <input
+                    type="date" value={editDate} onChange={(e) => setEditDate(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white outline-none focus:border-[#f59e0b]"
+                  />
+                  <input
+                    type="text" placeholder="Remarks (optional)" value={editRemarks} onChange={(e) => setEditRemarks(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white outline-none focus:border-[#f59e0b]"
+                  />
+                  <div className="flex gap-2 pt-1">
+                    <button
+                      onClick={() => setEditingEntry(null)}
+                      disabled={isSavingEdit}
+                      className="flex-1 py-2.5 rounded-xl text-sm font-bold text-slate-400 border border-white/10"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleSaveEditEntry}
+                      disabled={isSavingEdit}
+                      className="flex-1 py-2.5 rounded-xl text-sm font-bold text-black bg-[#f59e0b] flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      {isSavingEdit && <Loader2 className="w-4 h-4 animate-spin" />}
+                      {isSavingEdit ? "Saving..." : "Save"}
+                    </button>
+                  </div>
+                </motion.div>
+              </>
+            )}
+          </AnimatePresence>
+
+          {/* Delete Confirmation Modal */}
+          <AnimatePresence>
+            {deleteTarget && (
+              <>
+                <motion.div
+                  initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                  onClick={() => !isDeleting && setDeleteTarget(null)}
+                  className="fixed inset-0 z-[80] bg-black/70 backdrop-blur-sm"
+                />
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.96, y: 10 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.96 }}
+                  className="fixed inset-x-6 top-32 z-[81] max-w-sm mx-auto bg-[#0d0d0d] border border-white/10 rounded-3xl shadow-2xl p-5 space-y-3"
+                >
+                  <div className="flex items-center gap-2 text-[#ef4444]">
+                    <AlertTriangle className="w-5 h-5" />
+                    <h3 className="text-sm font-black">এন্ট্রি ডিলিট করবে?</h3>
+                  </div>
+                  <p className="text-xs text-slate-400">
+                    {mode === "pocket" || deleteTarget.ledgerSource === "pocket"
+                      ? "এই entry মুছে ফেলা হবে।"
+                      : "এই entry মুছলে card cash/limit ও ফিরে যাবে, নিশ্চিত?"}
+                  </p>
+                  <div className="flex gap-2 pt-1">
+                    <button
+                      onClick={() => setDeleteTarget(null)}
+                      disabled={isDeleting}
+                      className="flex-1 py-2.5 rounded-xl text-sm font-bold text-slate-400 border border-white/10"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleConfirmDelete}
+                      disabled={isDeleting}
+                      className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white bg-[#ef4444] flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      {isDeleting && <Loader2 className="w-4 h-4 animate-spin" />}
+                      {isDeleting ? "Deleting..." : "Delete"}
+                    </button>
+                  </div>
+                </motion.div>
+              </>
+            )}
+          </AnimatePresence>
         </>
       )}
     </AnimatePresence>,
