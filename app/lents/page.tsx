@@ -13,29 +13,25 @@ import {
 } from "lucide-react";
 import { BottomNav } from "@/components/BottomNav";
 import { supabase } from "@/lib/supabase";
+import { useAuthStore } from "@/store/authStore";
+import { useDataCacheStore } from "@/store/dataCacheStore";
 import Link from "next/link";
 import BorrowerProfilePanel, { Borrower, Profile, CardData } from "./BorrowerProfilePanel";
 import BorrowerPicker from "./BorrowerPicker";
 import LentsFromPocket from "./LentsFromPocket";
-import { exportBorrowerListPdf } from "./pdfExport";
+// PDF export বিল্ডার ডায়নামিকভাবে ইমপোর্ট করা হয় বান্ডেল সাইজ কমাতে
 
-// ─── Smoke Reveal: per-character ────────
 function SmokeText({ text, className = "" }: { text: string; className?: string }) {
   return (
-    <span className={`inline-flex ${className}`} aria-label={text}>
-      {text.split("").map((char, i) => (
-        <motion.span
-          key={i}
-          initial={{ opacity: 0, filter: "blur(12px)", y: 8 }}
-          animate={{ opacity: 1, filter: "blur(0px)", y: 0 }}
-          transition={{ delay: i * 0.045, duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-          className="inline-block bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent"
-          style={{ whiteSpace: char === " " ? "pre" : "normal" }}
-        >
-          {char}
-        </motion.span>
-      ))}
-    </span>
+    <motion.span
+      className={`inline-block bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent ${className}`}
+      initial={{ opacity: 0, filter: "blur(8px)", y: 6 }}
+      animate={{ opacity: 1, filter: "blur(0px)", y: 0 }}
+      transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
+      aria-label={text}
+    >
+      {text}
+    </motion.span>
   );
 }
 
@@ -136,24 +132,37 @@ export default function LentsPage() {
   };
 
   const fetchInitialData = async () => {
-    setIsLoading(true);
-    const { data: { user } } = await supabase.auth.getUser();
+    const cacheKey = "lents_borrowers_summary";
+    const cached = useDataCacheStore.getState().get<any>(cacheKey, 60000);
+    if (cached) {
+      if (cached.borrowers) setBorrowers(cached.borrowers);
+      if (cached.combinedBorrowers) setCombinedBorrowers(cached.combinedBorrowers);
+      if (cached.cardCashMap) setCardCashMap(cached.cardCashMap);
+      if (cached.cardAvailableMap) setCardAvailableMap(cached.cardAvailableMap);
+      setIsLoading(false);
+      setCombinedLoading(false);
+    } else {
+      setIsLoading(true);
+    }
 
-    const { data: profData } = await supabase.from("profiles").select("id, name, avatar_url, phone");
-    const { data: cData } = await supabase.from("cards").select("*");
-    const { data: aData } = await supabase.from("card_access").select("*");
+    // 1. Get User, Profile, and Accessible Cards from Central Store (0ms on repeated visits!)
+    const { user, profile, allProfiles: profs } = await useAuthStore.getState().initAuth();
 
-    const profs = profData || [];
-    const cardsList = cData || [];
-    const accessList = aData || [];
+    const [cRes, aRes] = await Promise.all([
+      supabase.from("cards").select("*"),
+      supabase.from("card_access").select("*")
+    ]);
 
-    setAllProfiles(profs);
+    const cardsList = cRes.data || [];
+    const accessList = aRes.data || [];
+
+    setAllProfiles(profs as any);
     setAllCards(cardsList);
     setAllCardAccess(accessList);
 
     if (user) {
-      const myProfile = profs.find((p) => p.id === user.id);
-      if (myProfile) setCurrentUser({ ...myProfile, avatar_url: cleanUrl(myProfile.avatar_url) });
+      const myProfile = profs.find((p) => p.id === user.id) || profile;
+      if (myProfile) setCurrentUser({ ...myProfile, avatar_url: cleanUrl(myProfile.avatar_url) } as any);
 
       const myCardIds = accessList.filter((a) => a.user_id === user.id).map((a) => a.card_id);
       const myCards = cardsList
@@ -193,7 +202,12 @@ export default function LentsPage() {
 
   // --- Cash / Card available balance maps (calculation অপরিবর্তিত) ---
   const fetchBalanceMaps = async (currentCards: CardData[]) => {
-    const { data: coh } = await supabase.from("cash_on_hand").select("user_id, card_id, current_balance");
+    const [{ data: coh }, { data: txs }, { data: spends }] = await Promise.all([
+      supabase.from("cash_on_hand").select("user_id, card_id, current_balance"),
+      supabase.from("card_transactions").select("amount, type, payment_method, card_id, status, qr_id, settled_to_user, remarks"),
+      supabase.from("spends").select("amount, payment_method, user_id, card_id")
+    ]);
+
     const userCardCashMap: Record<string, Record<string, number>> = {};
     coh?.forEach((c) => {
       if (c.user_id && c.card_id) {
@@ -202,9 +216,6 @@ export default function LentsPage() {
       }
     });
     setCardCashMap(userCardCashMap as any);
-
-    const { data: txs } = await supabase.from("card_transactions").select("amount, type, payment_method, card_id, status, qr_id, settled_to_user, remarks");
-    const { data: spends } = await supabase.from("spends").select("amount, payment_method, user_id, card_id");
 
     const availableMap: Record<string, number> = {};
     currentCards.filter((c) => c.is_primary).forEach((primaryCard) => {
@@ -348,6 +359,7 @@ export default function LentsPage() {
   const handleExportCombinedListPdf = async () => {
     setIsExportingCombinedList(true);
     try {
+      const { exportBorrowerListPdf } = await import("./pdfExport");
       await exportBorrowerListPdf({
         mode: "card", // লিস্ট-লেভেল সামারি টেমপ্লেট card/pocket দুটোতেই একই — লেবেল প্রভাবিত করে না
         borrowers: combinedBorrowers.map((b) => ({
@@ -368,6 +380,7 @@ export default function LentsPage() {
   const handleExportListPdf = async () => {
     setIsExportingList(true);
     try {
+      const { exportBorrowerListPdf } = await import("./pdfExport");
       await exportBorrowerListPdf({
         mode: "card",
         borrowers: borrowers.map((b) => ({
@@ -387,19 +400,10 @@ export default function LentsPage() {
 
   return (
     <div className="relative min-h-screen bg-[#030014] text-slate-50 font-sans pb-28 overflow-x-hidden selection:bg-[#f59e0b]/30">
-      {/* Background */}
       <div className="fixed inset-0 z-0 overflow-hidden pointer-events-none">
         <div className="absolute inset-0 bg-[linear-gradient(to_right,#f59e0b0a_1px,transparent_1px),linear-gradient(to_bottom,#f59e0b0a_1px,transparent_1px)] bg-[size:32px_32px] [mask-image:radial-gradient(ellipse_80%_80%_at_50%_50%,#000_10%,transparent_100%)]" />
-        <motion.div
-          animate={{ x: [0, -30, 30, 0], y: [0, 40, -40, 0], scale: [1, 1.2, 0.8, 1] }}
-          transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
-          className="absolute top-[-10%] left-[-20%] w-[70vw] h-[70vw] rounded-full bg-[#f59e0b] opacity-[0.12] blur-[120px] mix-blend-screen"
-        />
-        <motion.div
-          animate={{ x: [0, 40, -40, 0], y: [0, -30, 30, 0], scale: [1, 0.9, 1.1, 1] }}
-          transition={{ duration: 15, repeat: Infinity, ease: "linear" }}
-          className="absolute bottom-[20%] right-[-10%] w-[60vw] h-[60vw] rounded-full bg-[#ef4444] opacity-[0.12] blur-[100px] mix-blend-screen"
-        />
+        <div className="absolute top-[-10%] left-[-20%] w-[70vw] h-[70vw] rounded-full bg-[#f59e0b] opacity-[0.12] blur-[120px] mix-blend-screen" />
+        <div className="absolute bottom-[20%] right-[-10%] w-[60vw] h-[60vw] rounded-full bg-[#ef4444] opacity-[0.12] blur-[100px] mix-blend-screen" />
       </div>
 
       {/* Header — শুধু top padding ২/৭ অংশ কমানো হয়েছে (pt-8 → ~pt-6), বাকি সবকিছু আগের সাইজেই।
@@ -616,7 +620,7 @@ export default function LentsPage() {
                         exit={{ opacity: 0 }}
                         transition={{ delay: i * 0.03 }}
                         onClick={() => openCombinedBorrower(b)}
-                        className="p-4 bg-white/[0.03] border border-white/5 rounded-[24px] flex items-center justify-between cursor-pointer hover:bg-white/[0.05] transition-colors"
+                        className="p-4 bg-white/[0.03] border border-white/5 rounded-[24px] flex items-center justify-between cursor-pointer hover:bg-white/[0.05] transition-colors [content-visibility:auto] [contain-intrinsic-size:0_76px]"
                       >
                         <div className="flex items-center gap-3 min-w-0">
                           <div className="w-11 h-11 shrink-0 rounded-[14px] bg-white/10 border border-white/5 flex items-center justify-center">
@@ -751,7 +755,7 @@ export default function LentsPage() {
                         exit={{ opacity: 0 }}
                         transition={{ delay: i * 0.03 }}
                         onClick={() => openBorrower(b)}
-                        className="p-4 bg-white/[0.03] border border-white/5 rounded-[24px] flex items-center justify-between cursor-pointer hover:bg-white/[0.05] transition-colors"
+                        className="p-4 bg-white/[0.03] border border-white/5 rounded-[24px] flex items-center justify-between cursor-pointer hover:bg-white/[0.05] transition-colors [content-visibility:auto] [contain-intrinsic-size:0_76px]"
                       >
                         <div className="flex items-center gap-3 min-w-0">
                           <div className="w-11 h-11 shrink-0 rounded-[14px] bg-[#f59e0b]/10 border border-white/5 flex items-center justify-center">

@@ -6,7 +6,7 @@ import { User, Plus, Wallet, Loader2, FileDown, AlertCircle } from "lucide-react
 import { supabase } from "@/lib/supabase";
 import BorrowerProfilePanel, { Borrower, Profile } from "./BorrowerProfilePanel";
 import BorrowerPicker from "./BorrowerPicker";
-import { exportBorrowerListPdf } from "./pdfExport";
+// PDF export is dynamically imported in handleExportListPdf
 
 interface BorrowerSummary extends Borrower {
   netDue: number;
@@ -116,6 +116,7 @@ export default function LentsFromPocket({ animKey = 0 }: LentsFromPocketProps) {
   const handleExportListPdf = async () => {
     setIsExportingList(true);
     try {
+      const { exportBorrowerListPdf } = await import("./pdfExport");
       await exportBorrowerListPdf({
         mode: "pocket",
         borrowers: borrowers.map((b) => ({
@@ -226,7 +227,7 @@ export default function LentsFromPocket({ animKey = 0 }: LentsFromPocketProps) {
                 exit={{ opacity: 0 }}
                 transition={{ delay: i * 0.03 }}
                 onClick={() => openBorrower(b)}
-                className="p-4 bg-white/[0.03] border border-white/5 rounded-[22px] flex items-center justify-between cursor-pointer hover:bg-white/[0.05] transition-colors"
+                className="p-4 bg-white/[0.03] border border-white/5 rounded-[22px] flex items-center justify-between cursor-pointer hover:bg-white/[0.05] transition-colors [content-visibility:auto] [contain-intrinsic-size:0_76px]"
               >
                 <div className="flex items-center gap-3 min-w-0">
                   <div className="w-11 h-11 shrink-0 rounded-[14px] bg-emerald-500/10 border border-white/5 flex items-center justify-center">

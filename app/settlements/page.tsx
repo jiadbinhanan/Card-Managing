@@ -2,6 +2,8 @@
 
 import { useState, useEffect } from "react";
 import { useCardStore } from "@/store/cardStore";
+import { useAuthStore } from "@/store/authStore";
+import { useDataCacheStore } from "@/store/dataCacheStore";
 import { motion, AnimatePresence, type Variants } from "motion/react";
 import { 
   ArrowDownLeft, 
@@ -11,7 +13,8 @@ import {
   ShieldCheck,
   User,
   CreditCard,
-  Plus
+  Plus,
+  Layers,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -20,6 +23,7 @@ import { supabase } from "@/lib/supabase";
 import Link from "next/link";
 import { sendWhatsAppAlert } from "@/lib/whatsapp";
 import QRTab from "./qr";
+import TransactionTraceInline, { type TraceTarget } from "@/components/TransactionTraceInline";
 
 interface Transaction {
   id: string;
@@ -62,8 +66,8 @@ interface QRData {
 
 // Stagger Animation Variants (Shared for tabs)
 const listContainerVars: Variants = {
-  hidden: { opacity: 0, display: "none", transition: { duration: 0 } },
-  visible: { opacity: 1, display: "block", transition: { staggerChildren: 0.08 } }
+  hidden: { opacity: 0, transition: { duration: 0 } },
+  visible: { opacity: 1, transition: { staggerChildren: 0.08 } }
 };
 
 const listItemVars: Variants = {
@@ -106,6 +110,9 @@ export default function SettlementsPage() {
   const [manualRemarks, setManualRemarks] = useState("");
   const [manualQrId, setManualQrId] = useState(""); 
 
+  // Transaction Journey Trace State
+  const [activeTraceId, setActiveTraceId] = useState<string | null>(null);
+
   useEffect(() => {
     fetchInitialData();
     const handleSwitchTab = () => { setActiveTab("pending"); fetchLedgerData(accessibleCards); };
@@ -133,25 +140,36 @@ export default function SettlementsPage() {
   };
 
   const fetchInitialData = async () => {
-    setIsLoading(true);
-    const { data: { user } } = await supabase.auth.getUser();
+    const cacheKey = `settlements_ledger_${globalSelectedCardId}`;
+    const cached = useDataCacheStore.getState().get<any>(cacheKey, 60000);
+    if (cached) {
+      if (cached.pendingTxs) setPendingTxs(cached.pendingTxs);
+      if (cached.settledTxs) setSettledTxs(cached.settledTxs);
+      if (cached.userCashMap) setUserCashMap(cached.userCashMap);
+      if (cached.availableMap) setCardAvailableMap(cached.availableMap);
+      setIsLoading(false);
+    } else {
+      setIsLoading(true);
+    }
 
-    const { data: profData } = await supabase.from('profiles').select('id, name, avatar_url, phone');
-    const { data: cData } = await supabase.from('cards').select('*');
-    const { data: aData } = await supabase.from('card_access').select('*');
-    const { data: qData } = await supabase.from('qrs').select('id, merchant_name').eq('status', 'active');
+    // 1. Get User, Profile, and Accessible Cards from Central Store (0ms on repeated visits!)
+    const { user, profile, allProfiles: profs, cards: cachedCards } = await useAuthStore.getState().initAuth();
 
-    const profs = profData || [];
-    const cardsList = cData || [];
-    const accessList = aData || [];
-    setActiveQrs(qData || []);
+    const [cRes, aRes, qRes] = await Promise.all([
+      supabase.from('cards').select('*'),
+      supabase.from('card_access').select('*'),
+      supabase.from('qrs').select('id, merchant_name').eq('status', 'active')
+    ]);
 
-    setProfiles(profs);
+    const cardsList = cRes.data || [];
+    const accessList = aRes.data || [];
+    setActiveQrs(qRes.data || []);
+    setProfiles(profs as any);
 
     if (user) {
-      const myProfile = profs.find(p => p.id === user.id);
+      const myProfile = profs.find(p => p.id === user.id) || profile;
       if (myProfile) {
-         setCurrentUser({ ...myProfile, avatar_url: cleanUrl(myProfile.avatar_url) });
+         setCurrentUser({ ...myProfile, avatar_url: cleanUrl(myProfile.avatar_url) } as any);
          setFirstName(myProfile.name.split(' ')[0].toLowerCase());
          setCashReceiverId(myProfile.id);
       }
@@ -181,28 +199,37 @@ export default function SettlementsPage() {
         .select(`*, qrs (merchant_name), profiles:recorded_by (name, avatar_url), cards(card_name, last_4_digits), settled_to_profile:settled_to_user(name)`)
         .eq('type', 'withdrawal')
         .not('remarks', 'ilike', 'Lent given to%')
-        .order('transaction_date', { ascending: false });
+        .order('transaction_date', { ascending: false })
+        .limit(100);
 
     if (globalSelectedCardId !== 'all' && targetCardIds.length > 0) {
        txQuery = txQuery.in('card_id', targetCardIds);
     }
 
-    const { data: txs } = await txQuery;
-    const { data: coh } = await supabase.from('cash_on_hand').select('*');
+    const [
+      { data: txs },
+      { data: coh },
+      { data: allTxs },
+      { data: allSpends }
+    ] = await Promise.all([
+      txQuery,
+      supabase.from('cash_on_hand').select('*'),
+      supabase.from('card_transactions').select('amount, type, payment_method, card_id, status, qr_id, settled_to_user, remarks'),
+      supabase.from('spends').select('amount, payment_method, user_id, card_id')
+    ]);
 
+    let pending: any[] = [];
+    let settled: any[] = [];
     if (txs) {
-       setPendingTxs(txs.filter(t => t.status === 'pending_settlement') as any);
-       setSettledTxs(txs.filter(t => t.status === 'settled').sort((a,b) => new Date(b.settled_date || b.transaction_date).getTime() - new Date(a.settled_date || a.transaction_date).getTime()) as any);
+       pending = txs.filter(t => t.status === 'pending_settlement') as any;
+       settled = txs.filter(t => t.status === 'settled').sort((a,b) => new Date(b.settled_date || b.transaction_date).getTime() - new Date(a.settled_date || a.transaction_date).getTime()) as any;
+       setPendingTxs(pending);
+       setSettledTxs(settled);
     }
 
     const cashMap: Record<string, number> = {};
     coh?.forEach(c => { cashMap[c.user_id] = (cashMap[c.user_id] || 0) + Number(c.current_balance); });
     setUserCashMap(cashMap);
-
-    // Card Available Limits — using dashboard/page.tsx logic
-    const { data: allTxs } = await supabase.from('card_transactions')
-      .select('amount, type, payment_method, card_id, status, qr_id, settled_to_user, remarks');
-    const { data: allSpends } = await supabase.from('spends').select('amount, payment_method, user_id, card_id');
 
     const availableMap: Record<string, number> = {};
 
@@ -227,6 +254,15 @@ export default function SettlementsPage() {
        });
     });
     setCardAvailableMap(availableMap);
+
+    // Save in-memory cache for instant SWR navigation
+    const cacheKey = `settlements_ledger_${globalSelectedCardId}`;
+    useDataCacheStore.getState().set(cacheKey, {
+      pendingTxs: pending,
+      settledTxs: settled,
+      userCashMap: cashMap,
+      availableMap,
+    });
   };
 
   const openSettleModal = (tx: Transaction) => {
@@ -304,7 +340,8 @@ export default function SettlementsPage() {
            amount: amtToSettle,
            transaction_type: 'credit',
            remarks: `Settlement received from ${settleTx.qrs?.merchant_name || 'Manual Rotation Entry'}`,
-           transaction_date: new Date().toISOString()
+           transaction_date: new Date().toISOString(),
+           linked_card_transaction_id: settleTx.id
         });
 
         const nowTime = new Date();
@@ -476,8 +513,8 @@ export default function SettlementsPage() {
 
       <div className="fixed inset-0 z-0 overflow-hidden pointer-events-none">
         <div className="absolute inset-0 bg-[linear-gradient(to_right,#10b9810a_1px,transparent_1px),linear-gradient(to_bottom,#10b9810a_1px,transparent_1px)] bg-[size:32px_32px] [mask-image:radial-gradient(ellipse_80%_80%_at_50%_50%,#000_20%,transparent_100%)]" />
-        <motion.div animate={{ x: [0, 50, -40, 0], y: [0, 60, -50, 0] }} transition={{ duration: 22, repeat: Infinity, ease: "linear" }} className="absolute top-[-10%] right-[-20%] w-[90vw] h-[90vw] rounded-full bg-[#10b981] opacity-[0.12] blur-[120px] mix-blend-screen" />
-        <motion.div animate={{ x: [0, -50, 50, 0], y: [0, -60, 60, 0] }} transition={{ duration: 28, repeat: Infinity, ease: "linear" }} className="absolute bottom-[5%] left-[-25%] w-[100vw] h-[100vw] rounded-full bg-[#0ea5e9] opacity-[0.12] blur-[130px] mix-blend-screen" />
+        <div className="absolute top-[-10%] right-[-20%] w-[90vw] h-[90vw] rounded-full bg-[#10b981] opacity-[0.12] blur-[120px] mix-blend-screen" />
+        <div className="absolute bottom-[5%] left-[-25%] w-[100vw] h-[100vw] rounded-full bg-[#0ea5e9] opacity-[0.12] blur-[130px] mix-blend-screen" />
       </div>
 
       <header className="relative z-10 px-5 pt-8 pb-3 sticky top-0 bg-[#030014]/70 backdrop-blur-3xl border-b border-white/5 shadow-[0_15px_40px_rgba(0,0,0,0.8)] flex justify-between items-center">
@@ -570,6 +607,7 @@ export default function SettlementsPage() {
                  variants={listContainerVars}
                  initial="hidden"
                  animate={activeTab === "pending" ? "visible" : "hidden"}
+                 style={{ display: activeTab === "pending" ? "block" : "none" }}
                  className="space-y-4"
               >
                  <motion.div variants={listItemVars} className="flex gap-3">
@@ -600,7 +638,7 @@ export default function SettlementsPage() {
                              variants={listItemVars}
                              exit={{ opacity: 0, scale: 0.9 }}
                              onClick={() => openSettleModal(tx)}
-                             className="group relative p-4 rounded-[20px] bg-white/[0.03] border border-white/5 hover:bg-white/[0.05] hover:border-amber-500/30 transition-all cursor-pointer overflow-hidden shadow-inner"
+                             className="group relative p-4 rounded-[20px] bg-white/[0.03] border border-white/5 hover:bg-white/[0.05] hover:border-amber-500/30 transition-all cursor-pointer overflow-hidden shadow-inner [content-visibility:auto] [contain-intrinsic-size:0_84px]"
                           >
                              <div className="absolute -inset-4 opacity-0 group-hover:opacity-20 transition-opacity duration-500 blur-2xl bg-amber-500/20" />
 
@@ -624,10 +662,43 @@ export default function SettlementsPage() {
                                    <CreditCard className="w-3.5 h-3.5" />
                                    {tx.cards ? `${tx.cards.card_name} (**${tx.cards.last_4_digits})` : 'Card not linked'}
                                 </div>
-                                <Button size="sm" className="h-7 px-2.5 text-[10px] bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-lg">
-                                   <CheckCircle2 className="w-3 h-3 mr-1" /> Settle
-                                </Button>
+                                <div className="flex items-center gap-1.5">
+                                   <button
+                                      type="button"
+                                      onClick={(e) => {
+                                         e.stopPropagation();
+                                         setActiveTraceId(activeTraceId === tx.id ? null : tx.id);
+                                      }}
+                                      className={`h-7 px-2 text-[10px] rounded-lg flex items-center gap-1 font-bold transition-colors border ${
+                                         activeTraceId === tx.id
+                                            ? "bg-sky-500/25 text-sky-300 border-sky-400"
+                                            : "bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 border-sky-500/30"
+                                      }`}
+                                   >
+                                      <Layers className="w-3 h-3" /> {activeTraceId === tx.id ? "ট্রেস বন্ধ" : "জার্নি ট্রেস"}
+                                   </button>
+                                   <Button size="sm" className="h-7 px-2.5 text-[10px] bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-lg">
+                                      <CheckCircle2 className="w-3 h-3 mr-1" /> Settle
+                                   </Button>
+                                </div>
                              </div>
+
+                             {/* Inline Trace Card */}
+                             {activeTraceId === tx.id && (
+                                <div className="pt-2 border-t border-white/5">
+                                   <TransactionTraceInline
+                                      target={{
+                                         id: tx.id,
+                                         sourceType: "card_transaction",
+                                         title: tx.qrs?.merchant_name || tx.remarks,
+                                         amount: tx.amount,
+                                         date: tx.transaction_date,
+                                         remarks: tx.remarks
+                                      }}
+                                      onClose={() => setActiveTraceId(null)}
+                                   />
+                                </div>
+                             )}
                           </motion.div>
                        ))}
                     </AnimatePresence>
@@ -645,6 +716,7 @@ export default function SettlementsPage() {
                  variants={listContainerVars}
                  initial="hidden"
                  animate={activeTab === "history" ? "visible" : "hidden"}
+                 style={{ display: activeTab === "history" ? "block" : "none" }}
                  className="space-y-6 pb-6"
               >
                  {Object.keys(groupedHistory).length === 0 ? (
@@ -668,7 +740,7 @@ export default function SettlementsPage() {
                                key={item.id}
                                layout
                                variants={listItemVars}
-                               className="group p-4 bg-white/[0.02] border border-white/5 rounded-[24px] backdrop-blur-xl flex flex-col shadow-inner ml-2 border-l-2 border-l-[#10b981]/50 hover:bg-white/[0.04] transition-all"
+                               className="group p-4 bg-white/[0.02] border border-white/5 rounded-[24px] backdrop-blur-xl flex flex-col shadow-inner ml-2 border-l-2 border-l-[#10b981]/50 hover:bg-white/[0.04] transition-all [content-visibility:auto] [contain-intrinsic-size:0_84px]"
                              >
                                <div className="flex items-center justify-between mb-2">
                                   <div className="flex items-center gap-3 w-[70%]">
@@ -682,14 +754,45 @@ export default function SettlementsPage() {
                                       </p>
                                     </div>
                                   </div>
-                                  <div className="text-right shrink-0">
+                                  <div className="text-right shrink-0 flex flex-col items-end gap-1">
                                     <span className="text-sm font-black text-emerald-400">+₹{item.amount.toLocaleString()}</span>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setActiveTraceId(activeTraceId === item.id ? null : item.id);
+                                      }}
+                                      className={`text-[9px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 border transition-colors ${
+                                        activeTraceId === item.id
+                                          ? "bg-sky-500/25 text-sky-300 border-sky-400"
+                                          : "text-sky-400 bg-sky-500/10 hover:bg-sky-500/20 border-sky-500/20"
+                                      }`}
+                                    >
+                                      <Layers className="w-2.5 h-2.5" /> {activeTraceId === item.id ? "ট্রেস বন্ধ" : "জার্নি ট্রেস"}
+                                    </button>
                                   </div>
                                </div>
                                <div className="pt-2 border-t border-white/5 flex items-center justify-between text-[9px] font-bold text-slate-500 uppercase tracking-wider">
                                   <div className="flex items-center gap-1"><CreditCard className="w-3 h-3"/> {item.cards?.card_name || 'Card'}</div>
                                   <div className="flex items-center gap-1 text-[#0ea5e9]"><User className="w-3 h-3"/> By: {item.settled_to_profile?.name.split(' ')[0] || 'Unknown'}</div>
                                </div>
+
+                               {/* Inline Trace Card */}
+                               {activeTraceId === item.id && (
+                                 <div className="pt-2 border-t border-white/5">
+                                   <TransactionTraceInline
+                                     target={{
+                                       id: item.id,
+                                       sourceType: "card_transaction",
+                                       title: item.qrs?.merchant_name || item.remarks,
+                                       amount: item.amount,
+                                       date: item.settled_date || item.transaction_date,
+                                       remarks: item.remarks
+                                     }}
+                                     onClose={() => setActiveTraceId(null)}
+                                   />
+                                 </div>
+                               )}
                              </motion.div>
                            ))}
                         </div>
@@ -823,6 +926,7 @@ export default function SettlementsPage() {
           </div>
         </DialogContent>
       </Dialog>
+
 
       <BottomNav />
     </div>

@@ -7,3 +7,8 @@ coverage/
 !.env.example
 public/sw.js
 public/workbox-*.js
+
+# Agents & AI Brain
+.agents/
+.Brain/
+supabase/.temp/

@@ -18,10 +18,12 @@ import {
   Pencil,
   Trash2,
   AlertTriangle,
+  Layers,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { sendLentIssueAlert, sendLentRecoveryAlert } from "./WaAlert";
-import { exportLedgerPdf } from "./pdfExport";
+import TransactionTraceInline, { type TraceTarget } from "@/components/TransactionTraceInline";
+// PDF export is dynamically imported in handleExportPdf
 
 // --- Shared Interfaces ---
 export interface Borrower {
@@ -125,6 +127,9 @@ export default function BorrowerProfilePanel({
   const [editBorrowerName, setEditBorrowerName] = useState("");
   const [editBorrowerPhone, setEditBorrowerPhone] = useState("");
   const [isSavingBorrower, setIsSavingBorrower] = useState(false);
+
+  // --- Inline Trace Flow State ---
+  const [activeTraceId, setActiveTraceId] = useState<string | null>(null);
 
   // Portal-এ mount করার আগে document অবশ্যই ready থাকতে হবে (SSR-safe)
   useEffect(() => setMounted(true), []);
@@ -268,7 +273,7 @@ export default function BorrowerProfilePanel({
   // --- Cash balance update (mirrors original updateCashBalance) — এখন insert হওয়া
   // cash_on_hand_ledger row-এর id রিটার্ন করে, যাতে card_lent_ledger row-এ linked
   // হিসেবে সেভ করা যায় (edit/delete-এর সময় reverse করতে লাগবে)
-  const updateCashBalance = async (userId: string, cardId: string, amt: number, type: "credit" | "debit", note: string): Promise<string | null> => {
+  const updateCashBalance = async (userId: string, cardId: string, amt: number, type: "credit" | "debit", note: string, linkedCardTxId?: string | null): Promise<string | null> => {
     const { data: coh } = await supabase.from("cash_on_hand").select("*").eq("user_id", userId).eq("card_id", cardId).maybeSingle();
     const currentBalance = coh ? Number(coh.current_balance) : 0;
     const newBalance = type === "credit" ? currentBalance + amt : currentBalance - amt;
@@ -374,6 +379,7 @@ export default function BorrowerProfilePanel({
             spend_date: txDate,
             card_id: selectedCardId,
             remarks: `Lent to ${borrower.name} from card`,
+            linked_card_transaction_id: txRow?.id || null,
           }).select("id").single();
           linkedSpendId = spendRow?.id || null;
         }
@@ -500,6 +506,7 @@ export default function BorrowerProfilePanel({
             spend_date: txDate,
             card_id: selectedCardId,
             remarks: `Lent recovery from ${borrower.name}`,
+            linked_card_transaction_id: txRow?.id || null,
           }).select("id").single();
           linkedSpendId = spendRow?.id || null;
         }
@@ -650,6 +657,7 @@ export default function BorrowerProfilePanel({
     if (!borrower) return;
     setIsExporting(true);
     try {
+      const { exportLedgerPdf } = await import("./pdfExport");
       await exportLedgerPdf({
         borrower,
         entries: withBalance,
@@ -1106,6 +1114,39 @@ export default function BorrowerProfilePanel({
                                     </p>
                                     {e.remarks && <p className="text-slate-300">"{e.remarks}"</p>}
                                     {!e.remarks && <p className="italic text-slate-600">কোনো remarks যোগ করা হয়নি</p>}
+                                    {(!e.ledgerSource || e.ledgerSource !== "pocket") && mode !== "pocket" && (
+                                      <>
+                                        <button
+                                          type="button"
+                                          onClick={(ev) => {
+                                            ev.stopPropagation();
+                                            setActiveTraceId(activeTraceId === e.id ? null : e.id);
+                                          }}
+                                          className={`w-full mt-2 py-1.5 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+                                            activeTraceId === e.id
+                                              ? "bg-sky-500/25 text-sky-300 border-sky-400"
+                                              : "bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 border-sky-500/30"
+                                          }`}
+                                        >
+                                          <Layers className="w-3.5 h-3.5" />
+                                          {activeTraceId === e.id ? "ট্রেস ফ্লো বন্ধ করুন" : "টাকার উৎস ও লিঙ্কড রেকর্ড দেখুন (Trace Flow)"}
+                                        </button>
+
+                                        {activeTraceId === e.id && (
+                                          <TransactionTraceInline
+                                            target={{
+                                              id: e.id,
+                                              sourceType: "lent",
+                                              title: `Lent with ${borrower.name}`,
+                                              amount: Number(e.amount),
+                                              date: e.transaction_date,
+                                              remarks: e.remarks || "",
+                                            }}
+                                            onClose={() => setActiveTraceId(null)}
+                                          />
+                                        )}
+                                      </>
+                                    )}
                                   </div>
                                 </motion.div>
                               )}
@@ -1272,6 +1313,7 @@ export default function BorrowerProfilePanel({
               </>
             )}
           </AnimatePresence>
+
         </>
       )}
     </AnimatePresence>,

@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { useCardStore } from "@/store/cardStore";
+import { useAuthStore } from "@/store/authStore";
+import { useDataCacheStore } from "@/store/dataCacheStore";
 import { motion, AnimatePresence, type Variants } from "motion/react";
 import {
   ArrowDownLeft,
@@ -17,17 +19,19 @@ import {
   CalendarDays,
   Check,
   FileDown,
+  Layers,
 } from "lucide-react";
 import { BottomNav } from "@/components/BottomNav";
 import { supabase } from "@/lib/supabase";
 import Link from "next/link";
+import TransactionTraceInline, { type TraceTarget } from "@/components/TransactionTraceInline";
 
 // WaAlert ফাইল থেকে Alert লজিক ইমপোর্ট করা হলো
 import { sendTransactionAlerts } from "./WaAlert";
 // এন্ট্রি ফর্ম মোডাল আলাদা ফাইলে
 import RecordEntryModal, { type CardData, type Profile, type QR, type CashSourceRow } from "./RecordEntryModal";
-// PDF export বিল্ডার আলাদা ফাইলে
-import { exportTransactionsPdf, type TransactionPdfRow } from "./pdfExport";
+// PDF export বিল্ডার আলাদা ফাইলে (Dynamically imported on export to optimize bundle size)
+import type { TransactionPdfRow } from "./pdfExport";
 
 // --- Interfaces ---
 interface CashSourceBreakdownEntry { card_id: string; amount: number; }
@@ -88,12 +92,6 @@ const listItemVars: Variants = {
   exit: { opacity: 0, scale: 0.95, transition: { duration: 0.2 } }
 };
 
-const expandVars: Variants = {
-  hidden: { height: 0, opacity: 0, marginTop: 0 },
-  visible: { height: "auto", opacity: 1, marginTop: 16, transition: { type: "spring", stiffness: 280, damping: 28 } },
-  exit: { height: 0, opacity: 0, marginTop: 0, transition: { duration: 0.22, ease: "easeInOut" } }
-};
-
 export default function TransactionsPage() {
   const [activeTab, setActiveTab] = useState<"all" | "rotations" | "spends" | "bill_paid">("all");
   const [filterUser, setFilterUser] = useState<string>("all");
@@ -146,6 +144,9 @@ export default function TransactionsPage() {
   // ── নতুন: ম্যানুয়াল multi-source cash-on-hand allocation (শুধু বিল পে) ──
   const [cashSources, setCashSources] = useState<CashSourceRow[]>([{ uid: uid(), cardId: "", amount: "" }]);
 
+  // Transaction Journey Trace State
+  const [activeTraceId, setActiveTraceId] = useState<string | null>(null);
+
   /* eslint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     fetchInitialData();
@@ -164,22 +165,44 @@ export default function TransactionsPage() {
   };
 
   async function fetchInitialData() {
-    setIsLoading(true);
-    const { data: { user } } = await supabase.auth.getUser();
+    const cacheKey = 'transactions_ledger_' + JSON.stringify(globalSelectedCardIds);
+    const cached = useDataCacheStore.getState().get<any>(cacheKey, 60000);
+    if (cached) {
+      if (cached.transactions) setTransactions(cached.transactions);
+      if (cached.spends) setSpends(cached.spends);
+      if (cached.familyLimitsMap) setFamilyLimitsMap(cached.familyLimitsMap);
+      if (cached.userCashMap) setUserCashMap(cached.userCashMap);
+      if (cached.userCardCashMap) setUserCardCashMap(cached.userCardCashMap);
+      if (cached.userFamilySpendMap) setUserFamilySpendMap(cached.userFamilySpendMap);
+      if (cached.cardDueMap) setCardDueMap(cached.cardDueMap);
+      if (cached.cardDueDateMap) setCardDueDateMap(cached.cardDueDateMap);
+      setIsLoading(false);
+    } else {
+      setIsLoading(true);
+    }
 
-    const { data: cData } = await supabase.from('cards').select('*');
-    const { data: aData } = await supabase.from('card_access').select('*');
-    const cardsList = cData || [];
-    const accessList = aData || [];
+    // 1. Get User, Profile, and Accessible Cards from Central Store (0ms on repeated visits!)
+    const { user, profile, allProfiles: profs, cards: cachedCards } = await useAuthStore.getState().initAuth();
+
+    const [cRes, aRes, qrRes] = await Promise.all([
+      supabase.from('cards').select('*'),
+      supabase.from('card_access').select('*'),
+      supabase.from('qrs').select('id, merchant_name, status').eq('status', 'active')
+    ]);
+
+    const cardsList = cRes.data || [];
+    const accessList = aRes.data || [];
 
     setAllCards(cardsList);
     setAllCardAccess(accessList);
+    setProfiles(profs as any);
+    if (qrRes.data) setQrs(qrRes.data);
 
     if (user) {
-      const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).single();
-      if (profile) {
-        setCurrentUser({ ...profile, avatar_url: cleanUrl(profile.avatar_url) });
-        setSelectedUserId(profile.id);
+      const myProfile = profs.find(p => p.id === user.id) || profile;
+      if (myProfile) {
+        setCurrentUser({ ...myProfile, avatar_url: cleanUrl(myProfile.avatar_url) } as any);
+        setSelectedUserId(myProfile.id);
       }
 
       const myCardIds = accessList.filter(a => a.user_id === user.id).map(a => a.card_id);
@@ -187,12 +210,6 @@ export default function TransactionsPage() {
         .sort((a, b) => (a.is_primary === b.is_primary ? 0 : a.is_primary ? -1 : 1));
       setAccessibleCards(myCards);
     }
-
-    const { data: profs } = await supabase.from('profiles').select('id, name, avatar_url, phone');
-    if (profs) setProfiles(profs);
-
-    const { data: qrData } = await supabase.from('qrs').select('id, merchant_name, status').eq('status', 'active');
-    if (qrData) setQrs(qrData);
 
     setTxDate(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }));
 
@@ -220,26 +237,37 @@ export default function TransactionsPage() {
 
     let txQuery = supabase.from('card_transactions')
       .select(`*, qrs (merchant_name), profiles:recorded_by (name, avatar_url), cards(card_name, last_4_digits)`)
-      .order('transaction_date', { ascending: false });
+      .order('transaction_date', { ascending: false })
+      .limit(100);
     let spendsQuery = supabase.from('spends')
       .select('*, profiles (name, avatar_url), cards(card_name, last_4_digits)')
-      .order('spend_date', { ascending: false });
+      .order('spend_date', { ascending: false })
+      .limit(100);
 
     if (!globalSelectedCardIds.includes('all') && targetCardIds.length > 0) {
       txQuery = txQuery.in('card_id', targetCardIds);
       spendsQuery = spendsQuery.in('card_id', targetCardIds);
     }
 
-    const [{ data: txs }, { data: spnds }, { data: coh }] = await Promise.all([
-      txQuery, spendsQuery, supabase.from('cash_on_hand').select('*')
+    const [
+      { data: txs },
+      { data: spnds },
+      { data: coh },
+      allTxsRes,
+      allSpndsRes,
+      activeCyclesRes
+    ] = await Promise.all([
+      txQuery,
+      spendsQuery,
+      supabase.from('cash_on_hand').select('*'),
+      supabase.from('card_transactions').select('card_id, amount, type, payment_method, status, qr_id, settled_to_user, remarks, transaction_date'),
+      supabase.from('spends').select('card_id, amount, payment_method, user_id, spend_type'),
+      supabase.from('billing_cycles').select('card_id, generated_amount, paid_amount, billing_month').in('status', ['unpaid', 'partially_paid'])
     ]);
 
     if (txs) setTransactions(txs as any);
     if (spnds) setSpends(spnds as any);
-
-    const allTxsRes = await supabase.from('card_transactions')
-      .select('card_id, amount, type, payment_method, status, qr_id, settled_to_user, remarks, transaction_date');
-    const allSpndsRes = await supabase.from('spends').select('card_id, amount, payment_method, user_id, spend_type');
+    const activeCycles = activeCyclesRes.data || [];
 
     const limitsMap: Record<string, number> = {};
     const primaryCards = currentCards.filter(c => c.is_primary);
@@ -293,7 +321,6 @@ export default function TransactionsPage() {
     });
     setUserFamilySpendMap(ufSpendMap);
 
-    const { data: activeCycles } = await supabase.from('billing_cycles').select('card_id, generated_amount, paid_amount, billing_month').in('status', ['unpaid', 'partially_paid']);
     const dMap: Record<string, number> = {};
     const dueDateMap: Record<string, string> = {};
 
@@ -317,6 +344,19 @@ export default function TransactionsPage() {
     });
     setCardDueMap(dMap);
     setCardDueDateMap(dueDateMap);
+
+    // Save in-memory cache for instant SWR restoration
+    const cacheKey = 'transactions_ledger_' + JSON.stringify(globalSelectedCardIds);
+    useDataCacheStore.getState().set(cacheKey, {
+      transactions: txs,
+      spends: spnds,
+      familyLimitsMap: limitsMap,
+      userCashMap: cashMap,
+      userCardCashMap: cardCashMap,
+      userFamilySpendMap: ufSpendMap,
+      cardDueMap: dMap,
+      cardDueDateMap: dueDateMap,
+    });
   };
 
   const entryUserAccessibleCardIds = allCardAccess.filter(a => a.user_id === selectedUserId).map(a => a.card_id);
@@ -416,7 +456,7 @@ export default function TransactionsPage() {
     }
   }, [isModalOpen, txType, billCardId]);
 
-  async function updateCashBalance(userId: string, cardId: string, amt: number, type: 'credit' | 'debit', note: string) {
+  async function updateCashBalance(userId: string, cardId: string, amt: number, type: 'credit' | 'debit', note: string, linkedCardTxId?: string | null): Promise<string | null> {
     const { data: coh } = await supabase.from('cash_on_hand').select('*').eq('user_id', userId).eq('card_id', cardId).maybeSingle();
     const currentBalance = coh ? Number(coh.current_balance) : 0;
     const newBalance = type === 'credit' ? currentBalance + amt : currentBalance - amt;
@@ -436,19 +476,22 @@ export default function TransactionsPage() {
       if (cashInsertError) throw cashInsertError;
     }
 
-    const { error: cashLedgerError } = await supabase.from('cash_on_hand_ledger').insert({
+    const { data: ledgerRow, error: cashLedgerError } = await supabase.from('cash_on_hand_ledger').insert({
       card_id: cardId, user_id: userId, amount: amt, transaction_type: type,
-      remarks: note, transaction_date: new Date().toISOString()
-    });
+      remarks: note, transaction_date: new Date().toISOString(),
+      linked_card_transaction_id: linkedCardTxId || null
+    }).select('id').single();
     if (cashLedgerError) throw cashLedgerError;
-  };
+    return ledgerRow?.id || null;
+  }
 
   // পুরনো family-cascading deductBillCash() এর বদলে — ইউজার নিজে যে কার্ড+amount
   // বেছেছে ঠিক সেখান থেকেই কাটা হবে, কোনো implicit family fallback নেই।
-  async function deductBillCashFromSources(userId: string, sources: { cardId: string; amount: number }[], note: string) {
+  // linkedCardTxId: bill payment-এর card_transaction.id — cash_on_hand_ledger-এ link সংরক্ষণের জন্য
+  async function deductBillCashFromSources(userId: string, sources: { cardId: string; amount: number }[], note: string, linkedCardTxId?: string | null) {
     for (const src of sources) {
       if (src.amount > 0) {
-        await updateCashBalance(userId, src.cardId, src.amount, 'debit', note);
+        await updateCashBalance(userId, src.cardId, src.amount, 'debit', note, linkedCardTxId);
       }
     }
   }
@@ -603,17 +646,62 @@ export default function TransactionsPage() {
         billResult = await processBillPayment(activeCardId, amtNum, finalDate);
         let activeCycleId = billResult.cycleId;
 
-        if (isDebtRepayment) await supabase.from('spends').insert({ user_id: finalActingUserId, amount: -amtNum, spend_type: 'repayment', payment_method: billMethod, remarks: "Debt Cleared" + (remarks ? `: ${remarks}` : ''), spend_date: finalDate, card_id: activeCardId });
+        let createdBillTxId: string | null = null;
 
         if (billIsSplitting) {
           if (billCashAmt > 0) {
-            await supabase.from('card_transactions').insert({ amount: billCashAmt, type: 'bill_payment', status: 'settled', transaction_date: finalDate, recorded_by: finalActingUserId, payment_method: 'cash_on_hand', remarks, card_id: activeCardId, billing_cycle_id: activeCycleId, cash_source_breakdown: breakdownForInsert });
-            await deductBillCashFromSources(finalActingUserId, validCashSources, `Bill payment ${remarks ? '- ' + remarks : ''}`);
+            const { data: billTxCash } = await supabase.from('card_transactions').insert({ amount: billCashAmt, type: 'bill_payment', status: 'settled', transaction_date: finalDate, recorded_by: finalActingUserId, payment_method: 'cash_on_hand', remarks, card_id: activeCardId, billing_cycle_id: activeCycleId, cash_source_breakdown: breakdownForInsert }).select('id').single();
+            createdBillTxId = billTxCash?.id || null;
+            await deductBillCashFromSources(finalActingUserId, validCashSources, `Bill payment ${remarks ? '- ' + remarks : ''}`, billTxCash?.id || null);
           }
-          if (billPocketAmt > 0) await supabase.from('card_transactions').insert({ amount: billPocketAmt, type: 'bill_payment', status: 'settled', transaction_date: finalDate, recorded_by: finalActingUserId, payment_method: 'own_pocket', remarks, card_id: activeCardId, billing_cycle_id: activeCycleId });
+          if (billPocketAmt > 0) {
+            const { data: billTxPocket } = await supabase.from('card_transactions').insert({ amount: billPocketAmt, type: 'bill_payment', status: 'settled', transaction_date: finalDate, recorded_by: finalActingUserId, payment_method: 'own_pocket', remarks, card_id: activeCardId, billing_cycle_id: activeCycleId }).select('id').single();
+            if (!createdBillTxId) createdBillTxId = billTxPocket?.id || null;
+            await supabase.from('pocket_advances_ledger').insert({
+              user_id: finalActingUserId,
+              card_id: activeCardId,
+              amount: -billPocketAmt,
+              entry_type: 'advance',
+              transaction_date: finalDate,
+              linked_card_transaction_id: billTxPocket?.id || null,
+              remarks: `Card bill payment advanced from pocket ${remarks ? '- ' + remarks : ''}`
+            });
+            const { data: curAdv } = await supabase.from('pocket_advances').select('current_balance').eq('user_id', finalActingUserId).eq('card_id', activeCardId).maybeSingle();
+            const nextAdv = (Number(curAdv?.current_balance) || 0) - billPocketAmt;
+            await supabase.from('pocket_advances').upsert({ user_id: finalActingUserId, card_id: activeCardId, current_balance: nextAdv });
+          }
         } else {
-          await supabase.from('card_transactions').insert({ amount: amtNum, type: 'bill_payment', status: 'settled', transaction_date: finalDate, recorded_by: finalActingUserId, payment_method: billMethod, remarks, card_id: activeCardId, billing_cycle_id: activeCycleId, cash_source_breakdown: billMethod === 'cash_on_hand' ? breakdownForInsert : null });
-          if (billMethod === "cash_on_hand") await deductBillCashFromSources(finalActingUserId, validCashSources, `Bill payment ${remarks ? '- ' + remarks : ''}`);
+          const { data: billTx } = await supabase.from('card_transactions').insert({ amount: amtNum, type: 'bill_payment', status: 'settled', transaction_date: finalDate, recorded_by: finalActingUserId, payment_method: billMethod, remarks, card_id: activeCardId, billing_cycle_id: activeCycleId, cash_source_breakdown: billMethod === 'cash_on_hand' ? breakdownForInsert : null }).select('id').single();
+          createdBillTxId = billTx?.id || null;
+          if (billMethod === "cash_on_hand") {
+            await deductBillCashFromSources(finalActingUserId, validCashSources, `Bill payment ${remarks ? '- ' + remarks : ''}`, billTx?.id || null);
+          } else if (billMethod === "own_pocket") {
+            await supabase.from('pocket_advances_ledger').insert({
+              user_id: finalActingUserId,
+              card_id: activeCardId,
+              amount: -amtNum,
+              entry_type: 'advance',
+              transaction_date: finalDate,
+              linked_card_transaction_id: billTx?.id || null,
+              remarks: `Card bill payment advanced from pocket ${remarks ? '- ' + remarks : ''}`
+            });
+            const { data: curAdv } = await supabase.from('pocket_advances').select('current_balance').eq('user_id', finalActingUserId).eq('card_id', activeCardId).maybeSingle();
+            const nextAdv = (Number(curAdv?.current_balance) || 0) - amtNum;
+            await supabase.from('pocket_advances').upsert({ user_id: finalActingUserId, card_id: activeCardId, current_balance: nextAdv });
+          }
+        }
+
+        if (isDebtRepayment) {
+          await supabase.from('spends').insert({
+            user_id: finalActingUserId,
+            amount: -amtNum,
+            spend_type: 'repayment',
+            payment_method: billMethod,
+            remarks: "Debt Cleared" + (remarks ? `: ${remarks}` : ''),
+            spend_date: finalDate,
+            card_id: activeCardId,
+            linked_card_transaction_id: createdBillTxId
+          });
         }
       }
 
@@ -801,6 +889,7 @@ export default function TransactionsPage() {
       const userLabel = filterUser === 'all' ? 'All Users' : (profiles.find(p => p.id === filterUser)?.name || 'User');
       const dateLabel = { all: "All Time", today: "Today", month: "This Month", custom: "Custom Range" }[filterDateType];
 
+      const { exportTransactionsPdf } = await import("./pdfExport");
       await exportTransactionsPdf({ rows, filterLabel: `${tabLabel} • ${userLabel} • ${dateLabel}` });
     } catch (e) {
       console.error("PDF export failed:", e);
@@ -818,9 +907,9 @@ export default function TransactionsPage() {
       {/* ================= BACKGROUND ================= */}
       <div className="fixed inset-0 z-0 overflow-hidden pointer-events-none">
         <div className="absolute inset-0 bg-[linear-gradient(to_right,#4f46e51a_1px,transparent_1px),linear-gradient(to_bottom,#4f46e51a_1px,transparent_1px)] bg-[size:32px_32px] [mask-image:radial-gradient(ellipse_80%_80%_at_50%_50%,#000_20%,transparent_100%)]" />
-        <motion.div animate={{ x: [0, 50, -40, 0], y: [0, 60, -50, 0] }} transition={{ duration: 22, repeat: Infinity, ease: "linear" }} className="absolute top-[-10%] right-[-20%] w-[90vw] h-[90vw] rounded-full bg-[#0ea5e9] opacity-[0.18] blur-[120px] mix-blend-screen" />
-        <motion.div animate={{ x: [0, -50, 50, 0], y: [0, -60, 60, 0] }} transition={{ duration: 28, repeat: Infinity, ease: "linear" }} className="absolute bottom-[5%] left-[-25%] w-[100vw] h-[100vw] rounded-full bg-[#a855f7] opacity-[0.18] blur-[130px] mix-blend-screen" />
-        <motion.div animate={{ scale: [1, 1.4, 1], opacity: [0.08, 0.2, 0.08] }} transition={{ duration: 10, repeat: Infinity }} className="absolute top-[30%] left-[15%] w-[60vw] h-[60vw] rounded-full bg-[#10b981] opacity-[0.15] blur-[100px] mix-blend-screen" />
+        <div className="absolute top-[-10%] right-[-20%] w-[90vw] h-[90vw] rounded-full bg-[#0ea5e9] opacity-[0.18] blur-[120px] mix-blend-screen" />
+        <div className="absolute bottom-[5%] left-[-25%] w-[100vw] h-[100vw] rounded-full bg-[#a855f7] opacity-[0.18] blur-[130px] mix-blend-screen" />
+        <div className="absolute top-[30%] left-[15%] w-[60vw] h-[60vw] rounded-full bg-[#10b981] opacity-[0.15] blur-[100px] mix-blend-screen" />
       </div>
 
       {/* ================= HEADER ================= */}
@@ -1050,11 +1139,10 @@ export default function TransactionsPage() {
                     return (
                       <motion.div
                         key={item.id}
-                        layout
                         variants={listItemVars}
                         exit={{ opacity: 0, scale: 0.95, transition: { duration: 0.2 } }}
                         onClick={() => toggleExpand(item.id)}
-                        className="group relative p-4 bg-white/[0.03] border border-white/5 rounded-[24px] backdrop-blur-xl flex flex-col hover:bg-white/[0.05] hover:border-white/10 transition-all cursor-pointer overflow-hidden shadow-inner ml-2 border-l-2 border-l-white/10"
+                        className="group relative p-4 bg-white/[0.03] border border-white/5 rounded-[24px] backdrop-blur-xl flex flex-col hover:bg-white/[0.05] hover:border-white/10 transition-all cursor-pointer overflow-hidden shadow-inner ml-2 border-l-2 border-l-white/10 [content-visibility:auto] [contain-intrinsic-size:0_76px]"
                       >
                         <div className={`absolute -inset-4 opacity-0 group-hover:opacity-20 transition-opacity duration-500 blur-2xl ${item.bg}`} />
 
@@ -1087,47 +1175,82 @@ export default function TransactionsPage() {
                         </div>
 
                         {/* ── Expanded ── */}
-                        <AnimatePresence>
-                          {isExpanded && (
-                            <motion.div
-                              variants={expandVars}
-                              initial="hidden"
-                              animate="visible"
-                              exit="exit"
-                              className="relative z-10 border-t border-white/10 pt-4 overflow-hidden"
-                            >
-                              <div className="grid grid-cols-2 gap-y-4 gap-x-2 text-xs">
-                                <div>
-                                  <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Card Used</p>
-                                  <p className="font-bold text-slate-200">{item.cardDetails}</p>
-                                </div>
-                                <div>
-                                  <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Fund Source</p>
-                                  <p className="font-bold text-slate-200">{item.paymentMethod}</p>
-                                </div>
-                                {item.cashSourceBreakdown && (
-                                  <div className="col-span-2">
-                                    <p className="text-[9px] font-bold text-amber-500 uppercase tracking-widest mb-1">Cash Source Breakdown</p>
-                                    <div className="space-y-1">
-                                      {item.cashSourceBreakdown.map((b: any, i: number) => (
-                                        <div key={i} className="flex justify-between bg-amber-500/5 border border-amber-500/20 rounded-lg px-2.5 py-1.5">
-                                          <span className="text-slate-300 font-medium">{b.cardLabel}</span>
-                                          <span className="text-amber-400 font-black">₹{b.amount.toLocaleString('en-IN')}</span>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  </div>
-                                )}
-                                <div className="col-span-2">
-                                  <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Remarks</p>
-                                  <p className="font-medium text-slate-300 bg-black/20 p-2 rounded-lg border border-white/5">
-                                    {item.remarks || "No remarks added."}
-                                  </p>
-                                </div>
+                        <div
+                          style={{
+                            maxHeight: isExpanded ? (activeTraceId === item.id ? '1400px' : '450px') : '0px',
+                            opacity: isExpanded ? 1 : 0,
+                            overflow: 'hidden',
+                            transition: 'max-height 0.35s cubic-bezier(0.4,0,0.2,1), opacity 0.25s ease',
+                            marginTop: isExpanded ? '16px' : '0'
+                          }}
+                        >
+                          <div className="relative z-10 border-t border-white/10 pt-4">
+                            <div className="grid grid-cols-2 gap-y-4 gap-x-2 text-xs">
+                              <div>
+                                <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Card Used</p>
+                                <p className="font-bold text-slate-200">{item.cardDetails}</p>
                               </div>
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
+                              <div>
+                                <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Fund Source</p>
+                                <p className="font-bold text-slate-200">{item.paymentMethod}</p>
+                              </div>
+                              {item.cashSourceBreakdown && (
+                                <div className="col-span-2">
+                                  <p className="text-[9px] font-bold text-amber-500 uppercase tracking-widest mb-1">Cash Source Breakdown</p>
+                                  <div className="space-y-1">
+                                    {item.cashSourceBreakdown.map((b: any, i: number) => (
+                                      <div key={i} className="flex justify-between bg-amber-500/5 border border-amber-500/20 rounded-lg px-2.5 py-1.5">
+                                        <span className="text-slate-300 font-medium">{b.cardLabel}</span>
+                                        <span className="text-amber-400 font-black">₹{b.amount.toLocaleString('en-IN')}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                              <div className="col-span-2">
+                                <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Remarks</p>
+                                <p className="font-medium text-slate-300 bg-black/20 p-2 rounded-lg border border-white/5">
+                                  {item.remarks || "No remarks added."}
+                                </p>
+                              </div>
+
+                              <div className="col-span-2 pt-1">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setActiveTraceId(activeTraceId === item.id ? null : item.id);
+                                  }}
+                                  className={`w-full py-2 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all active:scale-[0.98] ${
+                                    activeTraceId === item.id
+                                      ? "bg-[#0ea5e9]/20 text-sky-300 border-[#0ea5e9]"
+                                      : "bg-gradient-to-r from-[#0ea5e9]/10 to-[#a855f7]/10 hover:from-[#0ea5e9]/20 hover:to-[#a855f7]/20 text-[#0ea5e9] border-[#0ea5e9]/30"
+                                  }`}
+                                >
+                                  <Layers className="w-3.5 h-3.5" />
+                                  {activeTraceId === item.id ? "ট্রেস ফ্লো বন্ধ করুন" : "টাকার উৎস ও গন্তব্য জার্নি দেখুন (Trace Flow)"}
+                                </button>
+                              </div>
+
+                              {/* Inline Trace Card (Transparent backdrop, local to item) */}
+                              {activeTraceId === item.id && (
+                                <div className="col-span-2">
+                                  <TransactionTraceInline
+                                    target={{
+                                      id: item.id,
+                                      sourceType: item.type === 'spend' ? 'spend' : 'card_transaction',
+                                      title: item.title,
+                                      amount: item.amount,
+                                      date: item.displayDate,
+                                      remarks: item.remarks
+                                    }}
+                                    onClose={() => setActiveTraceId(null)}
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
                       </motion.div>
                     );
                   })}
@@ -1209,6 +1332,7 @@ export default function TransactionsPage() {
         remarks={remarks}
         setRemarks={setRemarks}
       />
+
 
       <BottomNav />
     </div>

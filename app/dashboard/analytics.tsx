@@ -4,11 +4,12 @@ import { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   Banknote, ArrowDownLeft, Receipt, X, ChevronRight,
-  Send, Loader2, CheckCircle2, CalendarDays, TrendingUp, TrendingDown
+  Send, Loader2, CheckCircle2, CalendarDays, TrendingUp, TrendingDown, Layers, Wallet
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase";
+import TransactionTraceInline, { type TraceTarget } from "@/components/TransactionTraceInline";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -99,24 +100,30 @@ export default function DashboardAnalytics({
   // ── modal state ──────────────────────────────────────────────────────────
   const [selectedUserStat, setSelectedUserStat] = useState<UserStat | null>(null);
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
-  const [userModalTab, setUserModalTab] = useState<"summary" | "cash_ledger" | "due_ledger">("summary");
+  const [userModalTab, setUserModalTab] = useState<"summary" | "cash_ledger" | "due_ledger" | "pocket_advance">("summary");
   const [statImgError, setStatImgError] = useState<Record<string, boolean>>({});
   const [expandedTxId, setExpandedTxId] = useState<string | null>(null);
 
   // ── ledger data ──────────────────────────────────────────────────────────
   const [cashLedger, setCashLedger] = useState<CashTransaction[]>([]);
   const [dueLedger, setDueLedger] = useState<DueTransaction[]>([]);
+  const [pocketLedger, setPocketLedger] = useState<any[]>([]);
   const [totalUserCash, setTotalUserCash] = useState<number>(0);
   const [totalUserDue, setTotalUserDue] = useState<number>(0);
+  const [totalUserPocket, setTotalUserPocket] = useState<number>(0);
+
+  // ── inline trace state ───────────────────────────────────────────────────
+  const [activeTraceId, setActiveTraceId] = useState<string | null>(null);
 
   // ── date range filter ────────────────────────────────────────────────────
   const today = new Date();
   const [startDate, setStartDate] = useState(toDateInput(new Date(today.getFullYear(), today.getMonth(), 1)));
   const [endDate, setEndDate] = useState(toDateInput(today));
 
-  // ── home-card family cash map (for the two home cards) ───────────────────
+  // ── home-card family cash & pocket maps ───────────────────
   const [familyCashMap, setFamilyCashMap] = useState<Record<string, number>>({});
   const [familyDueMap, setFamilyDueMap] = useState<Record<string, number>>({});
+  const [familyPocketMap, setFamilyPocketMap] = useState<Record<string, number>>({});
 
   // ── transfer state ───────────────────────────────────────────────────────
   const [transferOpen, setTransferOpen] = useState(false);
@@ -130,6 +137,7 @@ export default function DashboardAnalytics({
   const [transferError, setTransferError] = useState("");
   const [senderCardId, setSenderCardId] = useState("");
   const [senderBalance, setSenderBalance] = useState(0);
+  const [senderCardsList, setSenderCardsList] = useState<Array<{ cardId: string; cardName: string; cardLast4: string; balance: number }>>([]);
 
   // ── data fetchers ────────────────────────────────────────────────────────
 
@@ -219,6 +227,28 @@ export default function DashboardAnalytics({
     setDueLedger(due);
   }, [selectedCardId, accessibleCards]);
 
+  const fetchFamilyPocket = async (userId: string): Promise<number> => {
+    const familyIds = getFamilyCardIds(selectedCardId, accessibleCards);
+    let q = supabase.from("pocket_advances").select("current_balance").eq("user_id", userId);
+    if (familyIds.length > 0) q = q.in("card_id", familyIds);
+    const { data } = await q;
+    return (data || []).reduce((s, r) => s + Number(r.current_balance || 0), 0);
+  };
+
+  const fetchPocketLedger = useCallback(async (userId: string, start: string, end: string) => {
+    const familyIds = getFamilyCardIds(selectedCardId, accessibleCards);
+    let q = supabase
+      .from("pocket_advances_ledger")
+      .select("*, cards(card_name, last_4_digits)")
+      .eq("user_id", userId)
+      .gte("transaction_date", start)
+      .lte("transaction_date", end)
+      .order("transaction_date", { ascending: false });
+    if (familyIds.length > 0) q = q.in("card_id", familyIds);
+    const { data } = await q;
+    setPocketLedger(data || []);
+  }, [selectedCardId, accessibleCards]);
+
   // ── effects ──────────────────────────────────────────────────────────────
 
   // modal খুললে বা card selection বদলালে সব data fetch
@@ -227,8 +257,10 @@ export default function DashboardAnalytics({
     const uid = selectedUserStat.id;
     fetchFamilyCash(uid).then(setTotalUserCash);
     fetchFamilyDue(uid).then(setTotalUserDue);
+    fetchFamilyPocket(uid).then(setTotalUserPocket);
     fetchCashLedger(uid, startDate, endDate);
     fetchDueLedger(uid, startDate, endDate);
+    fetchPocketLedger(uid, startDate, endDate);
   }, [selectedUserStat, selectedCardId, accessibleCards]);
 
   // date range বদলালে ledger গুলো re-fetch
@@ -237,6 +269,7 @@ export default function DashboardAnalytics({
     const uid = selectedUserStat.id;
     fetchCashLedger(uid, startDate, endDate);
     fetchDueLedger(uid, startDate, endDate);
+    fetchPocketLedger(uid, startDate, endDate);
   }, [startDate, endDate]);
 
   // home cards এর জন্য card-family cash total ও due total
@@ -257,14 +290,26 @@ export default function DashboardAnalytics({
         const { data: dData } = await dq;
         const dueTotal = (dData || []).reduce((s, r) => s + Number(r.amount), 0);
 
-        return { id: u.id, cashTotal, dueTotal };
+        // pocket advance — pocket_advances টেবিল থেকে
+        let pq = supabase.from("pocket_advances").select("current_balance").eq("user_id", u.id);
+        if (familyIds.length > 0) pq = pq.in("card_id", familyIds);
+        const { data: pData } = await pq;
+        const pocketTotal = (pData || []).reduce((s, r) => s + Number(r.current_balance || 0), 0);
+
+        return { id: u.id, cashTotal, dueTotal, pocketTotal };
       })
     ).then(results => {
       const cashMap: Record<string, number> = {};
       const dueMap: Record<string, number> = {};
-      results.forEach(r => { cashMap[r.id] = r.cashTotal; dueMap[r.id] = r.dueTotal; });
+      const pocketMap: Record<string, number> = {};
+      results.forEach(r => { 
+        cashMap[r.id] = r.cashTotal; 
+        dueMap[r.id] = r.dueTotal; 
+        pocketMap[r.id] = r.pocketTotal;
+      });
       setFamilyCashMap(cashMap);
       setFamilyDueMap(dueMap);
+      setFamilyPocketMap(pocketMap);
     });
   }, [userStats, selectedCardId, accessibleCards]);
 
@@ -310,13 +355,28 @@ export default function DashboardAnalytics({
     const senderId = currentUserId || authUser?.id;
     if (!senderId) { setTransferError("লগইন করা নেই।"); return; }
 
-    // sender এর সর্বোচ্চ balance card
-    const { data: senderCoh } = await supabase
-      .from("cash_on_hand").select("card_id, current_balance")
-      .eq("user_id", senderId).order("current_balance", { ascending: false }).limit(1);
-    if (senderCoh?.[0]) {
-      setSenderCardId(senderCoh[0].card_id);
-      setSenderBalance(Number(senderCoh[0].current_balance));
+    // sender এর সব positive balance cards
+    const { data: senderCohList } = await supabase
+      .from("cash_on_hand")
+      .select("card_id, current_balance, cards(card_name, last_4_digits)")
+      .eq("user_id", senderId)
+      .gt("current_balance", 0)
+      .order("current_balance", { ascending: false });
+
+    const sCards = (senderCohList || []).map((row: any) => ({
+      cardId: row.card_id,
+      cardName: row.cards?.card_name || "Card",
+      cardLast4: row.cards?.last_4_digits || "****",
+      balance: Number(row.current_balance || 0),
+    }));
+    setSenderCardsList(sCards);
+
+    if (sCards.length > 0) {
+      setSenderCardId(sCards[0].cardId);
+      setSenderBalance(sCards[0].balance);
+    } else {
+      setSenderCardId("");
+      setSenderBalance(0);
     }
 
     // অন্য users ও তাদের cash_on_hand cards
@@ -515,6 +575,14 @@ export default function DashboardAnalytics({
                   </motion.p>
                 }
               </div>
+              {(familyPocketMap[stat.id] ?? 0) !== 0 && (
+                <div className="pt-2 border-t border-white/5 flex items-center justify-between">
+                  <p className="text-[9px] font-bold text-amber-500 uppercase tracking-widest">Pocket Advance</p>
+                  <p className="text-xs font-black text-amber-400">
+                    {(familyPocketMap[stat.id] ?? 0) < 0 ? `-₹${Math.abs(familyPocketMap[stat.id] ?? 0).toLocaleString()}` : `₹${(familyPocketMap[stat.id] ?? 0).toLocaleString()}`}
+                  </p>
+                </div>
+              )}
             </div>
           </motion.div>
         ))}
@@ -567,6 +635,10 @@ export default function DashboardAnalytics({
               <button onClick={() => setUserModalTab("due_ledger")}
                 className={`flex-1 min-w-[100px] py-2.5 text-xs font-bold rounded-xl transition-all ${userModalTab === "due_ledger" ? "bg-rose-500/20 text-rose-400 border border-rose-500/40 shadow-inner" : "bg-transparent text-slate-400 hover:bg-white/5"}`}>
                 Personal Due
+              </button>
+              <button onClick={() => setUserModalTab("pocket_advance")}
+                className={`flex-1 min-w-[100px] py-2.5 text-xs font-bold rounded-xl transition-all ${userModalTab === "pocket_advance" ? "bg-amber-500/20 text-amber-400 border border-amber-500/40 shadow-inner" : "bg-transparent text-slate-400 hover:bg-white/5"}`}>
+                Pocket Advance
               </button>
             </div>
 
@@ -694,6 +766,36 @@ export default function DashboardAnalytics({
                                         <span className="text-slate-500 font-medium">Remarks:</span>
                                         <span className="text-slate-300 text-right max-w-[200px]">{tx.remarks || "N/A"}</span>
                                       </div>
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setActiveTraceId(activeTraceId === tx.id ? null : tx.id);
+                                        }}
+                                        className={`w-full mt-2 py-2 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-colors ${
+                                          activeTraceId === tx.id
+                                            ? "bg-sky-500/25 text-sky-300 border-sky-400"
+                                            : "bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 border-sky-500/30"
+                                        }`}
+                                      >
+                                        <Layers className="w-3.5 h-3.5" />
+                                        {activeTraceId === tx.id ? "ট্রেস ফ্লো বন্ধ করুন" : "টাকা কোথা থেকে এলো / কোথায় গেল দেখুন (Trace Flow)"}
+                                      </button>
+
+                                      {/* Inline Trace Card */}
+                                      {activeTraceId === tx.id && (
+                                        <TransactionTraceInline
+                                          target={{
+                                            id: tx.id,
+                                            sourceType: "cash_ledger",
+                                            title: tx.remarks || "Cash Transaction",
+                                            amount: tx.amount,
+                                            date: tx.transaction_date,
+                                            remarks: tx.remarks
+                                          }}
+                                          onClose={() => setActiveTraceId(null)}
+                                        />
+                                      )}
                                     </div>
                                   </motion.div>
                                 )}
@@ -790,6 +892,36 @@ export default function DashboardAnalytics({
                                         <span className="text-slate-500 font-medium">Details:</span>
                                         <span className="text-slate-300 text-right max-w-[200px]">{tx.remarks}</span>
                                       </div>
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setActiveTraceId(activeTraceId === tx.id ? null : tx.id);
+                                        }}
+                                        className={`w-full mt-2 py-2 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-colors ${
+                                          activeTraceId === tx.id
+                                            ? "bg-sky-500/25 text-sky-300 border-sky-400"
+                                            : "bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 border-sky-500/30"
+                                        }`}
+                                      >
+                                        <Layers className="w-3.5 h-3.5" />
+                                        {activeTraceId === tx.id ? "ট্রেস ফ্লো বন্ধ করুন" : "টাকা কোথা থেকে এলো / কোথায় গেল দেখুন (Trace Flow)"}
+                                      </button>
+
+                                      {/* Inline Trace Card */}
+                                      {activeTraceId === tx.id && (
+                                        <TransactionTraceInline
+                                          target={{
+                                            id: tx.id,
+                                            sourceType: "spend",
+                                            title: tx.remarks || "Personal Due",
+                                            amount: tx.amount,
+                                            date: tx.date,
+                                            remarks: tx.remarks
+                                          }}
+                                          onClose={() => setActiveTraceId(null)}
+                                        />
+                                      )}
                                     </div>
                                   </motion.div>
                                 )}
@@ -808,6 +940,92 @@ export default function DashboardAnalytics({
                 </motion.div>
               )}
 
+              {/* ── Pocket Advance tab ── */}
+              {userModalTab === "pocket_advance" && (
+                <motion.div key="pocket_advance" initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 10 }} transition={{ duration: 0.2 }}>
+
+                  {/* Summary Card */}
+                  <div className="bg-amber-500/10 border border-amber-500/20 rounded-2xl p-4 mb-5 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                        <Wallet className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-amber-400 font-bold uppercase tracking-wider">Active Pocket Advance</p>
+                        <p className="text-xl font-black text-amber-400">₹{totalUserPocket.toLocaleString()}</p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[10px] text-slate-400 font-medium">কার্ড বিলে পকেট থেকে দেওয়া টাকা</p>
+                    </div>
+                  </div>
+
+                  {pocketLedger.length > 0 ? (
+                    <div className="space-y-2">
+                      {pocketLedger.map((pa: any) => (
+                        <div key={pa.id} className="bg-white/[0.03] border border-white/5 rounded-2xl p-4 hover:bg-white/[0.06] transition-colors">
+                          <div className="flex items-center justify-between mb-2">
+                            <div>
+                              <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${pa.entry_type === 'advance' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'}`}>
+                                {pa.entry_type === 'advance' ? 'পকেট থেকে বিল পে (+)' : 'পকেটে ফেরত (-)'}
+                              </span>
+                              <h4 className="text-sm font-bold text-white mt-1">{pa.cards?.card_name || 'Card'} (**{pa.cards?.last_4_digits || '0000'})</h4>
+                              <p className="text-[10px] text-slate-500 font-bold">{new Date(pa.transaction_date).toLocaleDateString('en-GB')}</p>
+                            </div>
+                            <div className="text-right">
+                              <p className={`text-base font-black ${pa.entry_type === 'advance' ? 'text-amber-400' : 'text-emerald-400'}`}>
+                                ₹{Number(pa.amount).toLocaleString()}
+                              </p>
+                            </div>
+                          </div>
+                          {pa.remarks && (
+                            <p className="text-xs text-slate-400 bg-black/30 p-2 rounded-lg border border-white/5 mb-3 font-medium">
+                              {pa.remarks}
+                            </p>
+                          )}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveTraceId(activeTraceId === pa.id ? null : pa.id);
+                            }}
+                            className={`w-full py-2 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-colors ${
+                              activeTraceId === pa.id
+                                ? "bg-sky-500/25 text-sky-300 border-sky-400"
+                                : "bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 border-sky-500/30"
+                            }`}
+                          >
+                            <Layers className="w-3.5 h-3.5" />
+                            {activeTraceId === pa.id ? "ট্রেস ফ্লো বন্ধ করুন" : "টাকা কোথা থেকে এলো / কোথায় গেল দেখুন (Trace Flow)"}
+                          </button>
+
+                          {/* Inline Trace Card */}
+                          {activeTraceId === pa.id && (
+                            <TransactionTraceInline
+                              target={{
+                                id: pa.id,
+                                sourceType: "pocket_advance",
+                                title: `Pocket Advance — ${pa.cards?.card_name || 'Card'}`,
+                                amount: pa.amount,
+                                date: pa.transaction_date,
+                                remarks: pa.remarks
+                              }}
+                              onClose={() => setActiveTraceId(null)}
+                            />
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-center py-10 bg-white/[0.02] border border-white/5 rounded-3xl mt-4">
+                      <Wallet className="w-10 h-10 text-slate-600 mx-auto mb-3" />
+                      <p className="text-xs font-bold text-slate-500">কোনো পকেট অ্যাডভান্স হিস্ট্রি পাওয়া যায়নি।</p>
+                    </div>
+                  )}
+                </motion.div>
+              )}
+
             </AnimatePresence>
           </div>
         </DialogContent>
@@ -815,7 +1033,7 @@ export default function DashboardAnalytics({
 
       {/* ═══════════════ Transfer Modal ═══════════════ */}
       <Dialog open={transferOpen} onOpenChange={o => { setTransferOpen(o); if (!o) { setTransferSuccess(false); setTransferError(""); } }}>
-        <DialogContent className="bg-[#030014]/95 backdrop-blur-3xl border border-white/10 text-slate-50 rounded-[32px] max-w-sm w-[92vw] p-0 overflow-hidden shadow-[0_0_60px_rgba(0,0,0,0.9)] [&>button]:hidden outline-none">
+        <DialogContent className="bg-[#030014]/95 border border-white/10 text-slate-50 rounded-[32px] max-w-sm w-[92vw] p-0 overflow-hidden shadow-2xl [&>button]:hidden outline-none">
           <div className="absolute -top-10 -left-10 w-40 h-40 rounded-full bg-emerald-500 opacity-[0.08] blur-[60px] pointer-events-none" />
           <div className="absolute -bottom-10 -right-10 w-40 h-40 rounded-full bg-sky-500 opacity-[0.08] blur-[60px] pointer-events-none" />
 
@@ -854,8 +1072,35 @@ export default function DashboardAnalytics({
               </motion.div>
             ) : (
               <>
+                {/* Sender Card Selection */}
+                <div>
+                  <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1.5">আপনার কোন কার্ড থেকে পাঠাবেন?</p>
+                  {senderCardsList.length === 0 ? (
+                    <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs font-semibold">
+                      আপনার কোনো কার্ডে ক্যাশ ব্যালেন্স নেই।
+                    </div>
+                  ) : (
+                    <select
+                      value={senderCardId}
+                      onChange={(e) => {
+                        const cid = e.target.value;
+                        setSenderCardId(cid);
+                        const found = senderCardsList.find(c => c.cardId === cid);
+                        setSenderBalance(found ? found.balance : 0);
+                      }}
+                      className="w-full px-3 py-2.5 rounded-xl bg-white/[0.05] border border-white/10 text-white text-xs font-bold outline-none focus:border-emerald-500"
+                    >
+                      {senderCardsList.map(c => (
+                        <option key={c.cardId} value={c.cardId} className="bg-[#121216]">
+                          {c.cardName} (**{c.cardLast4}) — ব্যালেন্স: ₹{c.balance.toLocaleString()}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
                 <div className="bg-white/[0.03] border border-white/10 rounded-2xl p-3 flex items-center justify-between">
-                  <p className="text-xs text-slate-400 font-bold">আপনার available balance</p>
+                  <p className="text-xs text-slate-400 font-bold">নির্বাচিত কার্ডের available balance</p>
                   <p className="text-emerald-400 font-black text-sm">₹{senderBalance.toLocaleString()}</p>
                 </div>
 
@@ -925,6 +1170,8 @@ export default function DashboardAnalytics({
           </div>
         </DialogContent>
       </Dialog>
+
+
 
     </motion.section>
   );
