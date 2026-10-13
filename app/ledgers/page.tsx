@@ -21,7 +21,11 @@ import {
   ArrowRight,
   Send,
   Calendar,
-  X
+  X,
+  Plus,
+  Trash2,
+  Wallet,
+  CreditCard
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { supabase } from "@/lib/supabase";
@@ -75,7 +79,14 @@ interface PocketAdvanceRow {
   remarks: string | null;
   transaction_date: string;
   linked_card_transaction_id: string | null;
+  cash_source_breakdown?: { card_id: string; amount: number }[] | null;
   created_at: string;
+}
+
+interface CashSourceRow {
+  uid: string;
+  cardId: string;
+  amount: string;
 }
 
 interface PocketBalanceRow {
@@ -142,10 +153,10 @@ function LedgersContent() {
   const [pocketBalances, setPocketBalances] = useState<PocketBalanceRow[]>([]);
   const [pocketLedger, setPocketLedger] = useState<PocketAdvanceRow[]>([]);
 
-  // Reclaim Pocket Modal State
+  // Reclaim Pocket Modal State (Cross-Card Reclaim)
   const [reclaimModalOpen, setReclaimModalOpen] = useState(false);
-  const [selectedReclaimCardId, setSelectedReclaimCardId] = useState("");
-  const [reclaimAmount, setReclaimAmount] = useState("");
+  const [selectedReclaimDebtCardId, setSelectedReclaimDebtCardId] = useState("");
+  const [reclaimCashSources, setReclaimCashSources] = useState<CashSourceRow[]>([]);
   const [reclaimRemarks, setReclaimRemarks] = useState("");
   const [reclaimSubmitting, setReclaimSubmitting] = useState(false);
   const [reclaimSuccessMsg, setReclaimSuccessMsg] = useState("");
@@ -385,102 +396,142 @@ function LedgersContent() {
     return groups;
   }, [currentTabItems, visibleCount]);
 
-  // Reclaim Handlers with Balance Validation
-  const handleOpenReclaim = (cardId?: string, defaultAmt?: number) => {
-    const cardTarget = cardId || activeUserPocketBalances.find(p => Number(p.current_balance) < 0)?.card_id || cards[0]?.id || "";
-    setSelectedReclaimCardId(cardTarget);
+  // Cross-Card Reclaim Handlers & Helpers
+  const cardsWithAvailableCash = useMemo(() => {
+    return cards
+      .map(c => ({
+        ...c,
+        balance: Number(activeUserCardCashMap[c.id] || 0),
+      }))
+      .filter(c => c.balance > 0);
+  }, [cards, activeUserCardCashMap]);
+
+  const selectedDebtCardObj = useMemo(() => {
+    return cards.find(c => c.id === selectedReclaimDebtCardId);
+  }, [cards, selectedReclaimDebtCardId]);
+
+  const selectedDebtBalance = useMemo(() => {
+    const balObj = activeUserPocketBalances.find(p => p.card_id === selectedReclaimDebtCardId);
+    return balObj ? Number(balObj.current_balance) : 0;
+  }, [activeUserPocketBalances, selectedReclaimDebtCardId]);
+
+  const selectedDebtDeficit = useMemo(() => {
+    return selectedDebtBalance < 0 ? Math.abs(selectedDebtBalance) : 0;
+  }, [selectedDebtBalance]);
+
+  const totalReclaimAllocated = useMemo(() => {
+    return reclaimCashSources.reduce((acc, s) => acc + (Number(s.amount) || 0), 0);
+  }, [reclaimCashSources]);
+
+  const reclaimAllocationValid = useMemo(() => {
+    if (totalReclaimAllocated <= 0) return false;
+    for (const src of reclaimCashSources) {
+      if (!src.cardId) return false;
+      const amt = Number(src.amount) || 0;
+      if (amt <= 0) return false;
+      const avail = Number(activeUserCardCashMap[src.cardId] || 0);
+      if (amt > avail) return false;
+    }
+    return true;
+  }, [totalReclaimAllocated, reclaimCashSources, activeUserCardCashMap]);
+
+  const handleOpenReclaim = (targetCardId?: string, defaultAmt?: number) => {
+    // 1. Target debt card (card with negative pocket balance, or provided card)
+    const cardTarget = targetCardId || activeUserPocketBalances.find(p => Number(p.current_balance) < 0)?.card_id || cards[0]?.id || "";
+    setSelectedReclaimDebtCardId(cardTarget);
+
     const balObj = activeUserPocketBalances.find(p => p.card_id === cardTarget);
     const deficit = balObj ? Math.abs(Number(balObj.current_balance)) : 0;
-    setReclaimAmount(defaultAmt ? String(defaultAmt) : deficit > 0 ? String(deficit) : "");
+    const needed = defaultAmt !== undefined ? defaultAmt : deficit > 0 ? deficit : 0;
+
+    // 2. Pick primary or first card with available cash
+    const availCashCards = cards.filter(c => (Number(activeUserCardCashMap[c.id]) || 0) > 0);
+    const defaultSrcCard = availCashCards[0]?.id || cards[0]?.id || "";
+    const firstAvail = Number(activeUserCardCashMap[defaultSrcCard] || 0);
+    const firstAmt = needed > 0 ? (firstAvail > 0 ? Math.min(needed, firstAvail) : needed) : 0;
+
+    setReclaimCashSources([
+      {
+        uid: `src-${Date.now()}`,
+        cardId: defaultSrcCard,
+        amount: firstAmt > 0 ? String(firstAmt) : "",
+      }
+    ]);
     setReclaimRemarks("");
     setReclaimSuccessMsg("");
     setReclaimErrorMsg("");
     setReclaimModalOpen(true);
   };
 
-  const availableCashForReclaim = useMemo(() => {
-    return Number(activeUserCardCashMap[selectedReclaimCardId] || 0);
-  }, [activeUserCardCashMap, selectedReclaimCardId]);
+  const addReclaimSource = () => {
+    const used = new Set(reclaimCashSources.map(s => s.cardId));
+    const nextCard = cardsWithAvailableCash.find(c => !used.has(c.id));
+    if (!nextCard) return;
+    setReclaimCashSources(prev => [
+      ...prev,
+      { uid: `src-${Date.now()}-${Math.random()}`, cardId: nextCard.id, amount: "" }
+    ]);
+  };
+
+  const updateReclaimSource = (idx: number, patch: Partial<CashSourceRow>) => {
+    setReclaimCashSources(prev => prev.map((s, i) => (i === idx ? { ...s, ...patch } : s)));
+  };
+
+  const removeReclaimSource = (idx: number) => {
+    setReclaimCashSources(prev => prev.filter((_, i) => i !== idx));
+  };
 
   const handleConfirmReclaim = async () => {
-    if (!selectedReclaimCardId) {
-      setReclaimErrorMsg("Please select a card.");
-      return;
-    }
-    const amt = Number(reclaimAmount);
-    if (!amt || amt <= 0) {
-      setReclaimErrorMsg("Enter a valid amount.");
+    if (!selectedReclaimDebtCardId) {
+      setReclaimErrorMsg("টার্গেট কার্ড নির্বাচন করুন।");
       return;
     }
 
-    if (amt > availableCashForReclaim) {
-      setReclaimErrorMsg(`পর্যাপ্ত ব্যালেন্স নেই! আপনার available cash: ₹${availableCashForReclaim.toLocaleString("en-IN")}`);
+    const validSources = reclaimCashSources.filter(s => s.cardId && Number(s.amount) > 0);
+    if (validSources.length === 0) {
+      setReclaimErrorMsg("কমপক্ষে একটি ক্যাশ সোর্স কার্ড ও পরিমাণ দিন।");
       return;
     }
 
+    // Verify per-source balance
+    for (const src of validSources) {
+      const avail = Number(activeUserCardCashMap[src.cardId] || 0);
+      const amt = Number(src.amount);
+      if (amt > avail) {
+        setReclaimErrorMsg(`${getCardName(src.cardId)}-এ পর্যাপ্ত ক্যাশ নেই! উপলব্ধ: ₹${avail.toLocaleString("en-IN")}`);
+        return;
+      }
+    }
+
+    const totalAmt = validSources.reduce((acc, s) => acc + Number(s.amount), 0);
     setReclaimSubmitting(true);
     setReclaimErrorMsg("");
     setReclaimSuccessMsg("");
 
     try {
-      const now = new Date().toISOString();
-      const cardObj = cards.find(c => c.id === selectedReclaimCardId);
-      const cardName = cardObj ? cardObj.card_name : "Card";
+      const sourcesPayload = validSources.map(s => ({
+        card_id: s.cardId,
+        amount: Number(s.amount)
+      }));
 
-      // 1. Deduct from cash_on_hand
-      const { data: curCoh } = await supabase
-        .from("cash_on_hand")
-        .select("current_balance")
-        .eq("user_id", activeUserId)
-        .eq("card_id", selectedReclaimCardId)
-        .maybeSingle();
-
-      const nextCoh = (Number(curCoh?.current_balance) || 0) - amt;
-      await supabase
-        .from("cash_on_hand")
-        .upsert({ user_id: activeUserId, card_id: selectedReclaimCardId, current_balance: nextCoh, updated_at: now });
-
-      // 2. Insert debit row into cash_on_hand_ledger
-      await supabase.from("cash_on_hand_ledger").insert({
-        user_id: activeUserId,
-        card_id: selectedReclaimCardId,
-        amount: amt,
-        transaction_type: "debit",
-        transaction_date: now,
-        remarks: `Transferred to Pocket (Reclaimed advance for ${cardName})${reclaimRemarks.trim() ? `: ${reclaimRemarks.trim()}` : ""}`
+      const { data, error } = await supabase.rpc("atomic_reclaim_pocket_advance", {
+        p_user_id: activeUserId,
+        p_target_card_id: selectedReclaimDebtCardId,
+        p_total_amount: totalAmt,
+        p_sources: sourcesPayload,
+        p_remarks: reclaimRemarks.trim()
       });
 
-      // 3. Insert recovery row into pocket_advances_ledger
-      await supabase.from("pocket_advances_ledger").insert({
-        user_id: activeUserId,
-        card_id: selectedReclaimCardId,
-        amount: amt,
-        entry_type: "recovery",
-        transaction_date: now.slice(0, 10),
-        remarks: `Reclaimed from Cash on Hand (Returned to pocket)${reclaimRemarks.trim() ? `: ${reclaimRemarks.trim()}` : ""}`
-      });
+      if (error) throw error;
 
-      // 4. Update pocket_advances
-      const { data: curAdv } = await supabase
-        .from("pocket_advances")
-        .select("current_balance")
-        .eq("user_id", activeUserId)
-        .eq("card_id", selectedReclaimCardId)
-        .maybeSingle();
-
-      const nextAdv = (Number(curAdv?.current_balance) || 0) + amt;
-      await supabase
-        .from("pocket_advances")
-        .upsert({ user_id: activeUserId, card_id: selectedReclaimCardId, current_balance: nextAdv, updated_at: now });
-
-      setReclaimSuccessMsg("Transferred to pocket successfully!");
+      setReclaimSuccessMsg(`₹${totalAmt.toLocaleString("en-IN")} সফলভাবে পকেটে ফেরত নেওয়া হয়েছে!`);
       await fetchAllLedgers();
       setTimeout(() => {
         setReclaimModalOpen(false);
       }, 1000);
     } catch (err: any) {
-      console.error("Error in reclaim transfer:", err);
-      setReclaimErrorMsg(err.message || "Transfer failed. Please try again.");
+      console.error("Error in cross-card reclaim:", err);
+      setReclaimErrorMsg(err.message || "রিক্লেইম ব্যর্থ হয়েছে। আবার চেষ্টা করুন।");
     } finally {
       setReclaimSubmitting(false);
     }
@@ -1160,15 +1211,16 @@ function LedgersContent() {
               initial={{ opacity: 0, scale: 0.95, y: 10 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 10 }}
-              className="relative w-full max-w-md bg-[#0a0a10] border border-white/10 rounded-3xl p-6 shadow-2xl space-y-4 z-10"
+              className="relative w-full max-w-lg bg-[#0a0a10] border border-white/10 rounded-3xl p-6 shadow-2xl space-y-4 z-10"
             >
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between pb-1 border-b border-white/5">
                 <div>
-                  <h3 className="text-base font-black text-white">
-                    পকেটে টাকা ফেরত নিন (Reclaim Advance)
+                  <h3 className="text-base font-black text-white flex items-center gap-2">
+                    <Wallet className="w-4 h-4 text-purple-400" />
+                    পকেটে টাকা ফেরত নিন (Cross-Card Reclaim)
                   </h3>
                   <p className="text-xs text-slate-400 mt-0.5">
-                    {getUserName(activeUserId)} এর ক্যাশ অন হ্যান্ড থেকে পকেটে টাকা ফেরত নিন।
+                    {getUserName(activeUserId)} এর যেকোনো কার্ডের ক্যাশ অন হ্যান্ড থেকে পকেট অগ্রিম সমন্বয় করুন।
                   </p>
                 </div>
                 <button
@@ -1194,56 +1246,138 @@ function LedgersContent() {
                 </div>
               )}
 
-              <div className="space-y-3 text-xs">
+              <div className="space-y-4 text-xs">
+                {/* 1. Target Debt Card */}
                 <div>
-                  <label className="text-slate-400 block mb-1.5 font-semibold">কোন কার্ডের জন্য পকেট ক্লিয়ার করবেন?</label>
+                  <label className="text-slate-300 block mb-1.5 font-bold flex items-center justify-between">
+                    <span>১. কোন কার্ডের পকেট বকেয়া ক্লিয়ার করবেন? (Target Card)</span>
+                    {selectedDebtDeficit > 0 && (
+                      <span className="text-rose-400 font-mono font-bold text-[11px]">
+                        বকেয়া ঋণ: ₹{selectedDebtDeficit.toLocaleString("en-IN")}
+                      </span>
+                    )}
+                  </label>
                   <select
-                    value={selectedReclaimCardId}
+                    value={selectedReclaimDebtCardId}
                     onChange={e => {
-                      setSelectedReclaimCardId(e.target.value);
-                      const balObj = activeUserPocketBalances.find(p => p.card_id === e.target.value);
-                      if (balObj && Number(balObj.current_balance) < 0) {
-                        setReclaimAmount(String(Math.abs(Number(balObj.current_balance))));
+                      const newId = e.target.value;
+                      setSelectedReclaimDebtCardId(newId);
+                      const balObj = activeUserPocketBalances.find(p => p.card_id === newId);
+                      const def = balObj && Number(balObj.current_balance) < 0 ? Math.abs(Number(balObj.current_balance)) : 0;
+                      if (def > 0 && reclaimCashSources.length === 1) {
+                        const curSrcCard = reclaimCashSources[0]?.cardId;
+                        const avail = curSrcCard ? Number(activeUserCardCashMap[curSrcCard] || 0) : 0;
+                        updateReclaimSource(0, { amount: String(avail > 0 ? Math.min(def, avail) : def) });
                       }
                     }}
-                    className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-xl text-white outline-none focus:border-purple-500"
+                    className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-xl text-white outline-none focus:border-purple-500 font-medium"
                   >
                     {cards.map(c => {
                       const balObj = activeUserPocketBalances.find(p => p.card_id === c.id);
-                      const deficit = balObj ? Number(balObj.current_balance) : 0;
+                      const bal = balObj ? Number(balObj.current_balance) : 0;
                       return (
                         <option key={c.id} value={c.id} className="bg-[#121216]">
-                          {c.card_name} (**{c.last_4_digits}) {deficit < 0 ? `[ঘাটতি: ₹${Math.abs(deficit)}]` : "[ক্লিয়ার]"}
+                          {c.card_name} (**{c.last_4_digits}) {bal < 0 ? `[বকেয়া ঋণ: ₹${Math.abs(bal).toLocaleString("en-IN")}]` : "[ক্লিয়ার • ₹0]"}
                         </option>
                       );
                     })}
                   </select>
                 </div>
 
-                {/* Available Balance Verification Display */}
-                <div className="p-3 rounded-xl bg-white/[0.03] border border-white/10 flex items-center justify-between">
-                  <span className="text-slate-400">নির্বাচিত কার্ডে Available Cash:</span>
-                  <span className={`font-bold ${availableCashForReclaim > 0 ? "text-emerald-400" : "text-rose-400"}`}>
-                    ₹{availableCashForReclaim.toLocaleString("en-IN")}
-                  </span>
+                {/* 2. Cash on Hand Source Allocation */}
+                <div className="space-y-2 p-3.5 bg-white/[0.02] border border-white/10 rounded-2xl">
+                  <div className="flex items-center justify-between pb-1">
+                    <label className="text-slate-300 font-bold flex items-center gap-1.5">
+                      <CreditCard className="w-3.5 h-3.5 text-sky-400" />
+                      <span>২. ক্যাশ অন হ্যান্ড সোর্স নির্ধারণ (Source Cards)</span>
+                    </label>
+                    <span className="text-[11px] font-mono text-slate-400">
+                      মোট বরাদ্দ: <strong className={reclaimAllocationValid ? "text-emerald-400" : "text-amber-400"}>₹{totalReclaimAllocated.toLocaleString("en-IN")}</strong>
+                    </span>
+                  </div>
+
+                  <p className="text-[11px] text-slate-400">
+                    যে কার্ডগুলোর ক্যাশ অন হ্যান্ড থেকে টাকা কেটে পকেটে ফেরত নেওয়া হবে:
+                  </p>
+
+                  <div className="space-y-2 pt-1">
+                    {reclaimCashSources.map((src, idx) => {
+                      const avail = Number(activeUserCardCashMap[src.cardId] || 0);
+                      const srcAmt = Number(src.amount) || 0;
+                      const isOver = srcAmt > avail;
+
+                      return (
+                        <div key={src.uid} className="flex items-center gap-2">
+                          <select
+                            value={src.cardId}
+                            onChange={e => updateReclaimSource(idx, { cardId: e.target.value })}
+                            className="flex-1 px-3 py-2 bg-black/40 border border-white/10 rounded-xl text-white text-xs outline-none focus:border-sky-500"
+                          >
+                            <option value="" className="bg-[#121216]">কার্ড নির্বাচন করুন...</option>
+                            {cards.map(c => {
+                              const cashBal = Number(activeUserCardCashMap[c.id] || 0);
+                              return (
+                                <option key={c.id} value={c.id} className="bg-[#121216]">
+                                  {c.card_name} (**{c.last_4_digits}) — ক্যাশ: ₹{cashBal.toLocaleString("en-IN")}
+                                </option>
+                              );
+                            })}
+                          </select>
+
+                          <div className="relative w-28">
+                            <input
+                              type="number"
+                              placeholder="0"
+                              value={src.amount}
+                              onChange={e => updateReclaimSource(idx, { amount: e.target.value })}
+                              className={`w-full pl-2.5 pr-10 py-2 bg-black/40 border rounded-xl text-xs font-bold text-white outline-none ${
+                                isOver ? "border-rose-500 text-rose-300" : "border-white/10 focus:border-sky-500"
+                              }`}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const remainingNeeded = selectedDebtDeficit > 0 ? Math.max(0, selectedDebtDeficit - (totalReclaimAllocated - srcAmt)) : avail;
+                                const maxAllowed = Math.min(avail, remainingNeeded > 0 ? remainingNeeded : avail);
+                                updateReclaimSource(idx, { amount: String(maxAllowed) });
+                              }}
+                              className="absolute right-1 top-1/2 -translate-y-1/2 px-1.5 py-0.5 text-[9px] font-black text-sky-400 bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/30 rounded"
+                            >
+                              MAX
+                            </button>
+                          </div>
+
+                          {reclaimCashSources.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => removeReclaimSource(idx)}
+                              className="p-2 text-slate-500 hover:text-rose-400 rounded-lg hover:bg-white/5 transition-colors"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={addReclaimSource}
+                    disabled={reclaimCashSources.length >= cardsWithAvailableCash.length}
+                    className="w-full mt-2 py-2 flex items-center justify-center gap-1.5 text-[11px] font-bold text-sky-400 bg-sky-500/5 hover:bg-sky-500/10 border border-dashed border-sky-500/20 rounded-xl transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    আরেকটি ক্যাশ সোর্স যোগ করুন (+ Add Another Cash Source)
+                  </button>
                 </div>
 
+                {/* 3. Remarks */}
                 <div>
-                  <label className="text-slate-400 block mb-1.5 font-semibold">টাকার পরিমাণ (₹)</label>
-                  <input
-                    type="number"
-                    placeholder="পরিমাণ লিখুন..."
-                    value={reclaimAmount}
-                    onChange={e => setReclaimAmount(e.target.value)}
-                    className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-xl text-white text-base font-bold outline-none focus:border-purple-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-slate-400 block mb-1.5 font-semibold">রিমার্কস (ঐচ্ছিক)</label>
+                  <label className="text-slate-400 block mb-1.5 font-semibold">রিমার্কস (ঐচ্ছিক বিবরণ)</label>
                   <input
                     type="text"
-                    placeholder="যেমন: রোটেশন তোলার পর পকেটে ফেরত নিলাম"
+                    placeholder="যেমন: রোটেশন তোলার পর ক্যাশ থেকে পকেটে শোধ করলাম"
                     value={reclaimRemarks}
                     onChange={e => setReclaimRemarks(e.target.value)}
                     className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-xl text-white outline-none focus:border-purple-500"
@@ -1251,22 +1385,22 @@ function LedgersContent() {
                 </div>
               </div>
 
-              <div className="flex gap-2 pt-2">
+              <div className="flex gap-2 pt-3 border-t border-white/5">
                 <button
                   type="button"
                   disabled={reclaimSubmitting}
                   onClick={() => setReclaimModalOpen(false)}
-                  className="flex-1 py-2.5 rounded-xl border border-white/10 text-slate-400 text-xs font-semibold hover:bg-white/5"
+                  className="flex-1 py-2.5 rounded-xl border border-white/10 text-slate-400 text-xs font-semibold hover:bg-white/5 transition-colors"
                 >
                   বাতিল
                 </button>
                 <button
                   type="button"
-                  disabled={reclaimSubmitting || availableCashForReclaim <= 0 || Number(reclaimAmount) > availableCashForReclaim}
+                  disabled={reclaimSubmitting || !reclaimAllocationValid}
                   onClick={handleConfirmReclaim}
-                  className="flex-1 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition-colors disabled:opacity-40"
+                  className="flex-1 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition-colors disabled:opacity-40 shadow-lg shadow-purple-600/20"
                 >
-                  {reclaimSubmitting ? "প্রসেস হচ্ছে..." : "ট্রান্সফার নিশ্চিত করুন"}
+                  {reclaimSubmitting ? "প্রসেস হচ্ছে..." : `₹${totalReclaimAllocated.toLocaleString("en-IN")} ট্রান্সফার নিশ্চিত করুন`}
                 </button>
               </div>
             </motion.div>

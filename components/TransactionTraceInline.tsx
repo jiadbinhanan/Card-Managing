@@ -528,12 +528,23 @@ async function fetchTraceRelations(t: TraceTarget): Promise<any> {
       cardTx = fallbackBill;
     }
 
-    if (pa.entry_type === "reclaim") {
+    let breakdownSources: any[] = [];
+    if (pa.cash_source_breakdown && Array.isArray(pa.cash_source_breakdown) && pa.cash_source_breakdown.length > 0) {
+      const cardIds = pa.cash_source_breakdown.map((s: any) => s.card_id).filter(Boolean);
+      if (cardIds.length > 0) {
+        const { data: bCards } = await supabase.from("cards").select("id, card_name, last_4_digits").in("id", cardIds);
+        const bCardMap = Object.fromEntries((bCards || []).map(c => [c.id, `${c.card_name} (**${c.last_4_digits})`]));
+        breakdownSources = pa.cash_source_breakdown.map((s: any) => ({
+          card_id: s.card_id,
+          card_label: bCardMap[s.card_id] || "Card",
+          amount: Number(s.amount) || 0
+        }));
+      }
+    } else if (pa.entry_type === "recovery" || pa.entry_type === "reclaim") {
       const { data: cl } = await supabase
         .from("cash_on_hand_ledger")
         .select(`*, cards(card_name, last_4_digits), profiles:user_id(name)`)
         .eq("user_id", pa.user_id)
-        .eq("card_id", pa.card_id)
         .eq("transaction_type", "debit")
         .order("transaction_date", { ascending: false })
         .limit(1)
@@ -546,6 +557,7 @@ async function fetchTraceRelations(t: TraceTarget): Promise<any> {
       pocketAdv: pa,
       cardTx,
       cashLedger,
+      breakdownSources,
       foreignId: cardTx?.id || cashLedger?.id || null,
     };
   }
@@ -1026,15 +1038,30 @@ function renderLinkedColumnsSpec(data: any) {
               </div>
             )}
 
-            {cl && (
+            {data.breakdownSources && data.breakdownSources.length > 0 ? (
+              <div className="col-span-2 bg-white/[0.03] p-2.5 rounded-xl border border-white/5 space-y-1.5">
+                <span className="text-[10px] font-bold text-emerald-400 block flex items-center gap-1.5">
+                  <CreditCard className="w-3.5 h-3.5" />
+                  💵 যে কার্ডের ক্যাশ থেকে রিক্লেম হয়েছে (Cash Sources Breakdown):
+                </span>
+                <div className="space-y-1">
+                  {data.breakdownSources.map((bs: any, idx: number) => (
+                    <div key={idx} className="flex justify-between items-center text-slate-300 text-xs py-0.5">
+                      <span className="text-slate-300">{bs.card_label}</span>
+                      <span className="font-bold text-emerald-400 font-mono">₹{bs.amount.toLocaleString("en-IN")}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : cl ? (
               <div className="col-span-2 bg-white/[0.03] p-2 rounded-lg border border-white/5 space-y-1">
                 <span className="text-[10px] font-bold text-emerald-400 block">💵 রিক্লেম হওয়া ক্যাশ লেজার এন্ট্রি:</span>
                 <div className="flex justify-between text-slate-300">
-                  <span>{cl.profiles?.name} এর ক্যাশ</span>
-                  <span className="font-bold">₹{Number(cl.amount).toLocaleString("en-IN")}</span>
+                  <span>{cl.profiles?.name} এর ক্যাশ ({cl.cards?.card_name || "Card"})</span>
+                  <span className="font-bold text-emerald-400 font-mono">₹{Number(cl.amount).toLocaleString("en-IN")}</span>
                 </div>
               </div>
-            )}
+            ) : null}
           </div>
         </div>
       </div>
