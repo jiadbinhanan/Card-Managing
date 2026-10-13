@@ -373,8 +373,14 @@ export default function RecordEntryModal(props: RecordEntryModalProps) {
                               />
                               <button
                                 type="button"
-                                onClick={() => updateSource(idx, { amount: String(bal) })}
-                                className="h-11 px-2 text-[9px] font-black text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded-lg shrink-0"
+                                onClick={() => {
+                                  const otherAllocated = cashSources.reduce((sum, s, i) => (i !== idx ? sum + (Number(s.amount) || 0) : sum), 0);
+                                  const remainingNeeded = amtNum > 0 ? Math.max(0, amtNum - otherAllocated) : 0;
+                                  const targetCap = remainingNeeded > 0 ? remainingNeeded : (amtNum > 0 ? amtNum : bal);
+                                  const maxVal = Math.min(bal, targetCap);
+                                  updateSource(idx, { amount: String(maxVal > 0 ? maxVal : bal) });
+                                }}
+                                className="h-11 px-2 text-[9px] font-black text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded-lg shrink-0 transition-colors"
                               >
                                 MAX
                               </button>

@@ -1334,17 +1334,19 @@ function LedgersContent() {
                                 isOver ? "border-rose-500 text-rose-300" : "border-white/10 focus:border-sky-500"
                               }`}
                             />
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const remainingNeeded = selectedDebtDeficit > 0 ? Math.max(0, selectedDebtDeficit - (totalReclaimAllocated - srcAmt)) : avail;
-                                const maxAllowed = Math.min(avail, remainingNeeded > 0 ? remainingNeeded : avail);
-                                updateReclaimSource(idx, { amount: String(maxAllowed) });
-                              }}
-                              className="absolute right-1 top-1/2 -translate-y-1/2 px-1.5 py-0.5 text-[9px] font-black text-sky-400 bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/30 rounded"
-                            >
-                              MAX
-                            </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const otherAllocated = reclaimCashSources.reduce((sum, s, i) => (i !== idx ? sum + (Number(s.amount) || 0) : sum), 0);
+                                  const remainingNeeded = selectedDebtDeficit > 0 ? Math.max(0, selectedDebtDeficit - otherAllocated) : 0;
+                                  const targetCap = remainingNeeded > 0 ? remainingNeeded : (selectedDebtDeficit > 0 ? selectedDebtDeficit : avail);
+                                  const maxAllowed = Math.min(avail, targetCap);
+                                  updateReclaimSource(idx, { amount: String(maxAllowed > 0 ? maxAllowed : avail) });
+                                }}
+                                className="absolute right-1 top-1/2 -translate-y-1/2 px-1.5 py-0.5 text-[9px] font-black text-sky-400 bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/30 rounded transition-colors"
+                              >
+                                MAX
+                              </button>
                           </div>
 
                           {reclaimCashSources.length > 1 && (
