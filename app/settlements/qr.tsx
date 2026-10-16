@@ -241,7 +241,23 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
 
   const toggleQrStatus = async (id: string, currentStatus: string) => {
     const newStatus = currentStatus === 'active' ? 'on_hold' : 'active';
-    await supabase.from('qrs').update({ status: newStatus }).eq('id', id);
+
+    // 1. Optimistic update: Update local state immediately
+    const updatedQrs = qrs.map(q => q.id === id ? { ...q, status: newStatus } : q);
+    setQrs(updatedQrs);
+    categorizeQRs(updatedQrs, activeCooldowns);
+
+    // 2. Perform background DB update with rollback on failure
+    try {
+      const { error } = await supabase.from('qrs').update({ status: newStatus }).eq('id', id);
+      if (error) throw error;
+    } catch (err: any) {
+      console.error("Error toggling QR status:", err);
+      const revertedQrs = qrs.map(q => q.id === id ? { ...q, status: currentStatus } : q);
+      setQrs(revertedQrs);
+      categorizeQRs(revertedQrs, activeCooldowns);
+      alert("QR স্ট্যাটাস আপডেট করতে সমস্যা হয়েছে: " + (err?.message || "Unknown error"));
+    }
   };
 
   const handleSaveQR = async () => {

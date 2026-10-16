@@ -472,7 +472,9 @@ function renderOriginDetails(data: any): string {
 function renderActionText(data: any): string {
   if (data.type === "card_transaction") {
     if (data.cardTx.type === "withdrawal") {
-      return data.cardTx.status === "settled" ? "রোটেশন উইথড্রয়াল (Settled ✓)" : "রোটেশন উইথড্রয়াল (In Transit / Pending)";
+      if (data.cardTx.status === "settled") return "রোটেশন উইথড্রয়াল (Settled ✓)";
+      if (data.cardTx.status === "partially_settled") return "রোটেশন উইথড্রয়াল (Partially Settled)";
+      return "রোটেশন উইথড্রয়াল (In Transit / Pending)";
     }
     return "কার্ডের বিল পরিশোধ (Bill Payment)";
   }
@@ -505,6 +507,11 @@ function renderDestinationText(data: any): string {
     if (data.cardTx.type === "withdrawal") {
       if (data.cardTx.status === "settled") {
         return `ক্যাশ অন হ্যান্ড: ${data.cardTx.settled_profile?.name || "User"}-এর কাছে জমা`;
+      }
+      if (data.cardTx.status === "partially_settled") {
+        const due = data.cardTx.settlement_details?.total_due !== undefined ? data.cardTx.settlement_details.total_due : 0;
+        const settled = data.cardTx.settlement_details?.total_settled !== undefined ? data.cardTx.settlement_details.total_settled : 0;
+        return `আংশিক সেটলমেন্ট: ₹${Number(settled).toLocaleString('en-IN')} জমা | বাকি ডিউ: ₹${Number(due).toLocaleString('en-IN')}`;
       }
       return "QR সেটলমেন্টের অপেক্ষায় (In Transit)";
     } else {

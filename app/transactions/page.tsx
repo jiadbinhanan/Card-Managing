@@ -41,13 +41,14 @@ interface Transaction {
   type: 'withdrawal' | 'bill_payment';
   amount: number;
   transaction_date: string;
-  status: 'pending_settlement' | 'settled';
+  status: 'pending_settlement' | 'partially_settled' | 'settled';
   recorded_by: string;
   qr_id?: string;
   payment_method?: string;
   settled_to_user?: string;
   card_id?: string;
   remarks?: string;
+  settlement_details?: any;
   cash_source_breakdown?: CashSourceBreakdownEntry[] | null;
   qrs?: { merchant_name: string };
   profiles?: { name: string; avatar_url?: string };
@@ -260,7 +261,7 @@ export default function TransactionsPage() {
       txQuery,
       spendsQuery,
       supabase.from('cash_on_hand').select('*'),
-      supabase.from('card_transactions').select('card_id, amount, type, payment_method, status, qr_id, settled_to_user, remarks, transaction_date'),
+      supabase.from('card_transactions').select('card_id, amount, type, payment_method, status, qr_id, settled_to_user, remarks, transaction_date, settlement_details'),
       supabase.from('spends').select('card_id, amount, payment_method, user_id, spend_type'),
       supabase.from('billing_cycles').select('card_id, generated_amount, paid_amount, billing_month').in('status', ['unpaid', 'partially_paid'])
     ]);
@@ -284,7 +285,7 @@ export default function TransactionsPage() {
         if (t.type !== 'withdrawal') return false;
         const isRotation = t.qr_id || t.settled_to_user || (t.remarks || '').toLowerCase().includes('rotation');
         if (isRotation) return true;
-        return t.status === 'pending_settlement';
+        return t.status === 'pending_settlement' || t.status === 'partially_settled';
       }).reduce((s, t) => s + Number(t.amount), 0);
 
       const b = famTxs.filter(t => t.type === 'bill_payment').reduce((s, t) => s + Number(t.amount), 0);

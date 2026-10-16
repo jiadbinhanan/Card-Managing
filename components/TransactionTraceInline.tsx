@@ -662,8 +662,14 @@ function renderLinkedColumnsSpec(data: any) {
               <span className="text-[10px] font-black uppercase tracking-wider text-sky-400 flex items-center gap-1.5">
                 <CreditCard className="w-3.5 h-3.5" /> রোটেশনের মূল কার্ড ট্রানজ্যাকশন (Linked Card Tx)
               </span>
-              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full border ${ct.status === "settled" ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-amber-500/10 text-amber-400 border-amber-500/20"}`}>
-                {ct.status === "settled" ? "Settled ✓" : "Pending Settlement"}
+              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full border ${
+                ct.status === "settled" 
+                  ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" 
+                  : ct.status === "partially_settled"
+                  ? "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                  : "bg-slate-500/10 text-slate-400 border-slate-500/20"
+              }`}>
+                {ct.status === "settled" ? "Settled ✓" : ct.status === "partially_settled" ? "Partial Settlement" : "Pending Settlement"}
               </span>
             </div>
 
@@ -792,8 +798,14 @@ function renderLinkedColumnsSpec(data: any) {
             <span className="text-[10px] font-black uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
               <Banknote className="w-3.5 h-3.5" /> সেটলমেন্ট ও ক্যাশ অন হ্যান্ড গন্তব্য (Settled Destination)
             </span>
-            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full border ${ct.status === "settled" ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-amber-500/10 text-amber-400 border-amber-500/20"}`}>
-              {ct.status === "settled" ? "Settled ✓" : "Pending Settlement"}
+            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full border ${
+              ct.status === "settled" 
+                ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" 
+                : ct.status === "partially_settled"
+                ? "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                : "bg-slate-500/10 text-slate-400 border-slate-500/20"
+            }`}>
+              {ct.status === "settled" ? "Settled ✓" : ct.status === "partially_settled" ? "Partial Settlement" : "Pending Settlement"}
             </span>
           </div>
 
@@ -801,7 +813,7 @@ function renderLinkedColumnsSpec(data: any) {
             <div>
               <span className="text-slate-500 text-[10px] block">কার কাছে গেছে (Settled To):</span>
               <span className="font-bold text-amber-300">
-                {ct.settled_profile?.name || cashList[0]?.profiles?.name || (ct.status === "settled" ? "User" : "QR ট্রানজিটে রয়েছে")}
+                {ct.settled_profile?.name || cashList[0]?.profiles?.name || (ct.status === "settled" ? "User" : ct.status === "partially_settled" ? "Multiple / In Progress" : "QR ট্রানজিটে রয়েছে")}
               </span>
             </div>
 
@@ -815,7 +827,7 @@ function renderLinkedColumnsSpec(data: any) {
             <div>
               <span className="text-slate-500 text-[10px] block">সেটলমেন্টের তারিখ:</span>
               <span className="font-bold text-slate-200">
-                {ct.settled_date || (ct.status === "settled" ? "Settled" : "অপেক্ষমান")}
+                {ct.settled_date || (ct.status === "settled" ? "Settled" : ct.status === "partially_settled" ? "আংশিক সম্পন্ন" : "অপেক্ষমান")}
               </span>
             </div>
 

@@ -25,18 +25,34 @@ import { sendWhatsAppAlert } from "@/lib/whatsapp";
 import QRTab from "./qr";
 import TransactionTraceInline, { type TraceTarget } from "@/components/TransactionTraceInline";
 
+export interface SettlementHistoryEntry {
+  settle_id: string;
+  amount: number;
+  settled_date: string;
+  settled_to_user: string;
+  card_id: string;
+  remarks?: string;
+}
+
+export interface SettlementDetails {
+  total_settled: number;
+  total_due: number;
+  history: SettlementHistoryEntry[];
+}
+
 interface Transaction {
   id: string;
   type: 'withdrawal' | 'bill_payment';
   amount: number;
   transaction_date: string;
-  status: 'pending_settlement' | 'settled';
+  status: 'pending_settlement' | 'partially_settled' | 'settled';
   settled_date?: string;
   recorded_by: string; 
   qr_id?: string;
   settled_to_user?: string; 
   card_id?: string;
   remarks?: string;
+  settlement_details?: SettlementDetails | null;
   qrs?: { merchant_name: string };
   profiles?: { name: string; avatar_url?: string };
   cards?: { card_name: string; last_4_digits: string };
@@ -62,6 +78,7 @@ interface CardData {
 interface QRData {
   id: string;
   merchant_name: string;
+  status?: string;
 }
 
 // Stagger Animation Variants (Shared for tabs)
@@ -103,6 +120,7 @@ export default function SettlementsPage() {
   const [isSettling, setIsSettling] = useState(false);
   const [settlementType, setSettlementType] = useState<"full" | "partial">("full");
   const [partialAmount, setPartialAmount] = useState<number | "">("");
+  const [settleRemarks, setSettleRemarks] = useState("");
 
   const [isManualEntryOpen, setIsManualEntryOpen] = useState(false);
   const [manualCardId, setManualCardId] = useState("");
@@ -158,7 +176,7 @@ export default function SettlementsPage() {
     const [cRes, aRes, qRes] = await Promise.all([
       supabase.from('cards').select('*'),
       supabase.from('card_access').select('*'),
-      supabase.from('qrs').select('id, merchant_name').eq('status', 'active')
+      supabase.from('qrs').select('id, merchant_name, status').in('status', ['active', 'static'])
     ]);
 
     const cardsList = cRes.data || [];
@@ -214,14 +232,14 @@ export default function SettlementsPage() {
     ] = await Promise.all([
       txQuery,
       supabase.from('cash_on_hand').select('*'),
-      supabase.from('card_transactions').select('amount, type, payment_method, card_id, status, qr_id, settled_to_user, remarks'),
+      supabase.from('card_transactions').select('amount, type, payment_method, card_id, status, qr_id, settled_to_user, remarks, settlement_details'),
       supabase.from('spends').select('amount, payment_method, user_id, card_id')
     ]);
 
     let pending: any[] = [];
     let settled: any[] = [];
     if (txs) {
-       pending = txs.filter(t => t.status === 'pending_settlement') as any;
+       pending = txs.filter(t => t.status === 'pending_settlement' || t.status === 'partially_settled') as any;
        settled = txs.filter(t => t.status === 'settled').sort((a,b) => new Date(b.settled_date || b.transaction_date).getTime() - new Date(a.settled_date || a.transaction_date).getTime()) as any;
        setPendingTxs(pending);
        setSettledTxs(settled);
@@ -241,7 +259,7 @@ export default function SettlementsPage() {
          if (!t.card_id || !familyCardIds.includes(t.card_id)) return false;
          const isRotation = t.qr_id || t.settled_to_user || (t.remarks || '').toLowerCase().includes('rotation');
          if (isRotation) return true;
-         return t.status === 'pending_settlement';
+         return t.status === 'pending_settlement' || t.status === 'partially_settled';
        }).reduce((sum, t) => sum + Number(t.amount), 0) || 0;
 
        const billPayments = allTxs?.filter(t => t.type === 'bill_payment' && t.card_id && familyCardIds.includes(t.card_id)).reduce((sum, t) => sum + Number(t.amount), 0) || 0;
@@ -274,6 +292,7 @@ export default function SettlementsPage() {
 
      setSettlementType("full");
      setPartialAmount("");
+     setSettleRemarks("");
      setIsSettleModalOpen(true);
   };
 
@@ -282,32 +301,49 @@ export default function SettlementsPage() {
 
      setIsSettling(true);
      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-     const isPartial = settlementType === "partial" && Number(partialAmount) > 0 && Number(partialAmount) < settleTx.amount;
-     const amtToSettle = isPartial ? Number(partialAmount) : settleTx.amount;
+     const currentDue = settleTx.settlement_details?.total_due !== undefined 
+        ? Number(settleTx.settlement_details.total_due) 
+        : Number(settleTx.amount);
+
+     const isPartial = settlementType === "partial" && Number(partialAmount) > 0 && Number(partialAmount) < currentDue;
+     const amtToSettle = isPartial ? Number(partialAmount) : currentDue;
+
+     const prevHistory = Array.isArray(settleTx.settlement_details?.history) 
+        ? settleTx.settlement_details.history 
+        : [];
+     const prevSettled = Number(settleTx.settlement_details?.total_settled || 0);
+
+     const newSettled = prevSettled + amtToSettle;
+     const newDue = Math.max(0, Number(settleTx.amount) - newSettled);
+
+     const newHistoryEntry: SettlementHistoryEntry = {
+        settle_id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `settle-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        amount: amtToSettle,
+        settled_date: today,
+        settled_to_user: cashReceiverId,
+        card_id: settleTargetCardId,
+        remarks: settleRemarks.trim() || undefined
+     };
+
+     const updatedSettlementDetails: SettlementDetails = {
+        total_settled: newSettled,
+        total_due: newDue,
+        history: [...prevHistory, newHistoryEntry]
+     };
 
      try {
-        if (isPartial) {
-            const newPendingBalance = settleTx.amount - amtToSettle;
-            await supabase.from('card_transactions').update({ amount: newPendingBalance }).eq('id', settleTx.id);
-
-            await supabase.from('card_transactions').insert({
-                card_id: settleTargetCardId, 
-                qr_id: settleTx.qr_id, 
-                amount: amtToSettle,
-                transaction_date: settleTx.transaction_date, 
-                type: 'withdrawal',
-                status: 'settled',
-                settled_date: today,
-                settled_to_user: cashReceiverId,
-                recorded_by: currentUser?.id,
-                remarks: `Partial Settlement (Total was ₹${settleTx.amount})`
-            });
-        } else {
+        if (newDue <= 0) {
             await supabase.from('card_transactions').update({
                 card_id: settleTargetCardId, 
                 status: 'settled',
                 settled_date: today,
-                settled_to_user: cashReceiverId
+                settled_to_user: cashReceiverId,
+                settlement_details: updatedSettlementDetails
+            }).eq('id', settleTx.id);
+        } else {
+            await supabase.from('card_transactions').update({
+                status: 'partially_settled',
+                settlement_details: updatedSettlementDetails
             }).eq('id', settleTx.id);
         }
 
@@ -334,12 +370,17 @@ export default function SettlementsPage() {
            });
         }
 
+        const baseRemark = `Settlement received from ${settleTx.qrs?.merchant_name || 'Manual Rotation Entry'}`;
+        const finalLedgerRemark = settleRemarks.trim() 
+          ? `${baseRemark} - ${settleRemarks.trim()}` 
+          : baseRemark;
+
         await supabase.from('cash_on_hand_ledger').insert({
            user_id: cashReceiverId,
            card_id: settleTargetCardId,
            amount: amtToSettle,
            transaction_type: 'credit',
-           remarks: `Settlement received from ${settleTx.qrs?.merchant_name || 'Manual Rotation Entry'}`,
+           remarks: finalLedgerRemark,
            transaction_date: new Date().toISOString(),
            linked_card_transaction_id: settleTx.id
         });
@@ -382,6 +423,7 @@ export default function SettlementsPage() {
            }
         }
         setIsSettleModalOpen(false);
+        setSettleRemarks("");
         fetchLedgerData(accessibleCards);
      } catch (error: any) {
         alert("Error during settlement: " + error.message);
@@ -506,7 +548,12 @@ export default function SettlementsPage() {
      return acc;
   }, {} as Record<string, Transaction[]>);
 
-  const totalPendingAmount = pendingTxs.reduce((sum, tx) => sum + tx.amount, 0);
+  const totalPendingAmount = pendingTxs.reduce((sum, tx) => {
+     const due = (tx.status === 'partially_settled' && tx.settlement_details?.total_due !== undefined)
+        ? tx.settlement_details.total_due
+        : tx.amount;
+     return sum + Number(due);
+  }, 0);
 
   return (
     <div className="relative min-h-screen bg-[#030014] text-slate-50 font-sans pb-28 overflow-x-hidden selection:bg-[#10b981]/30">
@@ -653,7 +700,14 @@ export default function SettlementsPage() {
                                    </div>
                                 </div>
                                 <div className="text-right shrink-0">
-                                   <p className="text-base font-black text-amber-400">₹{tx.amount.toLocaleString()}</p>
+                                   {tx.status === 'partially_settled' && tx.settlement_details?.total_due !== undefined ? (
+                                      <div>
+                                         <p className="text-base font-black text-amber-400">₹{tx.settlement_details.total_due.toLocaleString()}</p>
+                                         <p className="text-[9px] font-bold text-emerald-400">Due (₹{tx.settlement_details.total_settled.toLocaleString()} pd)</p>
+                                      </div>
+                                   ) : (
+                                      <p className="text-base font-black text-amber-400">₹{tx.amount.toLocaleString()}</p>
+                                   )}
                                 </div>
                              </div>
 
@@ -815,7 +869,16 @@ export default function SettlementsPage() {
                 <label className="text-[11px] font-bold text-slate-400 uppercase ml-1 flex items-center gap-1.5">Select QR (Optional)</label>
                 <select value={manualQrId} onChange={(e) => setManualQrId(e.target.value)} className="w-full h-12 bg-white/[0.05] border border-white/10 rounded-xl px-4 text-xs font-bold text-white outline-none appearance-none focus:border-[#10b981]">
                    <option value="" className="bg-[#050505] text-slate-500">None (Manual Entry)</option>
-                   {activeQrs.map(q => <option key={q.id} value={q.id} className="bg-[#050505]">{q.merchant_name}</option>)}
+                   {activeQrs.filter(q => q.status !== 'static').map(q => (
+                      <option key={q.id} value={q.id} className="bg-[#050505] text-white">{q.merchant_name}</option>
+                   ))}
+                   {activeQrs.some(q => q.status === 'static') && (
+                      <optgroup label="Static" className="bg-[#0a0a0a] text-amber-400 font-bold">
+                         {activeQrs.filter(q => q.status === 'static').map(q => (
+                            <option key={q.id} value={q.id} className="bg-[#050505] text-white">{q.merchant_name}</option>
+                         ))}
+                      </optgroup>
+                   )}
                 </select>
                 <ChevronDown className="absolute right-3 top-[38px] w-4 h-4 text-slate-500 pointer-events-none" />
              </div>
@@ -859,7 +922,9 @@ export default function SettlementsPage() {
             <DialogTitle className="text-2xl font-space font-black bg-gradient-to-r from-[#10b981] to-[#34d399] bg-clip-text text-transparent">
               Settlement Process
             </DialogTitle>
-            <DialogDescription className="text-xs text-slate-400">Total Due: ₹{settleTx?.amount.toLocaleString()}</DialogDescription>
+            <DialogDescription className="text-xs text-slate-400">
+              Total Due: ₹{(settleTx?.settlement_details?.total_due !== undefined ? Number(settleTx.settlement_details.total_due) : Number(settleTx?.amount || 0)).toLocaleString()}
+            </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-5 relative z-10">
@@ -870,8 +935,17 @@ export default function SettlementsPage() {
 
              {settlementType === "full" ? (
                  <div className="text-center p-5 bg-white/[0.02] border border-white/10 rounded-[24px] shadow-inner">
-                    <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">Total Amount</p>
-                    <p className="text-4xl font-black text-white">₹{settleTx?.amount.toLocaleString()}</p>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">
+                       {settleTx?.settlement_details?.total_settled ? "Remaining Due" : "Total Amount"}
+                    </p>
+                    <p className="text-4xl font-black text-white">
+                       ₹{(settleTx?.settlement_details?.total_due !== undefined ? Number(settleTx.settlement_details.total_due) : Number(settleTx?.amount || 0)).toLocaleString()}
+                    </p>
+                    {Boolean(settleTx?.settlement_details?.total_settled) && (
+                       <p className="text-[10px] text-slate-400 mt-1">
+                          Total was ₹{Number(settleTx?.amount || 0).toLocaleString()} (₹{Number(settleTx?.settlement_details?.total_settled).toLocaleString()} already settled)
+                       </p>
+                    )}
                  </div>
              ) : (
                  <div className="space-y-1.5">
@@ -886,9 +960,12 @@ export default function SettlementsPage() {
                           className="w-full h-14 bg-white/[0.03] border border-emerald-500/30 rounded-2xl pl-8 pr-4 text-xl font-bold text-white outline-none focus:border-emerald-500" 
                        />
                     </div>
-                    {Number(partialAmount) > 0 && Number(partialAmount) < (settleTx?.amount || 0) && (
-                       <p className="text-[10px] text-slate-400 font-medium text-right mt-1">Remaining balance will be: ₹{(settleTx!.amount - Number(partialAmount)).toLocaleString()}</p>
-                    )}
+                    {(() => {
+                       const currentDue = settleTx?.settlement_details?.total_due !== undefined ? Number(settleTx.settlement_details.total_due) : Number(settleTx?.amount || 0);
+                       return Number(partialAmount) > 0 && Number(partialAmount) < currentDue ? (
+                          <p className="text-[10px] text-slate-400 font-medium text-right mt-1">Remaining balance will be: ₹{(currentDue - Number(partialAmount)).toLocaleString()}</p>
+                       ) : null;
+                    })()}
                  </div>
              )}
 
@@ -916,9 +993,22 @@ export default function SettlementsPage() {
                 </div>
              </div>
 
+             <div className="space-y-1.5">
+                <label className="text-[11px] font-bold text-slate-400 uppercase ml-1 flex items-center gap-1.5">
+                   Remarks (Optional)
+                </label>
+                <input 
+                   type="text" 
+                   value={settleRemarks} 
+                   onChange={(e) => setSettleRemarks(e.target.value)} 
+                   placeholder="e.g. Handed over at office / Cash in locker" 
+                   className="w-full h-12 bg-white/[0.05] border border-white/10 rounded-xl px-4 text-xs font-bold text-white outline-none focus:border-[#10b981]" 
+                />
+             </div>
+
              <Button 
                 onClick={handleConfirmSettlement} 
-                disabled={isSettling || (settlementType === 'partial' && (!partialAmount || Number(partialAmount) >= (settleTx?.amount || 0)))} 
+                disabled={isSettling || (settlementType === 'partial' && (!partialAmount || Number(partialAmount) <= 0 || Number(partialAmount) >= (settleTx?.settlement_details?.total_due !== undefined ? Number(settleTx.settlement_details.total_due) : Number(settleTx?.amount || 0))))} 
                 className="w-full h-14 rounded-2xl bg-gradient-to-r from-[#10b981] to-[#34d399] hover:opacity-90 text-black font-black text-lg border-0 mt-4 disabled:opacity-50"
              >
                {isSettling ? "Processing..." : "Confirm"}

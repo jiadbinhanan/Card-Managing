@@ -312,7 +312,7 @@ export default function BorrowerProfilePanel({
     const withdrawals = (txs || []).filter(t => {
       if (t.type !== "withdrawal") return false;
       const isRotation = t.qr_id || t.settled_to_user || (t.remarks || "").toLowerCase().includes("rotation");
-      return isRotation || t.status === "pending_settlement";
+      return isRotation || t.status === "pending_settlement" || t.status === "partially_settled";
     }).reduce((s, t) => s + Number(t.amount), 0);
     const billPay = (txs || []).filter(t => t.type === "bill_payment").reduce((s, t) => s + Number(t.amount), 0);
     const ccSpends = (spends || []).filter(s => s.payment_method === "credit_card").reduce((s, sp) => s + Number(sp.amount), 0);
@@ -359,7 +359,6 @@ export default function BorrowerProfilePanel({
       if (!isPocketWrite) {
         if (sourceType === "cash_on_hand") {
           linkedCashLedgerId = await updateCashBalance(currentUser.id, selectedCardId, amtNum, "debit", `Lent given to ${borrower.name}`);
-        } else {
           const { data: txRow } = await supabase.from("card_transactions").insert({
             card_id: selectedCardId,
             amount: amtNum,
@@ -370,18 +369,6 @@ export default function BorrowerProfilePanel({
             remarks: `Lent given to ${borrower.name}`,
           }).select("id").single();
           linkedCardTransactionId = txRow?.id || null;
-
-          const { data: spendRow } = await supabase.from("spends").insert({
-            user_id: currentUser.id,
-            amount: amtNum,
-            spend_type: "personal",
-            payment_method: "from_card_limit",
-            spend_date: txDate,
-            card_id: selectedCardId,
-            remarks: `Lent to ${borrower.name} from card`,
-            linked_card_transaction_id: txRow?.id || null,
-          }).select("id").single();
-          linkedSpendId = spendRow?.id || null;
         }
       }
 
@@ -497,18 +484,6 @@ export default function BorrowerProfilePanel({
             billing_cycle_id: activeCycleId,
           }).select("id").single();
           linkedCardTransactionId = txRow?.id || null;
-
-          const { data: spendRow } = await supabase.from("spends").insert({
-            user_id: currentUser.id,
-            amount: -amtNum,
-            spend_type: "personal",
-            payment_method: "lent_recovery",
-            spend_date: txDate,
-            card_id: selectedCardId,
-            remarks: `Lent recovery from ${borrower.name}`,
-            linked_card_transaction_id: txRow?.id || null,
-          }).select("id").single();
-          linkedSpendId = spendRow?.id || null;
         }
       }
 

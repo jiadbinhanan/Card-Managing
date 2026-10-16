@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   Banknote, ArrowDownLeft, Receipt, X, ChevronRight,
-  Send, Loader2, CheckCircle2, CalendarDays, TrendingUp, TrendingDown, Layers, Wallet
+  Send, Loader2, CheckCircle2, CalendarDays, TrendingUp, TrendingDown, Layers, Wallet, CreditCard
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -45,6 +45,7 @@ interface CashTransaction {
   amount: number;
   transaction_date: string;
   remarks: string;
+  card_id?: string;
 }
 
 interface DueTransaction {
@@ -53,6 +54,7 @@ interface DueTransaction {
   amount: number;
   date: string;
   remarks: string;
+  card_id?: string;
 }
 
 interface TransferTarget {
@@ -82,9 +84,9 @@ function getFamilyCardIds(selCardId: string, cards: CardData[]): string[] {
   if (selCardId === "all" || !selCardId) return [];
   const sel = cards.find(c => c.id === selCardId);
   if (!sel) return [];
-  const primaryId = sel.is_primary ? sel.id : sel.parent_card_id!;
+  const primaryId = sel.is_primary ? sel.id : (sel.parent_card_id || sel.id);
   return cards
-    .filter(c => c.id === primaryId || c.parent_card_id === primaryId)
+    .filter(c => c.id === primaryId || (c.parent_card_id && c.parent_card_id === primaryId))
     .map(c => c.id);
 }
 
@@ -115,6 +117,20 @@ export default function DashboardAnalytics({
   // ── inline trace state ───────────────────────────────────────────────────
   const [activeTraceId, setActiveTraceId] = useState<string | null>(null);
 
+  // ── card family & sub-card filter ─────────────────────────────────────────
+  const activeFamilyCards = useMemo(() => {
+    if (selectedCardId === "all" || !selectedCardId) return [];
+    const familyIds = getFamilyCardIds(selectedCardId, accessibleCards);
+    return accessibleCards.filter(c => familyIds.includes(c.id));
+  }, [selectedCardId, accessibleCards]);
+
+  const isCardFamilyActive = activeFamilyCards.length > 1;
+  const [modalSubCardFilter, setModalSubCardFilter] = useState<string>("all");
+
+  useEffect(() => {
+    setModalSubCardFilter("all");
+  }, [selectedCardId, selectedUserStat]);
+
   // ── date range filter ────────────────────────────────────────────────────
   const today = new Date();
   const [startDate, setStartDate] = useState(toDateInput(new Date(today.getFullYear(), today.getMonth(), 1)));
@@ -138,23 +154,43 @@ export default function DashboardAnalytics({
   const [senderCardId, setSenderCardId] = useState("");
   const [senderBalance, setSenderBalance] = useState(0);
   const [senderCardsList, setSenderCardsList] = useState<Array<{ cardId: string; cardName: string; cardLast4: string; balance: number }>>([]);
+  const [userCardCashBreakdown, setUserCardCashBreakdown] = useState<Array<{ cardId: string; cardName: string; cardLast4: string; balance: number }>>([]);
 
   // ── data fetchers ────────────────────────────────────────────────────────
 
   /**
    * Summary এর "Total Cash In Hand":
-   * cash_on_hand টেবিল থেকে ওই user এর selected card family এর সব row sum করে।
+   * cash_on_hand টেবিল থেকে ওই user এর selected card family এর সব row sum করে এবং প্রতিটি কার্ডের আলাদা ব্যালেন্স ম্যাপ করে।
    * selectedCardId='all' হলে user এর সব cash_on_hand row।
    */
   async function fetchFamilyCash(userId: string): Promise<number> {
     const familyIds = getFamilyCardIds(selectedCardId, accessibleCards);
     let q = supabase
       .from("cash_on_hand")
-      .select("current_balance")
+      .select("card_id, current_balance")
       .eq("user_id", userId);
     if (familyIds.length > 0) q = q.in("card_id", familyIds);
     const { data } = await q;
-    if (!data) return 0;
+    if (!data) {
+      setUserCardCashBreakdown([]);
+      return 0;
+    }
+
+    const relevantCards = familyIds.length > 0
+      ? accessibleCards.filter(c => familyIds.includes(c.id))
+      : accessibleCards;
+
+    const breakdown = relevantCards.map(c => {
+      const row = data.find(r => r.card_id === c.id);
+      return {
+        cardId: c.id,
+        cardName: c.card_name,
+        cardLast4: c.last_4_digits,
+        balance: Number(row?.current_balance || 0),
+      };
+    });
+
+    setUserCardCashBreakdown(breakdown);
     return data.reduce((s, r) => s + Number(r.current_balance || 0), 0);
   }
 
@@ -206,7 +242,7 @@ export default function DashboardAnalytics({
     const familyIds = getFamilyCardIds(selectedCardId, accessibleCards);
     let q = supabase
       .from("spends")
-      .select("id, amount, spend_date, remarks, spend_type")
+      .select("id, amount, spend_date, remarks, spend_type, card_id")
       .eq("user_id", userId)
       .gte("spend_date", start)
       .lte("spend_date", end)
@@ -222,6 +258,7 @@ export default function DashboardAnalytics({
         amount: Math.abs(Number(s.amount)),
         date: s.spend_date,
         remarks: s.remarks || (isRepayment ? "Repayment" : "Personal Spend"),
+        card_id: s.card_id,
       };
     });
     setDueLedger(due);
@@ -462,16 +499,31 @@ export default function DashboardAnalytics({
 
   // ── derived values ────────────────────────────────────────────────────────
 
-  const groupedCashLedger = groupByMonth(cashLedger, "transaction_date");
-  const groupedDueLedger = groupByMonth(dueLedger, "date");
+  const filteredCashLedger = useMemo(() => {
+    if (!isCardFamilyActive || modalSubCardFilter === "all") return cashLedger;
+    return cashLedger.filter(t => t.card_id === modalSubCardFilter);
+  }, [cashLedger, isCardFamilyActive, modalSubCardFilter]);
+
+  const filteredDueLedger = useMemo(() => {
+    if (!isCardFamilyActive || modalSubCardFilter === "all") return dueLedger;
+    return dueLedger.filter(t => t.card_id === modalSubCardFilter);
+  }, [dueLedger, isCardFamilyActive, modalSubCardFilter]);
+
+  const filteredPocketLedger = useMemo(() => {
+    if (!isCardFamilyActive || modalSubCardFilter === "all") return pocketLedger;
+    return pocketLedger.filter(t => t.card_id === modalSubCardFilter);
+  }, [pocketLedger, isCardFamilyActive, modalSubCardFilter]);
+
+  const groupedCashLedger = groupByMonth(filteredCashLedger, "transaction_date");
+  const groupedDueLedger = groupByMonth(filteredDueLedger, "date");
 
   const cashTotal = {
-    credit: cashLedger.filter(t => t.transaction_type === "credit").reduce((s, t) => s + Number(t.amount), 0),
-    debit: cashLedger.filter(t => t.transaction_type === "debit").reduce((s, t) => s + Number(t.amount), 0),
+    credit: filteredCashLedger.filter(t => t.transaction_type === "credit").reduce((s, t) => s + Number(t.amount), 0),
+    debit: filteredCashLedger.filter(t => t.transaction_type === "debit").reduce((s, t) => s + Number(t.amount), 0),
   };
   const dueTotal = {
-    spend: dueLedger.filter(t => t.type === "spend").reduce((s, t) => s + t.amount, 0),
-    repayment: dueLedger.filter(t => t.type === "repayment").reduce((s, t) => s + t.amount, 0),
+    spend: filteredDueLedger.filter(t => t.type === "spend").reduce((s, t) => s + t.amount, 0),
+    repayment: filteredDueLedger.filter(t => t.type === "repayment").reduce((s, t) => s + t.amount, 0),
   };
 
   const isLoading = userStats.length === 0;
@@ -607,43 +659,87 @@ export default function DashboardAnalytics({
                     }
                   </div>
                   <div>
-                    <DialogTitle className="text-2xl font-space font-black bg-gradient-to-r from-white to-slate-300 bg-clip-text text-transparent leading-tight">
-                      {selectedUserStat?.name}&apos;s Ledger
-                    </DialogTitle>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <DialogTitle className="text-xl sm:text-2xl font-space font-black bg-gradient-to-r from-white to-slate-300 bg-clip-text text-transparent leading-tight">
+                        {selectedUserStat?.name}&apos;s Ledger
+                      </DialogTitle>
+                      {/* Summary pill in header next to user ledger */}
+                      <button
+                        type="button"
+                        onClick={() => setUserModalTab("summary")}
+                        className={`px-2.5 py-1 text-[11px] font-bold rounded-xl border transition-all flex items-center gap-1.5 ${
+                          userModalTab === "summary"
+                            ? "bg-white/15 text-white border-white/30 shadow-[0_0_12px_rgba(255,255,255,0.2)]"
+                            : "bg-white/[0.04] text-slate-400 border-white/10 hover:bg-white/10 hover:text-white"
+                        }`}
+                      >
+                        <Layers className="w-3 h-3 text-sky-400" />
+                        <span>Summary</span>
+                      </button>
+                    </div>
                     <p className="text-[10px] text-[#a855f7] font-bold uppercase tracking-wider mt-0.5">Advanced Analytics</p>
                   </div>
                 </div>
                 <Button variant="ghost" size="icon" onClick={() => setIsUserModalOpen(false)}
-                  className="rounded-full bg-white/5 text-slate-400 hover:bg-rose-500/20 hover:text-rose-400 border border-white/5 focus:outline-none">
+                  className="rounded-full bg-white/5 text-slate-400 hover:bg-rose-500/20 hover:text-rose-400 border border-white/5 focus:outline-none shrink-0">
                   <X className="w-5 h-5" />
                 </Button>
               </div>
             </DialogHeader>
           </div>
 
-          {/* Tabs */}
+          {/* Tabs: The other 3 tabs remain sequentially below */}
           <div className="flex flex-col bg-white/[0.02] border-b border-white/5 relative z-10">
-            <div className="flex p-2 gap-2 overflow-x-auto custom-scrollbar">
-              <button onClick={() => setUserModalTab("summary")}
-                className={`flex-1 min-w-[100px] py-2.5 text-xs font-bold rounded-xl transition-all ${userModalTab === "summary" ? "bg-white/10 text-white border border-white/20 shadow-inner" : "bg-transparent text-slate-400 hover:bg-white/5"}`}>
-                Summary
-              </button>
+            <div className="flex p-2 gap-2 flex-wrap">
               <button onClick={() => setUserModalTab("cash_ledger")}
-                className={`flex-1 min-w-[100px] py-2.5 text-xs font-bold rounded-xl transition-all ${userModalTab === "cash_ledger" ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 shadow-inner" : "bg-transparent text-slate-400 hover:bg-white/5"}`}>
+                className={`flex-1 min-w-[90px] py-2.5 px-2 text-xs font-bold rounded-xl transition-all text-center ${userModalTab === "cash_ledger" ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 shadow-inner" : "bg-transparent text-slate-400 hover:bg-white/5"}`}>
                 Cash In/Out
               </button>
               <button onClick={() => setUserModalTab("due_ledger")}
-                className={`flex-1 min-w-[100px] py-2.5 text-xs font-bold rounded-xl transition-all ${userModalTab === "due_ledger" ? "bg-rose-500/20 text-rose-400 border border-rose-500/40 shadow-inner" : "bg-transparent text-slate-400 hover:bg-white/5"}`}>
+                className={`flex-1 min-w-[90px] py-2.5 px-2 text-xs font-bold rounded-xl transition-all text-center ${userModalTab === "due_ledger" ? "bg-rose-500/20 text-rose-400 border border-rose-500/40 shadow-inner" : "bg-transparent text-slate-400 hover:bg-white/5"}`}>
                 Personal Due
               </button>
               <button onClick={() => setUserModalTab("pocket_advance")}
-                className={`flex-1 min-w-[100px] py-2.5 text-xs font-bold rounded-xl transition-all ${userModalTab === "pocket_advance" ? "bg-amber-500/20 text-amber-400 border border-amber-500/40 shadow-inner" : "bg-transparent text-slate-400 hover:bg-white/5"}`}>
+                className={`flex-1 min-w-[90px] py-2.5 px-2 text-xs font-bold rounded-xl transition-all text-center ${userModalTab === "pocket_advance" ? "bg-amber-500/20 text-amber-400 border border-amber-500/40 shadow-inner" : "bg-transparent text-slate-400 hover:bg-white/5"}`}>
                 Pocket Advance
               </button>
             </div>
 
             {/* Date range filter — cash & due tab এ দেখায় */}
             {userModalTab !== "summary" && <DateRangeFilter />}
+
+            {/* Sub-card filter when card family has multiple cards */}
+            {userModalTab !== "summary" && isCardFamilyActive && (
+              <div className="px-4 pb-3 flex items-center gap-1.5 flex-wrap">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mr-0.5 flex items-center gap-1 shrink-0">
+                  <CreditCard className="w-3 h-3 text-emerald-400" />
+                  Card:
+                </span>
+                <button
+                  onClick={() => setModalSubCardFilter("all")}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                    modalSubCardFilter === "all"
+                      ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm"
+                      : "bg-white/[0.03] text-slate-400 border border-white/5 hover:bg-white/5 hover:text-white"
+                  }`}
+                >
+                  All Family Cards ({activeFamilyCards.length})
+                </button>
+                {activeFamilyCards.map(c => (
+                  <button
+                    key={c.id}
+                    onClick={() => setModalSubCardFilter(c.id)}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all truncate max-w-[150px] ${
+                      modalSubCardFilter === c.id
+                        ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm"
+                        : "bg-white/[0.03] text-slate-400 border border-white/5 hover:bg-white/5 hover:text-white"
+                    }`}
+                  >
+                    {c.card_name} (**{c.last_4_digits})
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Tab content */}
@@ -655,7 +751,7 @@ export default function DashboardAnalytics({
                 <motion.div key="summary" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.95 }} transition={{ duration: 0.2 }} className="space-y-4">
 
-                  {/* Cash card — cash_on_hand টেবিল, card family total */}
+                  {/* Cash card — cash_on_hand টেবিল, card family total & single combined balance */}
                   <div className="bg-gradient-to-r from-emerald-500/10 to-transparent border border-emerald-500/30 p-6 rounded-[24px] shadow-[0_0_20px_rgba(16,185,129,0.1)] relative overflow-hidden backdrop-blur-md">
                     <Banknote className="absolute -bottom-4 -right-4 w-24 h-24 text-emerald-500/20 rotate-12 pointer-events-none" />
                     <p className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest mb-1">Total Cash In Hand</p>
@@ -666,6 +762,7 @@ export default function DashboardAnalytics({
                       <ArrowDownLeft className="w-3.5 h-3.5" />
                       {selectedCardId === "all" ? "All cards aggregated balance" : "Card family aggregated balance"}
                     </p>
+
                     {/* Transfer button — শুধু logged-in user এর নিজের modal এ */}
                     {currentUserId && selectedUserStat?.id === currentUserId && (
                       <button onClick={openTransfer}
@@ -739,6 +836,11 @@ export default function DashboardAnalytics({
                                     <p className="text-[10px] text-slate-500 font-bold uppercase mt-0.5">
                                       {new Date(tx.transaction_date).toLocaleDateString("en-GB", { day: "numeric", month: "short" })} •{" "}
                                       {new Date(tx.transaction_date).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                                      {isCardFamilyActive && tx.card_id && (
+                                        <span className="ml-1 text-slate-400 font-normal">
+                                          • {accessibleCards.find(c => c.id === tx.card_id)?.card_name || "Card"}
+                                        </span>
+                                      )}
                                     </p>
                                   </div>
                                 </div>
@@ -863,6 +965,11 @@ export default function DashboardAnalytics({
                                     <p className="text-sm font-bold text-white truncate">{tx.remarks || "Due Transaction"}</p>
                                     <p className="text-[10px] text-slate-500 font-bold uppercase mt-0.5">
                                       {new Date(tx.date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
+                                      {isCardFamilyActive && tx.card_id && (
+                                        <span className="ml-1 text-slate-400 font-normal">
+                                          • {accessibleCards.find(c => c.id === tx.card_id)?.card_name || "Card"}
+                                        </span>
+                                      )}
                                     </p>
                                   </div>
                                 </div>
@@ -961,9 +1068,9 @@ export default function DashboardAnalytics({
                     </div>
                   </div>
 
-                  {pocketLedger.length > 0 ? (
+                  {filteredPocketLedger.length > 0 ? (
                     <div className="space-y-2">
-                      {pocketLedger.map((pa: any) => (
+                      {filteredPocketLedger.map((pa: any) => (
                         <div key={pa.id} className="bg-white/[0.03] border border-white/5 rounded-2xl p-4 hover:bg-white/[0.06] transition-colors">
                           <div className="flex items-center justify-between mb-2">
                             <div>

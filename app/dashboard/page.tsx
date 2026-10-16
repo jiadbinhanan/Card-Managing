@@ -183,7 +183,7 @@ export default function Dashboard() {
       setTotalLimit(currentLimit);
 
       let txQuery = supabase.from('card_transactions')
-        .select('amount, type, payment_method, card_id, status, qr_id, settled_to_user, remarks');
+        .select('amount, type, payment_method, card_id, status, qr_id, settled_to_user, remarks, settlement_details');
       let spendsQuery = supabase.from('spends').select('amount, payment_method, user_id, card_id');
       // প্রতি card এর শুধু latest bill — billing_month DESC sort করে JS তে dedupe
       let billsQuery = supabase.from('billing_cycles')
@@ -217,7 +217,7 @@ export default function Dashboard() {
         if (t.type !== 'withdrawal') return false;
         const isRotation = t.qr_id || t.settled_to_user || (t.remarks || '').toLowerCase().includes('rotation');
         if (isRotation) return true;
-        return t.status === 'pending_settlement';
+        return t.status === 'pending_settlement' || t.status === 'partially_settled';
       }).reduce((sum, t) => sum + Number(t.amount), 0) || 0;
 
       const billPayments = txs?.filter(t => t.type === 'bill_payment').reduce((sum, t) => sum + Number(t.amount), 0) || 0;
@@ -228,8 +228,13 @@ export default function Dashboard() {
       const inTransitAmt = txs?.filter(t =>
         t.type === 'withdrawal' &&
         (t.qr_id || (t.remarks || '').toLowerCase().includes('rotation')) &&
-        !t.settled_to_user
-      ).reduce((sum, t) => sum + Number(t.amount), 0) || 0;
+        t.status !== 'settled'
+      ).reduce((sum, t) => {
+        const due = (t.status === 'partially_settled' && t.settlement_details?.total_due !== undefined)
+          ? t.settlement_details.total_due
+          : t.amount;
+        return sum + Number(due);
+      }, 0) || 0;
       setInTransit(inTransitAmt);
 
       // User Stats & Cash on Hand
@@ -251,7 +256,7 @@ export default function Dashboard() {
 
       if (profiles) {
         const stats = profiles.map(p => {
-          const cash = coh?.find(c => c.user_id === p.id)?.current_balance || 0;
+          const cash = coh?.filter(c => c.user_id === p.id).reduce((sum, c) => sum + Number(c.current_balance || 0), 0) || 0;
           const totalPersonalSpends = allSpends?.filter(s => s.user_id === p.id && ['credit_card', 'from_card_limit', 'lent_recovery'].includes(s.payment_method)).reduce((sum, s) => sum + Number(s.amount), 0) || 0;
           const totalRepayments = allTxs?.filter(t => t.recorded_by === p.id && t.type === 'bill_payment' && t.payment_method === 'own_pocket').reduce((sum, t) => sum + Number(t.amount), 0) || 0;
           const due = Math.max(0, totalPersonalSpends - totalRepayments);

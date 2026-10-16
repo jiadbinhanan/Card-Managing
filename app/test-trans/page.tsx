@@ -39,7 +39,7 @@ interface Transaction {
   type: 'withdrawal' | 'bill_payment';
   amount: number;
   transaction_date: string;
-  status: 'pending_settlement' | 'settled';
+  status: 'pending_settlement' | 'partially_settled' | 'settled';
   recorded_by: string;
   qr_id?: string;
   payment_method?: string;
@@ -260,7 +260,7 @@ export default function TestTransactionsPage() {
         if (t.type !== 'withdrawal') return false;
         const isRotation = t.qr_id || t.settled_to_user || (t.remarks || '').toLowerCase().includes('rotation');
         if (isRotation) return true;
-        return t.status === 'pending_settlement';
+        return t.status === 'pending_settlement' || t.status === 'partially_settled';
       }).reduce((s, t) => s + Number(t.amount), 0);
 
       const b = famTxs.filter(t => t.type === 'bill_payment').reduce((s, t) => s + Number(t.amount), 0);

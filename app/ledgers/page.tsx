@@ -143,10 +143,12 @@ function LedgersContent() {
   const [cashBalances, setCashBalances] = useState<{ user_id: string; card_id: string; current_balance: number }[]>([]);
   const [cashLedger, setCashLedger] = useState<CashLedgerRow[]>([]);
   const [cashFilterType, setCashFilterType] = useState<"all" | "credit" | "debit">("all");
+  const [cashSubCardFilter, setCashSubCardFilter] = useState<string>("all");
   const [cashSearch, setCashSearch] = useState("");
 
   // Spends States
   const [spends, setSpends] = useState<SpendRow[]>([]);
+  const [spendsSubCardFilter, setSpendsSubCardFilter] = useState<string>("all");
   const [spendsSearch, setSpendsSearch] = useState("");
 
   // Pocket Advances States
@@ -268,16 +270,37 @@ function LedgersContent() {
     return globalSelectedCardIds.includes(cardId);
   };
 
-  // -------------------------
-  // Active User Specific Calculations
-  // -------------------------
-  const activeUserCashBalances = useMemo(() => {
-    return cashBalances.filter(b => b.user_id === activeUserId && isCardSelected(b.card_id));
-  }, [cashBalances, activeUserId, globalSelectedCardIds]);
+  // Reset card sub-filters whenever header card selection changes
+  useEffect(() => {
+    setCashSubCardFilter("all");
+    setSpendsSubCardFilter("all");
+  }, [globalSelectedCardIds]);
 
-  const totalUserCashOnHand = useMemo(() => {
-    return activeUserCashBalances.reduce((acc, curr) => acc + (Number(curr.current_balance) || 0), 0);
-  }, [activeUserCashBalances]);
+  // -------------------------
+  // Card Family Computations for Cash on Hand
+  // -------------------------
+  const activeFamilyCards = useMemo(() => {
+    if (globalSelectedCardIds.includes("all") || globalSelectedCardIds.length === 0) {
+      return cards;
+    }
+    const primaryIds = new Set<string>();
+    globalSelectedCardIds.forEach(id => {
+      const card = cards.find(c => c.id === id);
+      if (card) {
+        const primId = card.is_primary ? card.id : (card.parent_card_id || card.id);
+        primaryIds.add(primId);
+      }
+    });
+    return cards.filter(c => primaryIds.has(c.id) || (c.parent_card_id && primaryIds.has(c.parent_card_id)));
+  }, [cards, globalSelectedCardIds]);
+
+  const activeFamilyCardIds = useMemo(() => {
+    return activeFamilyCards.map(c => c.id);
+  }, [activeFamilyCards]);
+
+  const isCardFamilyActive = useMemo(() => {
+    return !globalSelectedCardIds.includes("all") && activeFamilyCards.length > 1;
+  }, [globalSelectedCardIds, activeFamilyCards]);
 
   const activeUserCardCashMap = useMemo(() => {
     const map: Record<string, number> = {};
@@ -287,10 +310,27 @@ function LedgersContent() {
     return map;
   }, [cashBalances, activeUserId]);
 
+  const displayedCashCards = useMemo(() => {
+    if (globalSelectedCardIds.includes("all")) {
+      const withBal = cards.filter(c => (activeUserCardCashMap[c.id] || 0) > 0);
+      return withBal.length > 0 ? withBal : cards;
+    }
+    return activeFamilyCards;
+  }, [globalSelectedCardIds, cards, activeFamilyCards, activeUserCardCashMap]);
+
+  const totalUserCashOnHand = useMemo(() => {
+    return activeFamilyCards.reduce((acc, c) => acc + (activeUserCardCashMap[c.id] || 0), 0);
+  }, [activeFamilyCards, activeUserCardCashMap]);
+
   const filteredCashLedger = useMemo(() => {
     return cashLedger.filter(row => {
       if (row.user_id !== activeUserId) return false;
-      if (!isCardSelected(row.card_id)) return false;
+      // Must belong to the selected family (or all cards if 'all' is selected)
+      if (!activeFamilyCardIds.includes(row.card_id)) return false;
+      // Card sub-filter if specific card chosen within family
+      if (isCardFamilyActive && cashSubCardFilter !== "all" && row.card_id !== cashSubCardFilter) {
+        return false;
+      }
       if (cashFilterType !== "all" && row.transaction_type !== cashFilterType) return false;
       if (cashSearch.trim()) {
         const q = cashSearch.toLowerCase();
@@ -300,11 +340,11 @@ function LedgersContent() {
       }
       return true;
     });
-  }, [cashLedger, activeUserId, globalSelectedCardIds, cashFilterType, cashSearch]);
+  }, [cashLedger, activeUserId, activeFamilyCardIds, isCardFamilyActive, cashSubCardFilter, cashFilterType, cashSearch]);
 
   const activeUserSpends = useMemo(() => {
-    return spends.filter(s => s.user_id === activeUserId && isCardSelected(s.card_id));
-  }, [spends, activeUserId, globalSelectedCardIds]);
+    return spends.filter(s => s.user_id === activeUserId && activeFamilyCardIds.includes(s.card_id));
+  }, [spends, activeUserId, activeFamilyCardIds]);
 
   const totalUserPersonalDue = useMemo(() => {
     return activeUserSpends.reduce((acc, curr) => acc + (Number(curr.amount) || 0), 0);
@@ -312,6 +352,10 @@ function LedgersContent() {
 
   const filteredSpends = useMemo(() => {
     return activeUserSpends.filter(row => {
+      // Sub-card filter if specific card chosen within family
+      if (isCardFamilyActive && spendsSubCardFilter !== "all" && row.card_id !== spendsSubCardFilter) {
+        return false;
+      }
       if (spendsSearch.trim()) {
         const q = spendsSearch.toLowerCase();
         const rem = (row.remarks || "").toLowerCase();
@@ -320,7 +364,7 @@ function LedgersContent() {
       }
       return true;
     });
-  }, [activeUserSpends, spendsSearch]);
+  }, [activeUserSpends, isCardFamilyActive, spendsSubCardFilter, spendsSearch]);
 
   const activeUserPocketBalances = useMemo(() => {
     return pocketBalances.filter(pb => pb.user_id === activeUserId && isCardSelected(pb.card_id));
@@ -876,23 +920,6 @@ function LedgersContent() {
             <p className="text-xs text-slate-400 mt-1.5">
               রোটেশন উইথড্র থেকে আসা ও কার্ডের বিল পরিশোধের জন্য রক্ষিত ক্যাশ।
             </p>
-
-            {/* Card Breakdown for this user */}
-            <div className="grid grid-cols-2 gap-2 mt-4 pt-4 border-t border-white/10">
-              {activeUserCashBalances.map(b => (
-                <div key={b.card_id} className="p-2.5 rounded-xl bg-white/[0.03] border border-white/5">
-                  <p className="text-[11px] text-slate-400 font-medium truncate">{getCardName(b.card_id)}</p>
-                  <p className="text-sm font-bold text-emerald-300 mt-0.5">
-                    ₹{Number(b.current_balance).toLocaleString("en-IN")}
-                  </p>
-                </div>
-              ))}
-              {activeUserCashBalances.length === 0 && (
-                <div className="col-span-2 text-center text-slate-500 text-xs py-2">
-                  No cash balances on selected cards
-                </div>
-              )}
-            </div>
           </div>
         )}
 
@@ -983,18 +1010,85 @@ function LedgersContent() {
           </div>
 
           {activeTab === "cash" && (
-            <div className="flex gap-1.5">
-              {(["all", "credit", "debit"] as const).map(type => (
+            <div className="space-y-2">
+              <div className="flex gap-1.5 flex-wrap">
+                {(["all", "credit", "debit"] as const).map(type => (
+                  <button
+                    key={type}
+                    onClick={() => setCashFilterType(type)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold capitalize transition-all ${
+                      cashFilterType === type
+                        ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                        : "bg-white/[0.02] text-slate-400 border border-white/5 hover:bg-white/5"
+                    }`}
+                  >
+                    {type === "all" ? "All Entries" : type === "credit" ? "Cash In (+)" : "Cash Out (-)"}
+                  </button>
+                ))}
+              </div>
+
+              {/* Card Family Sub-filter: Only shown when selected card belongs to a card family with >1 cards */}
+              {isCardFamilyActive && (
+                <div className="flex items-center gap-1.5 flex-wrap pt-2 border-t border-white/5">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mr-0.5 flex items-center gap-1 shrink-0">
+                    <CreditCard className="w-3 h-3 text-emerald-400" />
+                    Card:
+                  </span>
+                  <button
+                    onClick={() => setCashSubCardFilter("all")}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                      cashSubCardFilter === "all"
+                        ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm"
+                        : "bg-white/[0.03] text-slate-400 border border-white/5 hover:bg-white/5 hover:text-white"
+                    }`}
+                  >
+                    All Family Cards ({activeFamilyCards.length})
+                  </button>
+                  {activeFamilyCards.map(c => (
+                    <button
+                      key={c.id}
+                      onClick={() => setCashSubCardFilter(c.id)}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all truncate max-w-[160px] ${
+                        cashSubCardFilter === c.id
+                          ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm"
+                          : "bg-white/[0.03] text-slate-400 border border-white/5 hover:bg-white/5 hover:text-white"
+                      }`}
+                    >
+                      {c.card_name} (**{c.last_4_digits})
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === "spends" && isCardFamilyActive && (
+            <div className="flex items-center gap-1.5 flex-wrap pt-2 border-t border-white/5">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mr-0.5 flex items-center gap-1 shrink-0">
+                <CreditCard className="w-3 h-3 text-amber-400" />
+                Card:
+              </span>
+              <button
+                onClick={() => setSpendsSubCardFilter("all")}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                  spendsSubCardFilter === "all"
+                    ? "bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm"
+                    : "bg-white/[0.03] text-slate-400 border border-white/5 hover:bg-white/5 hover:text-white"
+                }`}
+              >
+                All Family Cards ({activeFamilyCards.length})
+              </button>
+              {activeFamilyCards.map(c => (
                 <button
-                  key={type}
-                  onClick={() => setCashFilterType(type)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold capitalize transition-all ${
-                    cashFilterType === type
-                      ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
-                      : "bg-white/[0.02] text-slate-400 border border-white/5 hover:bg-white/5"
+                  key={c.id}
+                  onClick={() => setSpendsSubCardFilter(c.id)}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all truncate max-w-[160px] ${
+                    spendsSubCardFilter === c.id
+                      ? "bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm"
+                      : "bg-white/[0.03] text-slate-400 border border-white/5 hover:bg-white/5 hover:text-white"
                   }`}
                 >
-                  {type === "all" ? "All Entries" : type === "credit" ? "Cash In (+)" : "Cash Out (-)"}
+                  {c.card_name} (**{c.last_4_digits})
                 </button>
               ))}
             </div>
