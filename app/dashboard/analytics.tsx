@@ -140,6 +140,7 @@ export default function DashboardAnalytics({
   const [familyCashMap, setFamilyCashMap] = useState<Record<string, number>>({});
   const [familyDueMap, setFamilyDueMap] = useState<Record<string, number>>({});
   const [familyPocketMap, setFamilyPocketMap] = useState<Record<string, number>>({});
+  const [familyCardCashBreakdownMap, setFamilyCardCashBreakdownMap] = useState<Record<string, Array<{ cardId: string; cardName: string; cardLast4: string; balance: number }>>>({});
 
   // ── transfer state ───────────────────────────────────────────────────────
   const [transferOpen, setTransferOpen] = useState(false);
@@ -313,13 +314,24 @@ export default function DashboardAnalytics({
   useEffect(() => {
     if (userStats.length === 0) return;
     const familyIds = getFamilyCardIds(selectedCardId, accessibleCards);
+    const relevantCards = familyIds.length > 0
+      ? accessibleCards.filter(c => familyIds.includes(c.id))
+      : [];
+
     Promise.all(
       userStats.map(async u => {
         // cash
-        let cq = supabase.from("cash_on_hand").select("current_balance").eq("user_id", u.id);
+        let cq = supabase.from("cash_on_hand").select("card_id, current_balance").eq("user_id", u.id);
         if (familyIds.length > 0) cq = cq.in("card_id", familyIds);
         const { data: cData } = await cq;
         const cashTotal = (cData || []).reduce((s, r) => s + Number(r.current_balance || 0), 0);
+
+        const cardBreakdown = relevantCards.map(c => ({
+          cardId: c.id,
+          cardName: c.card_name,
+          cardLast4: c.last_4_digits,
+          balance: Number((cData || []).find(r => r.card_id === c.id)?.current_balance || 0)
+        }));
 
         // due — spends টেবিল থেকে, amount এর sign দিয়ে net due
         let dq = supabase.from("spends").select("amount").eq("user_id", u.id);
@@ -333,20 +345,23 @@ export default function DashboardAnalytics({
         const { data: pData } = await pq;
         const pocketTotal = (pData || []).reduce((s, r) => s + Number(r.current_balance || 0), 0);
 
-        return { id: u.id, cashTotal, dueTotal, pocketTotal };
+        return { id: u.id, cashTotal, dueTotal, pocketTotal, cardBreakdown };
       })
     ).then(results => {
       const cashMap: Record<string, number> = {};
       const dueMap: Record<string, number> = {};
       const pocketMap: Record<string, number> = {};
+      const breakdownMap: Record<string, Array<{ cardId: string; cardName: string; cardLast4: string; balance: number }>> = {};
       results.forEach(r => { 
         cashMap[r.id] = r.cashTotal; 
         dueMap[r.id] = r.dueTotal; 
         pocketMap[r.id] = r.pocketTotal;
+        breakdownMap[r.id] = r.cardBreakdown;
       });
       setFamilyCashMap(cashMap);
       setFamilyDueMap(dueMap);
       setFamilyPocketMap(pocketMap);
+      setFamilyCardCashBreakdownMap(breakdownMap);
     });
   }, [userStats, selectedCardId, accessibleCards]);
 
@@ -616,6 +631,16 @@ export default function DashboardAnalytics({
                     ₹{(familyCashMap[stat.id] ?? stat.cash).toLocaleString()}
                   </motion.p>
                 }
+                {isCardFamilyActive && (familyCardCashBreakdownMap[stat.id] || []).length > 1 && (
+                  <div className="flex flex-col gap-0.5 mt-1.5 pt-1.5 border-t border-white/5">
+                    {(familyCardCashBreakdownMap[stat.id] || []).map(b => (
+                      <span key={b.cardId} className="text-[10px] text-slate-400 truncate flex items-center justify-between">
+                        <span className="truncate mr-1">{b.cardName} (**{b.cardLast4}):</span>
+                        <span className="font-semibold text-emerald-400">₹{b.balance.toLocaleString("en-IN")}</span>
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="pt-3 border-t border-white/10">
                 <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Personal Due</p>
@@ -762,6 +787,22 @@ export default function DashboardAnalytics({
                       <ArrowDownLeft className="w-3.5 h-3.5" />
                       {selectedCardId === "all" ? "All cards aggregated balance" : "Card family aggregated balance"}
                     </p>
+
+                    {/* Small compact breakdown of family cards */}
+                    {userCardCashBreakdown.length > 1 && (
+                      <div className="flex flex-wrap items-center gap-1.5 mt-2.5 pt-2.5 border-t border-emerald-500/20">
+                        {userCardCashBreakdown.map(b => (
+                          <div
+                            key={b.cardId}
+                            className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-[11px]"
+                          >
+                            <CreditCard className="w-3 h-3 text-emerald-400 shrink-0" />
+                            <span className="text-slate-300 font-medium truncate max-w-[130px]">{b.cardName} (**{b.cardLast4})</span>
+                            <span className="font-bold text-emerald-400">₹{b.balance.toLocaleString("en-IN")}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
 
                     {/* Transfer button — শুধু logged-in user এর নিজের modal এ */}
                     {currentUserId && selectedUserStat?.id === currentUserId && (

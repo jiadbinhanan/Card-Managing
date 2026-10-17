@@ -245,6 +245,21 @@ export default function TestSettlementsPage() {
         const { data: existingCashRow } = await supabase.from('cash_on_hand').select('current_balance').eq('user_id', cashReceiverId).eq('card_id', settleTargetCardId).maybeSingle();
         const newBalance = Number(existingCashRow?.current_balance || 0) + amtToSettle;
 
+        // Calculate total card family cash on hand balance for receiver
+        const primaryId = targetCard?.is_primary ? targetCard.id : (targetCard?.parent_card_id || targetCard?.id);
+        const familyCardIds = primaryId
+          ? accessibleCards.filter(c => c.id === primaryId || (c.parent_card_id && c.parent_card_id === primaryId)).map(c => c.id)
+          : [settleTargetCardId];
+
+        const { data: familyCashRows } = await supabase
+           .from('cash_on_hand')
+           .select('current_balance')
+           .eq('user_id', cashReceiverId)
+           .in('card_id', familyCardIds.length > 0 ? familyCardIds : [settleTargetCardId]);
+
+        const totalFamilyCash = (familyCashRows || []).reduce((sum, r) => sum + Number(r.current_balance || 0), 0) + amtToSettle;
+        const displayTotalCash = totalFamilyCash > 0 ? totalFamilyCash : newBalance;
+
         const nowTime = new Date();
         const timeStr = nowTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }).replace(/[\u202F\u00A0]/g, ' ').toLowerCase();
 
@@ -271,7 +286,7 @@ export default function TestSettlementsPage() {
                     { type: "text", parameter_name: "time", text: timeStr },
                     { type: "text", parameter_name: "amount", text: String(amtToSettle) },
                     { type: "text", parameter_name: "receiver_name", text: sanitizeText(receiverProfile?.name || 'User') },
-                    { type: "text", parameter_name: "total_cash", text: String(newBalance) }
+                    { type: "text", parameter_name: "total_cash", text: String(displayTotalCash) }
                   ]
                 }
               ];
