@@ -443,21 +443,87 @@ export default function RecordEntryModal(props: RecordEntryModalProps) {
                 <motion.div key="spend" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ type: "spring", stiffness: 300, damping: 26 }} className="space-y-5">
                   <div className="space-y-1.5">
                     <label className="text-[11px] font-bold text-slate-400 uppercase ml-1 flex justify-between">
-                      Payment Source <span className="text-[9px] lowercase text-indigo-400">(Auto-splits if amt exceeds)</span>
+                      Payment Source <span className="text-[9px] lowercase text-amber-400">(Cross-card supported for Cash)</span>
                     </label>
                     <div className="grid grid-cols-2 gap-3">
-                      <button onClick={() => setSpendMethod("credit_card")} className={`flex flex-col items-center justify-center p-3 rounded-2xl transition-all border ${spendMethod === "credit_card" || isSpendSplitting ? "bg-indigo-500/20 text-indigo-400 border-indigo-500/50 shadow-[0_0_15px_rgba(99,102,241,0.2)]" : "bg-white/[0.02] text-slate-400 border-white/5 hover:bg-white/[0.05]"}`}>
+                      <button type="button" onClick={() => setSpendMethod("credit_card")} className={`flex flex-col items-center justify-center p-3 rounded-2xl transition-all border ${spendMethod === "credit_card" ? "bg-indigo-500/20 text-indigo-400 border-indigo-500/50 shadow-[0_0_15px_rgba(99,102,241,0.2)]" : "bg-white/[0.02] text-slate-400 border-white/5 hover:bg-white/[0.05]"}`}>
                         <div className="flex items-center gap-1.5 mb-1"><CreditCard className="w-4 h-4" /><span className="text-xs font-bold">Direct Card</span></div>
-                        {isSpendSplitting ? <span className="text-sm font-black text-white">₹{cardSplitAmt.toLocaleString()}</span> : <span className="text-[9px] font-black opacity-70">Avail: ₹{(currentFamilyLimit / 1000).toFixed(1)}k</span>}
+                        <span className="text-[9px] font-black opacity-70">Avail: ₹{(currentFamilyLimit / 1000).toFixed(1)}k</span>
                       </button>
-                      <button onClick={() => setSpendMethod("cash_on_hand")} className={`flex flex-col items-center justify-center p-3 rounded-2xl transition-all border ${spendMethod === "cash_on_hand" || isSpendSplitting ? "bg-amber-500/20 text-amber-400 border-amber-500/50 shadow-[0_0_15px_rgba(245,158,11,0.2)]" : "bg-white/[0.02] text-slate-400 border-white/5 hover:bg-white/[0.05]"}`}>
+                      <button type="button" onClick={() => setSpendMethod("cash_on_hand")} className={`flex flex-col items-center justify-center p-3 rounded-2xl transition-all border ${spendMethod === "cash_on_hand" ? "bg-amber-500/20 text-amber-400 border-amber-500/50 shadow-[0_0_15px_rgba(245,158,11,0.2)]" : "bg-white/[0.02] text-slate-400 border-white/5 hover:bg-white/[0.05]"}`}>
                         <div className="flex items-center gap-1.5 mb-1"><Banknote className="w-4 h-4" /><span className="text-xs font-bold">Cash on Hand</span></div>
-                        {isSpendSplitting ? <span className="text-sm font-black text-white">₹{spendCashSplitAmt.toLocaleString()}</span> : <span className="text-[9px] font-black opacity-70">Bal: ₹{currentActorCardCash.toLocaleString()}</span>}
+                        <span className="text-[9px] font-black opacity-70">Multi-Card Cash</span>
                       </button>
                     </div>
-                    {isSpendSplitting && (
-                      <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} className="flex items-center justify-center gap-2 mt-2 text-indigo-400">
-                        <Zap className="w-3 h-3 animate-pulse" /> <span className="text-[10px] font-black uppercase tracking-widest">Auto-Split Activated</span>
+
+                    {/* ── Multi-source cash allocation for Spend ── */}
+                    {spendMethod === "cash_on_hand" && (
+                      <motion.div variants={expandVars} initial="hidden" animate="visible" exit="exit" className="space-y-3 p-4 bg-amber-500/5 border border-amber-500/20 rounded-2xl mt-3">
+                        <div className={`flex justify-between items-center px-3 py-2 rounded-xl text-[11px] font-black ${
+                          allocationValid ? "bg-emerald-500/15 text-emerald-400" : "bg-rose-500/15 text-rose-400"
+                        }`}>
+                          <span className="uppercase tracking-wider">Allocated Cash</span>
+                          <span>₹{cashAllocatedTotal.toLocaleString()} / ₹{amtNum.toLocaleString()}</span>
+                        </div>
+
+                        {cashSources.map((src, idx) => {
+                          const bal = currentUserCashByCard[src.cardId] || 0;
+                          const over = Number(src.amount || 0) > bal;
+                          return (
+                            <div key={src.uid} className="flex items-center gap-2">
+                              <div className="relative flex-1">
+                                <select
+                                  value={src.cardId}
+                                  onChange={(e) => updateSource(idx, { cardId: e.target.value })}
+                                  className="w-full h-11 bg-white/[0.03] border border-white/10 rounded-xl text-[11px] font-bold text-white pl-3 pr-7 outline-none focus:border-amber-500 appearance-none"
+                                >
+                                  <option value="" className="bg-black">Select card...</option>
+                                  {cardsWithCash
+                                    .filter((c) => c.id === src.cardId || !cashSources.some((s) => s.cardId === c.id))
+                                    .map((c) => (
+                                      <option key={c.id} value={c.id} className="bg-black">
+                                        {c.card_name} (**{c.last_4_digits}) — ₹{(currentUserCashByCard[c.id] || 0).toLocaleString()}
+                                      </option>
+                                    ))}
+                                </select>
+                                <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
+                              </div>
+                              <input
+                                type="text" inputMode="numeric" value={src.amount}
+                                onChange={(e) => updateSource(idx, { amount: e.target.value.replace(/[^0-9]/g, "") })}
+                                placeholder="0"
+                                className={`w-24 h-11 bg-white/[0.03] border rounded-xl text-center text-xs font-bold text-white outline-none ${over ? "border-rose-500" : "border-white/10 focus:border-amber-500"}`}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const otherAllocated = cashSources.reduce((sum, s, i) => (i !== idx ? sum + (Number(s.amount) || 0) : sum), 0);
+                                  const remainingNeeded = amtNum > 0 ? Math.max(0, amtNum - otherAllocated) : 0;
+                                  const targetCap = remainingNeeded > 0 ? remainingNeeded : (amtNum > 0 ? amtNum : bal);
+                                  const maxVal = Math.min(bal, targetCap);
+                                  updateSource(idx, { amount: String(maxVal > 0 ? maxVal : bal) });
+                                }}
+                                className="h-11 px-2 text-[9px] font-black text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded-lg shrink-0 transition-colors"
+                              >
+                                MAX
+                              </button>
+                              {cashSources.length > 1 && (
+                                <button type="button" onClick={() => removeSource(idx)} className="h-11 w-9 flex items-center justify-center text-slate-500 hover:text-rose-400 shrink-0">
+                                  <X className="w-4 h-4" />
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
+
+                        <button
+                          type="button"
+                          onClick={addSource}
+                          disabled={cashSources.length >= cardsWithCash.length}
+                          className="w-full h-10 flex items-center justify-center gap-1.5 text-[10px] font-bold text-amber-400 bg-white/[0.02] border border-dashed border-amber-500/30 rounded-xl disabled:opacity-30 disabled:cursor-not-allowed"
+                        >
+                          <Plus className="w-3.5 h-3.5" /> Add Another Source
+                        </button>
                       </motion.div>
                     )}
                   </div>

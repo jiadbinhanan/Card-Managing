@@ -68,6 +68,7 @@ interface SpendRow {
   remarks: string | null;
   spend_date: string;
   linked_card_transaction_id: string | null;
+  cash_source_breakdown?: { card_id: string; amount: number }[] | null;
 }
 
 interface PocketAdvanceRow {
@@ -174,6 +175,19 @@ function LedgersContent() {
   const [transferSubmitting, setTransferSubmitting] = useState(false);
   const [transferSuccessMsg, setTransferSuccessMsg] = useState("");
   const [transferErrorMsg, setTransferErrorMsg] = useState("");
+
+  // Spend Modal State (Add Spend in Ledgers page)
+  const [spendModalOpen, setSpendModalOpen] = useState(false);
+  const [spendUserId, setSpendUserId] = useState<string>("");
+  const [spendCardId, setSpendCardId] = useState<string>("");
+  const [spendAmount, setSpendAmount] = useState<string>("");
+  const [spendDate, setSpendDate] = useState<string>("");
+  const [spendMethod, setSpendMethod] = useState<"credit_card" | "cash_on_hand">("credit_card");
+  const [spendCashSources, setSpendCashSources] = useState<CashSourceRow[]>([]);
+  const [spendRemarks, setSpendRemarks] = useState<string>("");
+  const [spendSubmitting, setSpendSubmitting] = useState(false);
+  const [spendSuccessMsg, setSpendSuccessMsg] = useState("");
+  const [spendErrorMsg, setSpendErrorMsg] = useState("");
 
   // Inline Trace Flow State
   const [activeTraceId, setActiveTraceId] = useState<string | null>(null);
@@ -690,6 +704,186 @@ function LedgersContent() {
     }
   };
 
+  // -------------------------
+  // Spend Entry Modal Handlers (Ledgers Page)
+  // -------------------------
+  const spendUserCardCashMap = useMemo(() => {
+    const map: Record<string, number> = {};
+    cashBalances.filter(b => b.user_id === spendUserId).forEach(b => {
+      map[b.card_id] = Number(b.current_balance || 0);
+    });
+    return map;
+  }, [cashBalances, spendUserId]);
+
+  const cardsWithCashForSpend = useMemo(() => {
+    return cards
+      .map(c => ({
+        ...c,
+        balance: spendUserCardCashMap[c.id] || 0,
+      }))
+      .filter(c => c.balance > 0);
+  }, [cards, spendUserCardCashMap]);
+
+  const handleOpenSpendModal = () => {
+    const targetUid = activeUserId || profiles[0]?.id || "";
+    setSpendUserId(targetUid);
+    const defaultCard = (!globalSelectedCardIds.includes("all") && globalSelectedCardIds[0]) ? globalSelectedCardIds[0] : (cards[0]?.id || "");
+    setSpendCardId(defaultCard);
+    setSpendAmount("");
+    const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+    setSpendDate(todayStr);
+    setSpendMethod("credit_card");
+    setSpendRemarks("");
+    setSpendErrorMsg("");
+    setSpendSuccessMsg("");
+
+    const userCashMap: Record<string, number> = {};
+    cashBalances.filter(b => b.user_id === targetUid).forEach(b => {
+      userCashMap[b.card_id] = Number(b.current_balance || 0);
+    });
+    const firstCashCard = cards.find(c => (userCashMap[c.id] || 0) > 0)?.id || defaultCard;
+    setSpendCashSources([{ uid: `sp-src-${Date.now()}`, cardId: firstCashCard, amount: "" }]);
+
+    setSpendModalOpen(true);
+  };
+
+  const handleSpendUserChange = (newUid: string) => {
+    setSpendUserId(newUid);
+    const userCashMap: Record<string, number> = {};
+    cashBalances.filter(b => b.user_id === newUid).forEach(b => {
+      userCashMap[b.card_id] = Number(b.current_balance || 0);
+    });
+    const firstCashCard = cards.find(c => (userCashMap[c.id] || 0) > 0)?.id || spendCardId;
+    setSpendCashSources([{ uid: `sp-src-${Date.now()}`, cardId: firstCashCard, amount: "" }]);
+  };
+
+  const addSpendSource = () => {
+    const used = new Set(spendCashSources.map(s => s.cardId));
+    const nextCard = cardsWithCashForSpend.find(c => !used.has(c.id));
+    if (!nextCard) return;
+    setSpendCashSources(prev => [
+      ...prev,
+      { uid: `sp-src-${Date.now()}-${Math.random()}`, cardId: nextCard.id, amount: "" }
+    ]);
+  };
+
+  const updateSpendSource = (idx: number, patch: Partial<CashSourceRow>) => {
+    setSpendCashSources(prev => prev.map((s, i) => (i === idx ? { ...s, ...patch } : s)));
+  };
+
+  const removeSpendSource = (idx: number) => {
+    setSpendCashSources(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const spendCashAllocatedTotal = useMemo(() => {
+    return spendCashSources.reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
+  }, [spendCashSources]);
+
+  const spendAllocationValid = useMemo(() => {
+    const amtNum = Number(spendAmount) || 0;
+    if (amtNum <= 0) return false;
+    if (spendCashAllocatedTotal !== amtNum) return false;
+    for (const src of spendCashSources) {
+      if (!src.cardId) return false;
+      const val = Number(src.amount) || 0;
+      if (val <= 0) return false;
+      const bal = spendUserCardCashMap[src.cardId] || 0;
+      if (val > bal) return false;
+    }
+    return true;
+  }, [spendAmount, spendCashAllocatedTotal, spendCashSources, spendUserCardCashMap]);
+
+  const handleConfirmSpend = async () => {
+    const amtNum = Number(spendAmount);
+    if (!spendAmount || isNaN(amtNum) || amtNum <= 0) {
+      setSpendErrorMsg("সঠিক পরিমাণ লিখুন।");
+      return;
+    }
+    if (!spendCardId) {
+      setSpendErrorMsg("একটি কার্ড নির্বাচন করুন।");
+      return;
+    }
+    if (spendMethod === "cash_on_hand" && !spendAllocationValid) {
+      setSpendErrorMsg(`ক্যাশ বরাদ্দের পরিমাণ মোট খরচের সমান হতে হবে (মোট: ₹${amtNum.toLocaleString("en-IN")}, বরাদ্দ: ₹${spendCashAllocatedTotal.toLocaleString("en-IN")}) এবং কার্ড ব্যালেন্সের অতিরিক্ত হতে পারবে না।`);
+      return;
+    }
+
+    setSpendSubmitting(true);
+    setSpendErrorMsg("");
+    setSpendSuccessMsg("");
+
+    try {
+      const finalDate = spendDate || new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+      const validSources = spendCashSources
+        .filter(s => s.cardId && Number(s.amount) > 0)
+        .map(s => ({ card_id: s.cardId, amount: Number(s.amount) }));
+
+      if (spendMethod === "cash_on_hand") {
+        const { error: spErr } = await supabase.from("spends").insert({
+          user_id: spendUserId,
+          amount: amtNum,
+          spend_type: "personal",
+          payment_method: "cash_on_hand",
+          remarks: spendRemarks.trim() || null,
+          spend_date: finalDate,
+          card_id: spendCardId,
+          cash_source_breakdown: validSources
+        });
+        if (spErr) throw spErr;
+
+        for (const src of validSources) {
+          const { data: coh } = await supabase.from("cash_on_hand")
+            .select("current_balance")
+            .eq("user_id", spendUserId)
+            .eq("card_id", src.card_id)
+            .maybeSingle();
+
+          const curBal = coh ? Number(coh.current_balance) : 0;
+          const newBal = curBal - src.amount;
+
+          await supabase.from("cash_on_hand")
+            .upsert({
+              user_id: spendUserId,
+              card_id: src.card_id,
+              current_balance: newBal,
+              updated_at: new Date().toISOString()
+            });
+
+          await supabase.from("cash_on_hand_ledger").insert({
+            user_id: spendUserId,
+            card_id: src.card_id,
+            amount: src.amount,
+            transaction_type: "debit",
+            remarks: `Personal spend ${spendRemarks ? "- " + spendRemarks.trim() : ""}`,
+            transaction_date: new Date().toISOString()
+          });
+        }
+      } else {
+        const { error: spErr } = await supabase.from("spends").insert({
+          user_id: spendUserId,
+          amount: amtNum,
+          spend_type: "personal",
+          payment_method: "credit_card",
+          remarks: spendRemarks.trim() || null,
+          spend_date: finalDate,
+          card_id: spendCardId
+        });
+        if (spErr) throw spErr;
+      }
+
+      setSpendSuccessMsg(`₹${amtNum.toLocaleString("en-IN")} স্পেন্ড সফলভাবে রেকর্ড করা হয়েছে!`);
+      await fetchAllLedgers();
+      setTimeout(() => {
+        setSpendModalOpen(false);
+      }, 1000);
+    } catch (err: any) {
+      console.error("Error saving spend:", err);
+      setSpendErrorMsg(err.message || "স্পেন্ড রেকর্ড করতে সমস্যা হয়েছে।");
+    } finally {
+      setSpendSubmitting(false);
+    }
+  };
+
   return (
     <div className="relative min-h-screen bg-[#030014] text-slate-50 font-sans pb-28 overflow-x-hidden selection:bg-[#0ea5e9]/30">
       {/* ================= BACKGROUND GRID & AMBIENT LIGHTS ================= */}
@@ -950,9 +1144,19 @@ function LedgersContent() {
                 <Receipt className="w-4 h-4 text-amber-400" />
                 {getUserName(activeUserId)}'s Personal Due
               </span>
-              <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-300 font-semibold">
-                Personal Due
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-300 font-semibold">
+                  Personal Due
+                </span>
+                <button
+                  type="button"
+                  onClick={handleOpenSpendModal}
+                  className="px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  + স্পেন্ড এন্ট্রি
+                </button>
+              </div>
             </div>
             <div className="text-3xl font-black text-white tracking-tight">
               ₹{totalUserPersonalDue.toLocaleString("en-IN")}
@@ -1204,9 +1408,16 @@ function LedgersContent() {
                                     </span>
                                   )}
                                   {row.itemType === "spend" && (
-                                    <span className="text-[9px] px-1.5 py-0.2 rounded bg-white/5 text-slate-400 uppercase">
-                                      {row.payment_method}
-                                    </span>
+                                    <>
+                                      <span className="text-[9px] px-1.5 py-0.2 rounded bg-white/5 text-slate-400 uppercase">
+                                        {row.payment_method === "credit_card" ? "Credit Card" : "Cash on Hand"}
+                                      </span>
+                                      {row.cash_source_breakdown && row.cash_source_breakdown.length > 0 && row.cash_source_breakdown.some((b: any) => b.card_id !== row.card_id) && (
+                                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 font-semibold">
+                                          Cross-Card
+                                        </span>
+                                      )}
+                                    </>
                                   )}
                                 </div>
                                 <p className="text-[11px] text-slate-400 mt-1 truncate">
@@ -1235,7 +1446,7 @@ function LedgersContent() {
                           {/* Expandable Remarks & Trace Flow */}
                           <div
                             style={{
-                              maxHeight: isExpanded ? (activeTraceId === row.id ? "1400px" : "280px") : "0px",
+                              maxHeight: isExpanded ? (activeTraceId === row.id ? "1400px" : "380px") : "0px",
                               opacity: isExpanded ? 1 : 0,
                               overflow: "hidden",
                               transition: "max-height 0.35s cubic-bezier(0.4,0,0.2,1), opacity 0.25s ease",
@@ -1243,6 +1454,22 @@ function LedgersContent() {
                             }}
                           >
                             <div className="pt-3 border-t border-white/10 space-y-2 text-xs">
+                              {row.itemType === "spend" && row.cash_source_breakdown && row.cash_source_breakdown.length > 0 && (
+                                <div className="bg-white/[0.02] p-2.5 rounded-xl border border-white/5 space-y-1.5">
+                                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                                    ক্যাশ সোর্স বিন্যাস (Cash Source Breakdown):
+                                  </span>
+                                  <div className="space-y-1">
+                                    {row.cash_source_breakdown.map((b: any, bIdx: number) => (
+                                      <div key={bIdx} className="flex items-center justify-between text-xs py-0.5 border-b border-white/[0.03] last:border-0">
+                                        <span className="text-slate-300 font-medium">{getCardName(b.card_id)}</span>
+                                        <span className="text-emerald-400 font-mono font-bold">₹{Number(b.amount).toLocaleString("en-IN")}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
                               <div className="bg-white/[0.02] p-2.5 rounded-xl border border-white/5 space-y-1">
                                 <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">বিস্তারিত বিবরণ (Remarks):</span>
                                 <p className="text-slate-200 text-xs leading-relaxed">
@@ -1682,6 +1909,268 @@ function LedgersContent() {
         )}
       </AnimatePresence>
 
+      {/* ================= SPEND ENTRY MODAL ================= */}
+      <AnimatePresence>
+        {spendModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div
+              onClick={() => !spendSubmitting && setSpendModalOpen(false)}
+              className="fixed inset-0 bg-black/75 shadow-2xl transition-opacity"
+            />
+
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="relative w-full max-w-md max-h-[90vh] overflow-y-auto custom-scrollbar bg-[#0a0a10] border border-white/10 rounded-3xl p-6 shadow-2xl space-y-4 z-10"
+            >
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-base font-black text-white flex items-center gap-2">
+                    <Receipt className="w-5 h-5 text-amber-400" />
+                    নতুন স্পেন্ড এন্ট্রি
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    কার্ড বা ক্যাশ অন হ্যান্ড থেকে ব্যক্তিগত খরচ রেকর্ড করুন।
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => !spendSubmitting && setSpendModalOpen(false)}
+                  className="p-1 rounded-lg text-slate-400 hover:text-white"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {spendErrorMsg && (
+                <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{spendErrorMsg}</span>
+                </div>
+              )}
+
+              {spendSuccessMsg && (
+                <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>{spendSuccessMsg}</span>
+                </div>
+              )}
+
+              <div className="space-y-4 text-xs">
+                {/* 1. User Selection */}
+                <div>
+                  <label className="text-slate-400 block mb-1.5 font-semibold">ইউজার (কার নামে খরচ?)</label>
+                  <select
+                    value={spendUserId}
+                    onChange={e => handleSpendUserChange(e.target.value)}
+                    className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-xl text-white font-medium outline-none focus:border-amber-500"
+                  >
+                    {profiles.map(p => (
+                      <option key={p.id} value={p.id} className="bg-[#121216]">
+                        {p.name} {p.id === currentUser?.id ? "(You)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* 2. Target Attached Card */}
+                <div>
+                  <label className="text-slate-400 block mb-1.5 font-semibold">সংযুক্ত কার্ড (Attached Card)</label>
+                  <select
+                    value={spendCardId}
+                    onChange={e => setSpendCardId(e.target.value)}
+                    className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-xl text-white font-medium outline-none focus:border-amber-500"
+                  >
+                    <option value="" disabled className="bg-[#121216]">একটি কার্ড নির্বাচন করুন...</option>
+                    {cards.map(c => (
+                      <option key={c.id} value={c.id} className="bg-[#121216]">
+                        {c.is_primary ? "" : "↳ "}{c.card_name} (**{c.last_4_digits})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* 3. Amount & Date */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-slate-400 block mb-1.5 font-semibold">টাকার পরিমাণ (₹)</label>
+                    <input
+                      type="number"
+                      placeholder="যেমন: 5000"
+                      value={spendAmount}
+                      onChange={e => setSpendAmount(e.target.value)}
+                      className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-xl text-white text-base font-bold outline-none focus:border-amber-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-slate-400 block mb-1.5 font-semibold">তারিখ</label>
+                    <input
+                      type="date"
+                      value={spendDate}
+                      onChange={e => setSpendDate(e.target.value)}
+                      className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-xl text-white font-medium outline-none focus:border-amber-500"
+                    />
+                  </div>
+                </div>
+
+                {/* 4. Payment Method */}
+                <div>
+                  <label className="text-slate-400 block mb-1.5 font-semibold flex justify-between">
+                    পেমেন্ট সোর্স
+                    <span className="text-[10px] text-amber-400 font-normal">Cross-card supported for Cash</span>
+                  </label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setSpendMethod("credit_card")}
+                      className={`flex flex-col items-center justify-center p-3 rounded-2xl transition-all border ${
+                        spendMethod === "credit_card"
+                          ? "bg-indigo-500/20 text-indigo-400 border-indigo-500/50 shadow-[0_0_15px_rgba(99,102,241,0.2)]"
+                          : "bg-white/[0.02] text-slate-400 border-white/5 hover:bg-white/[0.05]"
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <CreditCard className="w-4 h-4" />
+                        <span className="text-xs font-bold">Direct Card</span>
+                      </div>
+                      <span className="text-[9px] font-medium opacity-70">কার্ড লিমিট ব্যবহার</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSpendMethod("cash_on_hand")}
+                      className={`flex flex-col items-center justify-center p-3 rounded-2xl transition-all border ${
+                        spendMethod === "cash_on_hand"
+                          ? "bg-amber-500/20 text-amber-400 border-amber-500/50 shadow-[0_0_15px_rgba(245,158,11,0.2)]"
+                          : "bg-white/[0.02] text-slate-400 border-white/5 hover:bg-white/[0.05]"
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <Banknote className="w-4 h-4" />
+                        <span className="text-xs font-bold">Cash on Hand</span>
+                      </div>
+                      <span className="text-[9px] font-medium opacity-70">মাল্টি-কার্ড ক্যাশ</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* 5. Multi-Source Cash Breakdown (when Cash on Hand selected) */}
+                {spendMethod === "cash_on_hand" && (
+                  <div className="space-y-3 p-3.5 bg-amber-500/5 border border-amber-500/20 rounded-2xl">
+                    <div className={`flex justify-between items-center px-3 py-2 rounded-xl text-[11px] font-black ${
+                      spendAllocationValid ? "bg-emerald-500/15 text-emerald-400" : "bg-rose-500/15 text-rose-400"
+                    }`}>
+                      <span className="uppercase tracking-wider">Allocated Cash</span>
+                      <span>₹{spendCashAllocatedTotal.toLocaleString("en-IN")} / ₹{(Number(spendAmount) || 0).toLocaleString("en-IN")}</span>
+                    </div>
+
+                    <div className="space-y-2">
+                      {spendCashSources.map((src, idx) => {
+                        const bal = spendUserCardCashMap[src.cardId] || 0;
+                        const over = Number(src.amount || 0) > bal;
+                        const amtNum = Number(spendAmount) || 0;
+                        return (
+                          <div key={src.uid} className="flex items-center gap-2">
+                            <div className="relative flex-1">
+                              <select
+                                value={src.cardId}
+                                onChange={e => updateSpendSource(idx, { cardId: e.target.value })}
+                                className="w-full h-10 bg-white/[0.03] border border-white/10 rounded-xl text-[11px] font-bold text-white pl-3 pr-7 outline-none focus:border-amber-500 appearance-none"
+                              >
+                                <option value="" className="bg-[#121216]">কার্ড বেছে নিন...</option>
+                                {cardsWithCashForSpend
+                                  .filter(c => c.id === src.cardId || !spendCashSources.some(s => s.cardId === c.id))
+                                  .map(c => (
+                                    <option key={c.id} value={c.id} className="bg-[#121216]">
+                                      {c.card_name} (**{c.last_4_digits}) — ₹{(spendUserCardCashMap[c.id] || 0).toLocaleString("en-IN")}
+                                    </option>
+                                  ))}
+                              </select>
+                              <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
+                            </div>
+                            <input
+                              type="number"
+                              value={src.amount}
+                              onChange={e => updateSpendSource(idx, { amount: e.target.value })}
+                              placeholder="0"
+                              className={`w-24 h-10 bg-white/[0.03] border rounded-xl text-center text-xs font-bold text-white outline-none ${
+                                over ? "border-rose-500" : "border-white/10 focus:border-amber-500"
+                              }`}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const otherAllocated = spendCashSources.reduce((sum, s, i) => (i !== idx ? sum + (Number(s.amount) || 0) : sum), 0);
+                                const remainingNeeded = amtNum > 0 ? Math.max(0, amtNum - otherAllocated) : 0;
+                                const targetCap = remainingNeeded > 0 ? remainingNeeded : (amtNum > 0 ? amtNum : bal);
+                                const maxVal = Math.min(bal, targetCap);
+                                updateSpendSource(idx, { amount: String(maxVal > 0 ? maxVal : bal) });
+                              }}
+                              className="h-10 px-2 text-[9px] font-black text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded-lg shrink-0 transition-colors"
+                            >
+                              MAX
+                            </button>
+                            {spendCashSources.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => removeSpendSource(idx)}
+                                className="h-10 w-8 flex items-center justify-center text-slate-500 hover:text-rose-400 shrink-0"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={addSpendSource}
+                      disabled={spendCashSources.length >= cardsWithCashForSpend.length}
+                      className="w-full py-2 flex items-center justify-center gap-1.5 text-[11px] font-bold text-amber-400 bg-amber-500/5 hover:bg-amber-500/10 border border-dashed border-amber-500/20 rounded-xl transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      আরেকটি কার্ডের ক্যাশ যোগ করুন (+ Add Source)
+                    </button>
+                  </div>
+                )}
+
+                {/* 6. Remarks */}
+                <div>
+                  <label className="text-slate-400 block mb-1.5 font-semibold">রিমার্কস (খরচের বিবরণ)</label>
+                  <input
+                    type="text"
+                    placeholder="যেমন: অনলাইন শপিং, ডিনার বা ব্যক্তিগত খরচ"
+                    value={spendRemarks}
+                    onChange={e => setSpendRemarks(e.target.value)}
+                    className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-xl text-white outline-none focus:border-amber-500"
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-2 border-t border-white/5">
+                <button
+                  type="button"
+                  disabled={spendSubmitting}
+                  onClick={() => setSpendModalOpen(false)}
+                  className="flex-1 py-2.5 rounded-xl border border-white/10 text-slate-400 text-xs font-semibold hover:bg-white/5 transition-colors"
+                >
+                  বাতিল
+                </button>
+                <button
+                  type="button"
+                  disabled={spendSubmitting || !spendAmount || Number(spendAmount) <= 0 || (spendMethod === "cash_on_hand" && !spendAllocationValid)}
+                  onClick={handleConfirmSpend}
+                  className="flex-1 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold transition-colors disabled:opacity-40 shadow-lg shadow-amber-600/20"
+                >
+                  {spendSubmitting ? "সংরক্ষণ হচ্ছে..." : "স্পেন্ড কনফার্ম করুন"}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Global Bottom Navigation */}
       <BottomNav />

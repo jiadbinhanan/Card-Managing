@@ -64,6 +64,7 @@ interface Spend {
   remarks: string;
   spend_date: string;
   card_id?: string;
+  cash_source_breakdown?: CashSourceBreakdownEntry[] | null;
   profiles?: { name: string; avatar_url?: string };
   cards?: { card_name: string; last_4_digits: string };
 }
@@ -426,7 +427,7 @@ export default function TransactionsPage() {
     }
   }
 
-  // ── BILL: ম্যানুয়াল multi-source cash allocation ──
+  // ── BILL & SPEND: ম্যানুয়াল multi-source cash allocation ──
   const validCashSources = cashSources
     .filter(s => s.cardId && Number(s.amount) > 0)
     .map(s => ({ cardId: s.cardId, amount: Number(s.amount) }));
@@ -435,27 +436,31 @@ export default function TransactionsPage() {
     ? Math.max(0, amtNum - cashAllocatedTotal)
     : (billMethod === 'own_pocket' ? amtNum : 0);
 
-  const allocationValid = billMethod !== 'cash_on_hand' || (
-    cashAllocatedTotal <= amtNum &&
+  const isCashSourceMode = (txType === 'bill' && billMethod === 'cash_on_hand') || (txType === 'spend' && spendMethod === 'cash_on_hand');
+
+  const allocationValid = !isCashSourceMode || (
+    (txType === 'bill' ? cashAllocatedTotal <= amtNum : cashAllocatedTotal === amtNum) &&
     validCashSources.every(s => s.amount <= (currentUserCashByCard[s.cardId] || 0))
   );
 
   const canSave = amtNum > 0 &&
     (txType !== 'bill' || (!!billCardId && allocationValid)) &&
-    (txType !== 'spend' || !!entryCardId) &&
+    (txType !== 'spend' || (!!entryCardId && (spendMethod !== 'cash_on_hand' || (cashAllocatedTotal === amtNum && allocationValid)))) &&
     (txType !== 'rotate' || !!entryCardId);
 
-  // মোডাল খোলা অবস্থায় বিল-কার্ড বদলালে বা প্রথমবার খুললে ডিফল্ট সোর্স-রো সেট করা
+  // মোডাল খোলা অবস্থায় বিল-কার্ড বা স্পেন্ড-কার্ড বদলালে বা প্রথমবার খুললে ডিফল্ট সোর্স-রো সেট করা
   useEffect(() => {
-    if (!isModalOpen || txType !== 'bill') return;
+    if (!isModalOpen) return;
+    if (txType !== 'bill' && !(txType === 'spend' && spendMethod === 'cash_on_hand')) return;
+    const targetCardId = txType === 'bill' ? billCardId : entryCardId;
     const hasAnyCardSelected = cashSources.some(s => s.cardId);
     if (!hasAnyCardSelected) {
-      const defaultCardId = (currentUserCashByCard[billCardId] || 0) > 0
-        ? billCardId
-        : (Object.keys(currentUserCashByCard).find(id => currentUserCashByCard[id] > 0) || '');
+      const defaultCardId = (currentUserCashByCard[targetCardId] || 0) > 0
+        ? targetCardId
+        : (Object.keys(currentUserCashByCard).find(id => (currentUserCashByCard[id] || 0) > 0) || '');
       setCashSources([{ uid: uid(), cardId: defaultCardId, amount: '' }]);
     }
-  }, [isModalOpen, txType, billCardId]);
+  }, [isModalOpen, txType, billCardId, entryCardId, spendMethod]);
 
   async function updateCashBalance(userId: string, cardId: string, amt: number, type: 'credit' | 'debit', note: string, linkedCardTxId?: string | null): Promise<string | null> {
     const { data: coh } = await supabase.from('cash_on_hand').select('*').eq('user_id', userId).eq('card_id', cardId).maybeSingle();
@@ -562,7 +567,8 @@ export default function TransactionsPage() {
     const billCashAmt = txType === 'bill' && billMethod === 'cash_on_hand' ? cashAllocatedTotal : 0;
     const billPocketAmt = txType === 'bill' ? pocketSplitAmt : 0;
     const billIsSplitting = billCashAmt > 0 && billPocketAmt > 0;
-    const breakdownForInsert = billCashAmt > 0 ? validCashSources.map(s => ({ card_id: s.cardId, amount: s.amount })) : null;
+    const isSpendCash = txType === 'spend' && spendMethod === 'cash_on_hand';
+    const breakdownForInsert = (billCashAmt > 0 || isSpendCash) ? validCashSources.map(s => ({ card_id: s.cardId, amount: s.amount })) : null;
 
     setIsModalOpen(false);
 
@@ -572,22 +578,46 @@ export default function TransactionsPage() {
       setTransactions(prev => [tempTx, ...prev]);
       if (activePrimaryId) setFamilyLimitsMap(prev => ({ ...prev, [activePrimaryId]: prev[activePrimaryId] - amtNum }));
     } else if (txType === "spend") {
-      if (isSpendSplitting) {
-        if (cardSplitAmt > 0) {
-          const t: any = { id: `temp-c-${Date.now()}`, user_id: finalActingUserId, amount: cardSplitAmt, payment_method: 'credit_card', remarks, spend_date: finalDate, profiles: profileData, card_id: activeCardId, cards: cardDataPayload };
-          setSpends(prev => [t, ...prev]);
-          if (activePrimaryId) setFamilyLimitsMap(prev => ({ ...prev, [activePrimaryId]: prev[activePrimaryId] - cardSplitAmt }));
-        }
-        if (spendCashSplitAmt > 0) {
-          const t: any = { id: `temp-h-${Date.now()}`, user_id: finalActingUserId, amount: spendCashSplitAmt, payment_method: 'cash_on_hand', remarks: remarks + " (Auto-Split)", spend_date: finalDate, profiles: profileData, card_id: activeCardId, cards: cardDataPayload };
-          setSpends(prev => [t, ...prev]);
-          setUserCashMap(prev => ({ ...prev, [finalActingUserId]: (prev[finalActingUserId] || 0) - spendCashSplitAmt }));
-        }
-      } else {
-        const t: any = { id: `temp-${Date.now()}`, user_id: finalActingUserId, amount: amtNum, payment_method: spendMethod, remarks, spend_date: finalDate, profiles: profileData, card_id: activeCardId, cards: cardDataPayload };
+      if (spendMethod === "cash_on_hand") {
+        const t: any = {
+          id: `temp-s-${Date.now()}`,
+          user_id: finalActingUserId,
+          amount: amtNum,
+          spend_type: 'personal',
+          payment_method: 'cash_on_hand',
+          remarks,
+          spend_date: finalDate,
+          profiles: profileData,
+          card_id: activeCardId,
+          cards: cardDataPayload,
+          cash_source_breakdown: breakdownForInsert
+        };
         setSpends(prev => [t, ...prev]);
-        if (spendMethod === "credit_card" && activePrimaryId) setFamilyLimitsMap(prev => ({ ...prev, [activePrimaryId]: prev[activePrimaryId] - amtNum }));
-        else setUserCashMap(prev => ({ ...prev, [finalActingUserId]: (prev[finalActingUserId] || 0) - amtNum }));
+        validCashSources.forEach(s => {
+          setUserCardCashMap(prev => ({
+            ...prev,
+            [finalActingUserId]: {
+              ...(prev[finalActingUserId] || {}),
+              [s.cardId]: (prev[finalActingUserId]?.[s.cardId] || 0) - s.amount
+            }
+          }));
+        });
+        setUserCashMap(prev => ({ ...prev, [finalActingUserId]: (prev[finalActingUserId] || 0) - amtNum }));
+      } else {
+        const t: any = {
+          id: `temp-s-${Date.now()}`,
+          user_id: finalActingUserId,
+          amount: amtNum,
+          spend_type: 'personal',
+          payment_method: 'credit_card',
+          remarks,
+          spend_date: finalDate,
+          profiles: profileData,
+          card_id: activeCardId,
+          cards: cardDataPayload
+        };
+        setSpends(prev => [t, ...prev]);
+        if (activePrimaryId) setFamilyLimitsMap(prev => ({ ...prev, [activePrimaryId]: prev[activePrimaryId] - amtNum }));
       }
     } else if (txType === "bill") {
       if (isDebtRepayment) {
@@ -632,15 +662,28 @@ export default function TransactionsPage() {
         await supabase.from('card_transactions').insert({ amount: amtNum, type: 'withdrawal', status: 'pending_settlement', qr_id: selectedQrId, transaction_date: finalDate, recorded_by: finalActingUserId, remarks, card_id: activeCardId });
       }
       else if (txType === "spend") {
-        if (isSpendSplitting) {
-          if (cardSplitAmt > 0) await supabase.from('spends').insert({ user_id: finalActingUserId, amount: cardSplitAmt, spend_type: 'personal', payment_method: 'credit_card', remarks, spend_date: finalDate, card_id: activeCardId });
-          if (spendCashSplitAmt > 0) {
-            await supabase.from('spends').insert({ user_id: finalActingUserId, amount: spendCashSplitAmt, spend_type: 'personal', payment_method: 'cash_on_hand', remarks: remarks + " (Auto-Split)", spend_date: finalDate, card_id: activeCardId });
-            await updateCashBalance(finalActingUserId, activeCardId, spendCashSplitAmt, 'debit', `Personal spend ${remarks ? '- ' + remarks : ''} (Auto-Split)`);
-          }
+        if (spendMethod === "cash_on_hand") {
+          await supabase.from('spends').insert({
+            user_id: finalActingUserId,
+            amount: amtNum,
+            spend_type: 'personal',
+            payment_method: 'cash_on_hand',
+            remarks,
+            spend_date: finalDate,
+            card_id: activeCardId,
+            cash_source_breakdown: breakdownForInsert
+          });
+          await deductBillCashFromSources(finalActingUserId, validCashSources, `Personal spend ${remarks ? '- ' + remarks : ''}`);
         } else {
-          await supabase.from('spends').insert({ user_id: finalActingUserId, amount: amtNum, spend_type: 'personal', payment_method: spendMethod, remarks, spend_date: finalDate, card_id: activeCardId });
-          if (spendMethod === "cash_on_hand") await updateCashBalance(finalActingUserId, activeCardId, amtNum, 'debit', `Personal spend ${remarks ? '- ' + remarks : ''}`);
+          await supabase.from('spends').insert({
+            user_id: finalActingUserId,
+            amount: amtNum,
+            spend_type: 'personal',
+            payment_method: 'credit_card',
+            remarks,
+            spend_date: finalDate,
+            card_id: activeCardId
+          });
         }
       }
       else if (txType === "bill") {
@@ -801,6 +844,8 @@ export default function TransactionsPage() {
     spends.forEach(s => {
       const isRepayment = s.amount < 0;
       const cardInfo = s.cards ? `${s.cards.card_name} (**${s.cards.last_4_digits})` : 'Card Not Linked';
+      const hasCrossCardCash = !!(s.cash_source_breakdown && s.cash_source_breakdown.length > 0 &&
+        s.cash_source_breakdown.some(b => b.card_id !== s.card_id));
       list.push({
         id: `sp-${s.id}`,
         userId: s.user_id,
@@ -818,6 +863,10 @@ export default function TransactionsPage() {
         remarks: s.remarks || '',
         cardDetails: cardInfo,
         paymentMethod: s.payment_method === 'credit_card' ? 'Credit Card' : 'Cash on Hand',
+        cashSourceBreakdown: s.cash_source_breakdown && s.cash_source_breakdown.length > 0
+          ? s.cash_source_breakdown.map(b => ({ cardLabel: cardLabel(b.card_id), amount: b.amount }))
+          : undefined,
+        isCrossCardCash: hasCrossCardCash,
         recordedBy: s.profiles?.name || 'User',
       });
     });
