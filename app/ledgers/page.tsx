@@ -918,18 +918,18 @@ function LedgersContent() {
               ₹{totalUserCashOnHand.toLocaleString("en-IN")}
             </div>
 
-            {/* Small compact breakdown of cards in this family */}
-            {isCardFamilyActive && activeFamilyCards.length > 1 && (
+            {/* Pill-shaped breakdown of individual cards when multiple cards or card family is active */}
+            {activeFamilyCards.length > 1 && (
               <div className="flex flex-wrap items-center gap-1.5 mt-2.5 pt-2.5 border-t border-emerald-500/15">
                 {activeFamilyCards.map(c => {
                   const bal = activeUserCardCashMap[c.id] || 0;
                   return (
                     <div
                       key={c.id}
-                      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-[11px]"
+                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/25 text-xs shadow-sm backdrop-blur-sm"
                     >
                       <CreditCard className="w-3 h-3 text-emerald-400 shrink-0" />
-                      <span className="text-slate-300 font-medium truncate max-w-[130px]">{c.card_name} (**{c.last_4_digits})</span>
+                      <span className="text-slate-300 font-medium">{c.card_name} (**{c.last_4_digits}):</span>
                       <span className="font-bold text-emerald-400">₹{bal.toLocaleString("en-IN")}</span>
                     </div>
                   );

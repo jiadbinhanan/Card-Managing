@@ -125,6 +125,7 @@ export default function DashboardAnalytics({
   }, [selectedCardId, accessibleCards]);
 
   const isCardFamilyActive = activeFamilyCards.length > 1;
+  const hasMultipleCards = selectedCardId === "all" ? accessibleCards.length > 1 : activeFamilyCards.length > 1;
   const [modalSubCardFilter, setModalSubCardFilter] = useState<string>("all");
 
   useEffect(() => {
@@ -316,7 +317,7 @@ export default function DashboardAnalytics({
     const familyIds = getFamilyCardIds(selectedCardId, accessibleCards);
     const relevantCards = familyIds.length > 0
       ? accessibleCards.filter(c => familyIds.includes(c.id))
-      : [];
+      : accessibleCards;
 
     Promise.all(
       userStats.map(async u => {
@@ -631,12 +632,16 @@ export default function DashboardAnalytics({
                     ₹{(familyCashMap[stat.id] ?? stat.cash).toLocaleString()}
                   </motion.p>
                 }
-                {isCardFamilyActive && (familyCardCashBreakdownMap[stat.id] || []).length > 1 && (
-                  <div className="flex flex-col gap-0.5 mt-1.5 pt-1.5 border-t border-white/5">
+                {hasMultipleCards && (familyCardCashBreakdownMap[stat.id] || []).length > 1 && (
+                  <div className="flex flex-wrap items-center gap-1.5 mt-2 pt-1.5 border-t border-white/5">
                     {(familyCardCashBreakdownMap[stat.id] || []).map(b => (
-                      <span key={b.cardId} className="text-[10px] text-slate-400 truncate flex items-center justify-between">
-                        <span className="truncate mr-1">{b.cardName} (**{b.cardLast4}):</span>
-                        <span className="font-semibold text-emerald-400">₹{b.balance.toLocaleString("en-IN")}</span>
+                      <span
+                        key={b.cardId}
+                        className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/25 text-[10px] font-semibold text-emerald-300"
+                      >
+                        <CreditCard className="w-2.5 h-2.5 text-emerald-400 shrink-0" />
+                        <span className="text-slate-300 truncate max-w-[100px]">{b.cardName} (**{b.cardLast4}):</span>
+                        <span className="font-bold text-emerald-400">₹{b.balance.toLocaleString("en-IN")}</span>
                       </span>
                     ))}
                   </div>
@@ -788,17 +793,17 @@ export default function DashboardAnalytics({
                       {selectedCardId === "all" ? "All cards aggregated balance" : "Card family aggregated balance"}
                     </p>
 
-                    {/* Small compact breakdown of family cards */}
+                    {/* Pill-shaped breakdown of individual cards when multiple cards or card family is active */}
                     {userCardCashBreakdown.length > 1 && (
-                      <div className="flex flex-wrap items-center gap-1.5 mt-2.5 pt-2.5 border-t border-emerald-500/20">
+                      <div className="flex flex-wrap items-center gap-1.5 mt-3 pt-3 border-t border-emerald-500/20">
                         {userCardCashBreakdown.map(b => (
                           <div
                             key={b.cardId}
-                            className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-[11px]"
+                            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-xs shadow-sm backdrop-blur-sm"
                           >
                             <CreditCard className="w-3 h-3 text-emerald-400 shrink-0" />
-                            <span className="text-slate-300 font-medium truncate max-w-[130px]">{b.cardName} (**{b.cardLast4})</span>
-                            <span className="font-bold text-emerald-400">₹{b.balance.toLocaleString("en-IN")}</span>
+                            <span className="text-slate-300 font-medium">{b.cardName} (**{b.cardLast4}):</span>
+                            <span className="font-black text-emerald-400">₹{b.balance.toLocaleString("en-IN")}</span>
                           </div>
                         ))}
                       </div>

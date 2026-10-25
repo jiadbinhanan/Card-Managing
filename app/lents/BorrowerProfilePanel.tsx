@@ -303,12 +303,21 @@ export default function BorrowerProfilePanel({
     return ledgerRow?.id || null;
   };
 
-  // Fresh available-limit recompute for a card (used for accurate alert numbers)
+  // Fresh available-limit recompute for a card family (used for accurate alert numbers)
   const getFreshCardAvailable = async (cardId: string) => {
-    const { data: cardInfo } = await supabase.from("cards").select("total_limit, is_primary, parent_card_id").eq("id", cardId).maybeSingle();
-    if (!cardInfo) return 0;
-    const { data: txs } = await supabase.from("card_transactions").select("amount, type, status, qr_id, settled_to_user, remarks, card_id").eq("card_id", cardId);
-    const { data: spends } = await supabase.from("spends").select("amount, payment_method, card_id").eq("card_id", cardId);
+    const { data: allCards } = await supabase.from("cards").select("id, total_limit, is_primary, parent_card_id");
+    if (!allCards || allCards.length === 0) return 0;
+
+    const currentCard = allCards.find(c => c.id === cardId);
+    if (!currentCard) return 0;
+
+    const primaryId = currentCard.is_primary ? currentCard.id : (currentCard.parent_card_id || currentCard.id);
+    const primaryCard = allCards.find(c => c.id === primaryId) || currentCard;
+    const familyCardIds = allCards.filter(c => c.id === primaryId || c.parent_card_id === primaryId).map(c => c.id);
+
+    const { data: txs } = await supabase.from("card_transactions").select("amount, type, status, qr_id, settled_to_user, remarks, card_id").in("card_id", familyCardIds);
+    const { data: spends } = await supabase.from("spends").select("amount, payment_method, card_id").in("card_id", familyCardIds);
+
     const withdrawals = (txs || []).filter(t => {
       if (t.type !== "withdrawal") return false;
       const isRotation = t.qr_id || t.settled_to_user || (t.remarks || "").toLowerCase().includes("rotation");
@@ -316,7 +325,24 @@ export default function BorrowerProfilePanel({
     }).reduce((s, t) => s + Number(t.amount), 0);
     const billPay = (txs || []).filter(t => t.type === "bill_payment").reduce((s, t) => s + Number(t.amount), 0);
     const ccSpends = (spends || []).filter(s => s.payment_method === "credit_card").reduce((s, sp) => s + Number(sp.amount), 0);
-    return Number(cardInfo.total_limit) - withdrawals - ccSpends + billPay;
+    return Number(primaryCard.total_limit) - withdrawals - ccSpends + billPay;
+  };
+
+  // Fresh cash-on-hand balance recompute (incorporates card family if present)
+  const getFreshCashBalance = async (userId: string, cardId: string) => {
+    const { data: allCards } = await supabase.from("cards").select("id, is_primary, parent_card_id");
+    const currentCard = (allCards || []).find(c => c.id === cardId);
+    const primaryId = currentCard?.is_primary ? currentCard.id : (currentCard?.parent_card_id || currentCard?.id);
+    const familyCardIds = (allCards || []).filter(c => c.id === primaryId || c.parent_card_id === primaryId).map(c => c.id);
+    const targetIds = familyCardIds.length > 0 ? familyCardIds : [cardId];
+
+    const { data: familyCashRows } = await supabase
+      .from("cash_on_hand")
+      .select("current_balance")
+      .eq("user_id", userId)
+      .in("card_id", targetIds);
+
+    return (familyCashRows || []).reduce((sum, r) => sum + Number(r.current_balance || 0), 0);
   };
 
   // --- SAVE: You Gave ---
@@ -359,7 +385,8 @@ export default function BorrowerProfilePanel({
       if (!isPocketWrite) {
         if (sourceType === "cash_on_hand") {
           linkedCashLedgerId = await updateCashBalance(currentUser.id, selectedCardId, amtNum, "debit", `Lent given to ${borrower.name}`);
-          const { data: txRow } = await supabase.from("card_transactions").insert({
+        } else if (sourceType === "credit_card") {
+          const { data: txRow, error: txErr } = await supabase.from("card_transactions").insert({
             card_id: selectedCardId,
             amount: amtNum,
             type: "withdrawal",
@@ -368,6 +395,7 @@ export default function BorrowerProfilePanel({
             recorded_by: currentUser.id,
             remarks: `Lent given to ${borrower.name}`,
           }).select("id").single();
+          if (txErr) throw txErr;
           linkedCardTransactionId = txRow?.id || null;
         }
       }
@@ -397,13 +425,15 @@ export default function BorrowerProfilePanel({
         const sourceName = sourceType === "credit_card" ? getCardName(selectedCardId) : "Cash on Hand";
         let freshRemainingBalance = 0;
         if (sourceType === "cash_on_hand") {
-          const { data: freshCoh } = await supabase.from("cash_on_hand").select("current_balance").eq("user_id", currentUser.id).eq("card_id", selectedCardId).maybeSingle();
-          freshRemainingBalance = freshCoh ? Number(freshCoh.current_balance) : 0;
+          freshRemainingBalance = await getFreshCashBalance(currentUser.id, selectedCardId);
         } else {
           freshRemainingBalance = await getFreshCardAvailable(selectedCardId);
         }
 
-        const { data: freshLedger } = await supabase.from("card_lent_ledger").select("amount, entry_type");
+        const { data: freshLedger } = await supabase
+          .from("card_lent_ledger")
+          .select("amount, entry_type")
+          .eq("borrower_id", borrower.id);
         const freshTotalDue = (freshLedger || []).reduce((acc, r: any) => acc + (r.entry_type === "given" ? Number(r.amount) : -Number(r.amount)), 0);
 
         await sendLentIssueAlert(
@@ -514,8 +544,7 @@ export default function BorrowerProfilePanel({
         const receivedOn = sourceType === "credit_card" ? getCardName(selectedCardId) : "Cash on hand";
         let freshCurrentBal = 0;
         if (sourceType === "cash_on_hand") {
-          const { data: freshCoh } = await supabase.from("cash_on_hand").select("current_balance").eq("user_id", currentUser.id).eq("card_id", selectedCardId).maybeSingle();
-          freshCurrentBal = freshCoh ? Number(freshCoh.current_balance) : 0;
+          freshCurrentBal = await getFreshCashBalance(currentUser.id, selectedCardId);
         } else {
           freshCurrentBal = await getFreshCardAvailable(selectedCardId);
         }
