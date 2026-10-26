@@ -274,23 +274,7 @@ export default function BorrowerProfilePanel({
   // cash_on_hand_ledger row-এর id রিটার্ন করে, যাতে card_lent_ledger row-এ linked
   // হিসেবে সেভ করা যায় (edit/delete-এর সময় reverse করতে লাগবে)
   const updateCashBalance = async (userId: string, cardId: string, amt: number, type: "credit" | "debit", note: string, linkedCardTxId?: string | null): Promise<string | null> => {
-    const { data: coh } = await supabase.from("cash_on_hand").select("*").eq("user_id", userId).eq("card_id", cardId).maybeSingle();
-    const currentBalance = coh ? Number(coh.current_balance) : 0;
-    const newBalance = type === "credit" ? currentBalance + amt : currentBalance - amt;
-
-    const { data: updatedRows, error: cashUpdateError } = await supabase
-      .from("cash_on_hand")
-      .update({ current_balance: newBalance })
-      .eq("user_id", userId)
-      .eq("card_id", cardId)
-      .select("user_id");
-    if (cashUpdateError) throw cashUpdateError;
-
-    if (!updatedRows || updatedRows.length === 0) {
-      const { error: insertErr } = await supabase.from("cash_on_hand").insert({ user_id: userId, card_id: cardId, current_balance: newBalance });
-      if (insertErr) throw insertErr;
-    }
-
+    // Database trigger trg_sync_cash_on_hand automatically syncs cash_on_hand balance upon ledger insert
     const { data: ledgerRow, error: ledgerErr } = await supabase.from("cash_on_hand_ledger").insert({
       user_id: userId,
       card_id: cardId,

@@ -653,27 +653,7 @@ function LedgersContent() {
       const targetName = targetUser?.name || "Recipient";
       const note = transferRemarks.trim() || `Fund transfer to ${targetName}`;
 
-      // 1. Sender Cash on Hand Deduct
-      const { data: sRow } = await supabase.from("cash_on_hand")
-        .select("current_balance")
-        .eq("user_id", activeUserId).eq("card_id", transferSenderCardId).single();
-      await supabase.from("cash_on_hand")
-        .update({ current_balance: Number(sRow?.current_balance || 0) - amt, updated_at: now })
-        .eq("user_id", activeUserId).eq("card_id", transferSenderCardId);
-
-      // 2. Receiver Cash on Hand Credit
-      const { data: rRow } = await supabase.from("cash_on_hand")
-        .select("current_balance")
-        .eq("user_id", transferTargetUserId).eq("card_id", transferReceiverCardId).maybeSingle();
-      await supabase.from("cash_on_hand")
-        .upsert({
-          user_id: transferTargetUserId,
-          card_id: transferReceiverCardId,
-          current_balance: Number(rRow?.current_balance || 0) + amt,
-          updated_at: now
-        });
-
-      // 3. Ledger Entries
+      // Ledger Entries (Database trigger trg_sync_cash_on_hand automatically syncs cash_on_hand balance)
       await supabase.from("cash_on_hand_ledger").insert({
         user_id: activeUserId,
         card_id: transferSenderCardId,
@@ -832,23 +812,7 @@ function LedgersContent() {
         if (spErr) throw spErr;
 
         for (const src of validSources) {
-          const { data: coh } = await supabase.from("cash_on_hand")
-            .select("current_balance")
-            .eq("user_id", spendUserId)
-            .eq("card_id", src.card_id)
-            .maybeSingle();
-
-          const curBal = coh ? Number(coh.current_balance) : 0;
-          const newBal = curBal - src.amount;
-
-          await supabase.from("cash_on_hand")
-            .upsert({
-              user_id: spendUserId,
-              card_id: src.card_id,
-              current_balance: newBal,
-              updated_at: new Date().toISOString()
-            });
-
+          // Database trigger trg_sync_cash_on_hand automatically syncs cash_on_hand balance
           await supabase.from("cash_on_hand_ledger").insert({
             user_id: spendUserId,
             card_id: src.card_id,

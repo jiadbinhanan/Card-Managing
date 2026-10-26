@@ -473,21 +473,7 @@ export default function DashboardAnalytics({
       const note = transferRemarks.trim() || `Transfer to ${selectedTarget.userName}`;
       const senderName = userStats.find(u => u.id === senderId)?.name || "You";
 
-      // sender debit
-      const { data: sRow } = await supabase.from("cash_on_hand").select("current_balance")
-        .eq("user_id", senderId).eq("card_id", senderCardId).single();
-      await supabase.from("cash_on_hand")
-        .update({ current_balance: Number(sRow?.current_balance || 0) - amount, updated_at: now })
-        .eq("user_id", senderId).eq("card_id", senderCardId);
-
-      // receiver credit
-      const { data: rRow } = await supabase.from("cash_on_hand").select("current_balance")
-        .eq("user_id", selectedTarget.userId).eq("card_id", selectedReceiverCardId).single();
-      await supabase.from("cash_on_hand")
-        .update({ current_balance: Number(rRow?.current_balance || 0) + amount, updated_at: now })
-        .eq("user_id", selectedTarget.userId).eq("card_id", selectedReceiverCardId);
-
-      // ledger entries
+      // Ledger entries (Database trigger trg_sync_cash_on_hand automatically syncs cash_on_hand balance)
       await supabase.from("cash_on_hand_ledger").insert({
         user_id: senderId, card_id: senderCardId,
         amount, transaction_type: "debit", transaction_date: now,

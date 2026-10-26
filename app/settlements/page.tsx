@@ -347,29 +347,6 @@ export default function SettlementsPage() {
             }).eq('id', settleTx.id);
         }
 
-        const { data: existingCashRow } = await supabase
-           .from('cash_on_hand')
-           .select('current_balance')
-           .eq('user_id', cashReceiverId)
-           .eq('card_id', settleTargetCardId)
-           .maybeSingle();
-
-        const newBalance = Number(existingCashRow?.current_balance || 0) + amtToSettle;
-        const { data: updatedRows } = await supabase
-           .from('cash_on_hand')
-           .update({ current_balance: newBalance })
-           .eq('user_id', cashReceiverId)
-           .eq('card_id', settleTargetCardId)
-           .select('user_id');
-
-        if (!updatedRows || updatedRows.length === 0) {
-           await supabase.from('cash_on_hand').insert({
-              user_id: cashReceiverId,
-              card_id: settleTargetCardId,
-              current_balance: newBalance
-           });
-        }
-
         const baseRemark = `Settlement received from ${settleTx.qrs?.merchant_name || 'Manual Rotation Entry'}`;
         const finalLedgerRemark = settleRemarks.trim() 
           ? `${baseRemark} - ${settleRemarks.trim()}` 
@@ -403,7 +380,7 @@ export default function SettlementsPage() {
            .in('card_id', familyCardIds.length > 0 ? familyCardIds : [settleTargetCardId]);
 
         const totalFamilyCash = (familyCashRows || []).reduce((sum, r) => sum + Number(r.current_balance || 0), 0);
-        const displayTotalCash = totalFamilyCash > 0 ? totalFamilyCash : newBalance;
+        const displayTotalCash = totalFamilyCash;
 
         for (const profile of profiles) {
            const cleanPhone = (profile.phone || "").replace(/[^0-9]/g, '');

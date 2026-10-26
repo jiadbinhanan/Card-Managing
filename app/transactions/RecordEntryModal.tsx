@@ -324,8 +324,8 @@ export default function RecordEntryModal(props: RecordEntryModalProps) {
                         }`}
                       >
                         <div className="flex items-center gap-1.5 mb-1"><Wallet className="w-4 h-4" /><span className="text-xs font-bold">Own Pocket</span></div>
-                        {billMethod === "cash_on_hand" && pocketSplitAmt > 0 ? (
-                          <span className="text-sm font-black text-white">₹{pocketSplitAmt.toLocaleString()}</span>
+                        {billMethod === "own_pocket" && amtNum > 0 ? (
+                          <span className="text-xs font-black text-white">₹{amtNum.toLocaleString()}</span>
                         ) : (
                           <span className="text-[9px] font-black opacity-70">Personal Funds</span>
                         )}
@@ -402,11 +402,17 @@ export default function RecordEntryModal(props: RecordEntryModalProps) {
                           <Plus className="w-3.5 h-3.5" /> Add Another Source
                         </button>
 
-                        {pocketSplitAmt > 0 && (
-                          <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} className="flex items-center justify-center gap-2 text-emerald-400">
-                            <Zap className="w-3 h-3 animate-pulse" />
-                            <span className="text-[10px] font-black uppercase tracking-widest">₹{pocketSplitAmt.toLocaleString()} remaining → Own Pocket</span>
-                          </motion.div>
+                        {amtNum > cashAllocatedTotal && (
+                          <div className="flex items-center justify-between px-3 py-2 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-400 text-[11px] font-bold">
+                            <span>Remaining to allocate:</span>
+                            <span>₹{(amtNum - cashAllocatedTotal).toLocaleString()}</span>
+                          </div>
+                        )}
+                        {cashAllocatedTotal > amtNum && (
+                          <div className="flex items-center justify-between px-3 py-2 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-400 text-[11px] font-bold">
+                            <span>Over-allocated by:</span>
+                            <span>₹{(cashAllocatedTotal - amtNum).toLocaleString()}</span>
+                          </div>
                         )}
                       </motion.div>
                     )}

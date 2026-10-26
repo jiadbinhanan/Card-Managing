@@ -333,12 +333,20 @@ export default function TransactionsPage() {
 
           if (dueAmt > 0) {
               const cardInfo = currentCards.find(card => card.id === c.card_id);
-              if (cardInfo && cardInfo.bill_gen_day) {
+              if (cardInfo && (cardInfo.bill_due_day || cardInfo.bill_gen_day)) {
                   const billMonthDate = new Date(c.billing_month);
-                  const genDateObj = new Date(billMonthDate.getFullYear(), billMonthDate.getMonth(), cardInfo.bill_gen_day);
-                  const dueDateObj = new Date(genDateObj);
-                  dueDateObj.setDate(dueDateObj.getDate() + 19);
-
+                  const genDay = cardInfo.bill_gen_day || 7;
+                  const dueDay = cardInfo.bill_due_day || (genDay + 19);
+                  let dueMonth = billMonthDate.getMonth();
+                  let dueYear = billMonthDate.getFullYear();
+                  if (dueDay < genDay) {
+                    dueMonth += 1;
+                    if (dueMonth > 11) {
+                      dueMonth = 0;
+                      dueYear += 1;
+                    }
+                  }
+                  const dueDateObj = new Date(dueYear, dueMonth, dueDay);
                   dueDateMap[c.card_id] = dueDateObj.toLocaleDateString('en-GB', {day: '2-digit', month: 'short', year: 'numeric'});
               }
           }
@@ -432,20 +440,21 @@ export default function TransactionsPage() {
     .filter(s => s.cardId && Number(s.amount) > 0)
     .map(s => ({ cardId: s.cardId, amount: Number(s.amount) }));
   const cashAllocatedTotal = validCashSources.reduce((sum, s) => sum + s.amount, 0);
-  const pocketSplitAmt = billMethod === 'cash_on_hand'
-    ? Math.max(0, amtNum - cashAllocatedTotal)
-    : (billMethod === 'own_pocket' ? amtNum : 0);
+  const pocketSplitAmt = billMethod === 'own_pocket' ? amtNum : 0;
 
   const isCashSourceMode = (txType === 'bill' && billMethod === 'cash_on_hand') || (txType === 'spend' && spendMethod === 'cash_on_hand');
 
+  // বিল বা স্পেন্ড-এ ক্যাশ অন হ্যান্ড থাকলে শতভাগ টাকা ক্যাশ থেকে সঠিকভাবে বরাদ্দ করতে হবে
   const allocationValid = !isCashSourceMode || (
-    (txType === 'bill' ? cashAllocatedTotal <= amtNum : cashAllocatedTotal === amtNum) &&
+    amtNum > 0 &&
+    cashAllocatedTotal === amtNum &&
+    validCashSources.length > 0 &&
     validCashSources.every(s => s.amount <= (currentUserCashByCard[s.cardId] || 0))
   );
 
   const canSave = amtNum > 0 &&
-    (txType !== 'bill' || (!!billCardId && allocationValid)) &&
-    (txType !== 'spend' || (!!entryCardId && (spendMethod !== 'cash_on_hand' || (cashAllocatedTotal === amtNum && allocationValid)))) &&
+    (txType !== 'bill' || (!!billCardId && (billMethod === 'own_pocket' || allocationValid))) &&
+    (txType !== 'spend' || (!!entryCardId && (spendMethod !== 'cash_on_hand' || allocationValid))) &&
     (txType !== 'rotate' || !!entryCardId);
 
   // মোডাল খোলা অবস্থায় বিল-কার্ড বা স্পেন্ড-কার্ড বদলালে বা প্রথমবার খুললে ডিফল্ট সোর্স-রো সেট করা
@@ -462,26 +471,8 @@ export default function TransactionsPage() {
     }
   }, [isModalOpen, txType, billCardId, entryCardId, spendMethod]);
 
+  // DB Trigger trg_sync_cash_on_hand স্বয়ংক্রিয়ভাবে cash_on_hand টেবিল আপডেট করে দেয়
   async function updateCashBalance(userId: string, cardId: string, amt: number, type: 'credit' | 'debit', note: string, linkedCardTxId?: string | null): Promise<string | null> {
-    const { data: coh } = await supabase.from('cash_on_hand').select('*').eq('user_id', userId).eq('card_id', cardId).maybeSingle();
-    const currentBalance = coh ? Number(coh.current_balance) : 0;
-    const newBalance = type === 'credit' ? currentBalance + amt : currentBalance - amt;
-
-    const { data: updatedRows, error: cashUpdateError } = await supabase
-      .from('cash_on_hand')
-      .update({ current_balance: newBalance })
-      .eq('user_id', userId)
-      .eq('card_id', cardId)
-      .select('user_id');
-    if (cashUpdateError) throw cashUpdateError;
-
-    if (!updatedRows || updatedRows.length === 0) {
-      const { error: cashInsertError } = await supabase.from('cash_on_hand').insert({
-        user_id: userId, card_id: cardId, current_balance: newBalance
-      });
-      if (cashInsertError) throw cashInsertError;
-    }
-
     const { data: ledgerRow, error: cashLedgerError } = await supabase.from('cash_on_hand_ledger').insert({
       card_id: cardId, user_id: userId, amount: amt, transaction_type: type,
       remarks: note, transaction_date: new Date().toISOString(),
@@ -491,9 +482,7 @@ export default function TransactionsPage() {
     return ledgerRow?.id || null;
   }
 
-  // পুরনো family-cascading deductBillCash() এর বদলে — ইউজার নিজে যে কার্ড+amount
-  // বেছেছে ঠিক সেখান থেকেই কাটা হবে, কোনো implicit family fallback নেই।
-  // linkedCardTxId: bill payment-এর card_transaction.id — cash_on_hand_ledger-এ link সংরক্ষণের জন্য
+  // ইউজার নিজে যে কার্ড+amount বেছেছে ঠিক সেখান থেকেই লেজার এন্ট্রি দেওয়া হবে
   async function deductBillCashFromSources(userId: string, sources: { cardId: string; amount: number }[], note: string, linkedCardTxId?: string | null) {
     for (const src of sources) {
       if (src.amount > 0) {
@@ -502,36 +491,46 @@ export default function TransactionsPage() {
     }
   }
 
+  // FIFO Logic: সবচেয়ে পুরনো বকেয়া বিল (unpaid/partially_paid) খুঁজে সেখানে পেমেন্ট জমা করা হবে
   async function processBillPayment(cardId: string, amt: number, txDate: string): Promise<{ cycleId: string | null; status: string | null; remainingDue: number }> {
     const result: { cycleId: string | null; status: string | null; remainingDue: number } = { cycleId: null, status: null, remainingDue: 0 };
-    const txDateObj = new Date(txDate);
-    const startOfMonth = new Date(txDateObj.getFullYear(), txDateObj.getMonth(), 1).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-    const endOfMonth = new Date(txDateObj.getFullYear(), txDateObj.getMonth() + 1, 0).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 
-    const { data: cycles } = await supabase.from('billing_cycles').select('*')
-      .eq('card_id', cardId).gte('billing_month', startOfMonth).lte('billing_month', endOfMonth);
+    // ১. প্রথমে এই কার্ডের সবচেয়ে পুরনো বকেয়া বিল (FIFO) খুঁজুন
+    const { data: dueCycles } = await supabase.from('billing_cycles').select('*')
+      .eq('card_id', cardId)
+      .in('status', ['unpaid', 'partially_paid'])
+      .order('billing_month', { ascending: true });
 
-    if (cycles && cycles.length > 0) {
-      const cycle = cycles[0];
-      const generatedAmt = Number(cycle.generated_amount);
-      const paidAmt = Number(cycle.paid_amount);
+    let targetCycle = dueCycles && dueCycles.length > 0 ? dueCycles[0] : null;
 
-      if (paidAmt < generatedAmt) {
-        const newPaidAmt = paidAmt + amt;
-        let cycleStatus = cycle.status;
-
-        if (newPaidAmt >= generatedAmt) {
-            cycleStatus = 'paid';
-            result.remainingDue = 0;
-        } else if (newPaidAmt > 0) {
-            cycleStatus = 'partially_paid';
-            result.remainingDue = generatedAmt - newPaidAmt;
-        }
-
-        await supabase.from('billing_cycles').update({ paid_amount: newPaidAmt, status: cycleStatus }).eq('id', cycle.id);
-        result.cycleId = cycle.id;
-        result.status = cycleStatus;
+    // ২. যদি কোনো বকেয়া বিল না থাকে, তবে সর্বশেষ বিল সাইকেলটি নিন (অ্যাডভান্স পেমেন্ট)
+    if (!targetCycle) {
+      const { data: latestCycles } = await supabase.from('billing_cycles').select('*')
+        .eq('card_id', cardId)
+        .order('billing_month', { ascending: false })
+        .limit(1);
+      if (latestCycles && latestCycles.length > 0) {
+        targetCycle = latestCycles[0];
       }
+    }
+
+    if (targetCycle) {
+      const generatedAmt = Number(targetCycle.generated_amount);
+      const paidAmt = Number(targetCycle.paid_amount);
+      const newPaidAmt = paidAmt + amt;
+      let cycleStatus = targetCycle.status;
+
+      if (newPaidAmt >= generatedAmt) {
+        cycleStatus = 'paid';
+        result.remainingDue = 0;
+      } else if (newPaidAmt > 0) {
+        cycleStatus = 'partially_paid';
+        result.remainingDue = generatedAmt - newPaidAmt;
+      }
+
+      await supabase.from('billing_cycles').update({ paid_amount: newPaidAmt, status: cycleStatus }).eq('id', targetCycle.id);
+      result.cycleId = targetCycle.id;
+      result.status = cycleStatus;
     }
     return result;
   };
@@ -563,12 +562,10 @@ export default function TransactionsPage() {
     const cardDataPayload = activeCardObj ? { card_name: activeCardObj.card_name, last_4_digits: activeCardObj.last_4_digits } : undefined;
     let billResult: { cycleId: string | null; status: string | null; remainingDue: number } = { cycleId: null, status: null, remainingDue: 0 };
 
-    // বিল-পে-এর cash অংশ ও pocket অংশ (multi-source থেকে)
-    const billCashAmt = txType === 'bill' && billMethod === 'cash_on_hand' ? cashAllocatedTotal : 0;
-    const billPocketAmt = txType === 'bill' ? pocketSplitAmt : 0;
-    const billIsSplitting = billCashAmt > 0 && billPocketAmt > 0;
+    // বিল-পে বা স্পেন্ড-এর cash breakdown (শুধু cash_on_hand হলে)
     const isSpendCash = txType === 'spend' && spendMethod === 'cash_on_hand';
-    const breakdownForInsert = (billCashAmt > 0 || isSpendCash) ? validCashSources.map(s => ({ card_id: s.cardId, amount: s.amount })) : null;
+    const isBillCash = txType === 'bill' && billMethod === 'cash_on_hand';
+    const breakdownForInsert = (isBillCash || isSpendCash) ? validCashSources.map(s => ({ card_id: s.cardId, amount: s.amount })) : null;
 
     setIsModalOpen(false);
 
@@ -624,32 +621,19 @@ export default function TransactionsPage() {
         const t: any = { id: `temp-r-${Date.now()}`, user_id: finalActingUserId, amount: -amtNum, spend_type: 'repayment', payment_method: billMethod, remarks: "Debt Cleared" + (remarks ? `: ${remarks}` : ''), spend_date: finalDate, profiles: profileData, card_id: activeCardId, cards: cardDataPayload };
         setSpends(prev => [t, ...prev]);
       }
-      if (billIsSplitting) {
-        if (billCashAmt > 0) {
-          const t: any = { id: `temp-cb-${Date.now()}`, type: 'bill_payment', amount: billCashAmt, status: 'settled', transaction_date: finalDate, payment_method: 'cash_on_hand', profiles: profileData, remarks, card_id: activeCardId, cards: cardDataPayload, cash_source_breakdown: breakdownForInsert };
-          setTransactions(prev => [t, ...prev]);
-          validCashSources.forEach(s => {
-            setUserCardCashMap(prev => ({
-              ...prev,
-              [finalActingUserId]: { ...(prev[finalActingUserId] || {}), [s.cardId]: (prev[finalActingUserId]?.[s.cardId] || 0) - s.amount }
-            }));
-          });
-        }
-        if (billPocketAmt > 0) {
-          const t: any = { id: `temp-pb-${Date.now()}`, type: 'bill_payment', amount: billPocketAmt, status: 'settled', transaction_date: finalDate, payment_method: 'own_pocket', profiles: profileData, remarks, card_id: activeCardId, cards: cardDataPayload };
-          setTransactions(prev => [t, ...prev]);
-        }
-      } else {
-        const t: any = { id: `temp-b-${Date.now()}`, type: 'bill_payment', amount: amtNum, status: 'settled', transaction_date: finalDate, payment_method: billMethod, profiles: profileData, remarks, card_id: activeCardId, cards: cardDataPayload, cash_source_breakdown: billMethod === 'cash_on_hand' ? breakdownForInsert : undefined };
+      if (billMethod === "cash_on_hand") {
+        const t: any = { id: `temp-cb-${Date.now()}`, type: 'bill_payment', amount: amtNum, status: 'settled', transaction_date: finalDate, payment_method: 'cash_on_hand', profiles: profileData, remarks, card_id: activeCardId, cards: cardDataPayload, cash_source_breakdown: breakdownForInsert };
         setTransactions(prev => [t, ...prev]);
-        if (billMethod === "cash_on_hand") {
-          validCashSources.forEach(s => {
-            setUserCardCashMap(prev => ({
-              ...prev,
-              [finalActingUserId]: { ...(prev[finalActingUserId] || {}), [s.cardId]: (prev[finalActingUserId]?.[s.cardId] || 0) - s.amount }
-            }));
-          });
-        }
+        validCashSources.forEach(s => {
+          setUserCardCashMap(prev => ({
+            ...prev,
+            [finalActingUserId]: { ...(prev[finalActingUserId] || {}), [s.cardId]: (prev[finalActingUserId]?.[s.cardId] || 0) - s.amount }
+          }));
+        });
+        setUserCashMap(prev => ({ ...prev, [finalActingUserId]: (prev[finalActingUserId] || 0) - amtNum }));
+      } else {
+        const t: any = { id: `temp-pb-${Date.now()}`, type: 'bill_payment', amount: amtNum, status: 'settled', transaction_date: finalDate, payment_method: 'own_pocket', profiles: profileData, remarks, card_id: activeCardId, cards: cardDataPayload };
+        setTransactions(prev => [t, ...prev]);
       }
       if (activePrimaryId) setFamilyLimitsMap(prev => ({ ...prev, [activePrimaryId]: prev[activePrimaryId] + amtNum }));
     }
@@ -692,47 +676,35 @@ export default function TransactionsPage() {
 
         let createdBillTxId: string | null = null;
 
-        if (billIsSplitting) {
-          if (billCashAmt > 0) {
-            const { data: billTxCash } = await supabase.from('card_transactions').insert({ amount: billCashAmt, type: 'bill_payment', status: 'settled', transaction_date: finalDate, recorded_by: finalActingUserId, payment_method: 'cash_on_hand', remarks, card_id: activeCardId, billing_cycle_id: activeCycleId, cash_source_breakdown: breakdownForInsert }).select('id').single();
-            createdBillTxId = billTxCash?.id || null;
-            await deductBillCashFromSources(finalActingUserId, validCashSources, `Bill payment ${remarks ? '- ' + remarks : ''}`, billTxCash?.id || null);
-          }
-          if (billPocketAmt > 0) {
-            const { data: billTxPocket } = await supabase.from('card_transactions').insert({ amount: billPocketAmt, type: 'bill_payment', status: 'settled', transaction_date: finalDate, recorded_by: finalActingUserId, payment_method: 'own_pocket', remarks, card_id: activeCardId, billing_cycle_id: activeCycleId }).select('id').single();
-            if (!createdBillTxId) createdBillTxId = billTxPocket?.id || null;
-            await supabase.from('pocket_advances_ledger').insert({
-              user_id: finalActingUserId,
-              card_id: activeCardId,
-              amount: -billPocketAmt,
-              entry_type: 'advance',
-              transaction_date: finalDate,
-              linked_card_transaction_id: billTxPocket?.id || null,
-              remarks: `Card bill payment advanced from pocket ${remarks ? '- ' + remarks : ''}`
-            });
-            const { data: curAdv } = await supabase.from('pocket_advances').select('current_balance').eq('user_id', finalActingUserId).eq('card_id', activeCardId).maybeSingle();
-            const nextAdv = (Number(curAdv?.current_balance) || 0) - billPocketAmt;
-            await supabase.from('pocket_advances').upsert({ user_id: finalActingUserId, card_id: activeCardId, current_balance: nextAdv });
-          }
-        } else {
-          const { data: billTx } = await supabase.from('card_transactions').insert({ amount: amtNum, type: 'bill_payment', status: 'settled', transaction_date: finalDate, recorded_by: finalActingUserId, payment_method: billMethod, remarks, card_id: activeCardId, billing_cycle_id: activeCycleId, cash_source_breakdown: billMethod === 'cash_on_hand' ? breakdownForInsert : null }).select('id').single();
-          createdBillTxId = billTx?.id || null;
-          if (billMethod === "cash_on_hand") {
-            await deductBillCashFromSources(finalActingUserId, validCashSources, `Bill payment ${remarks ? '- ' + remarks : ''}`, billTx?.id || null);
-          } else if (billMethod === "own_pocket") {
-            await supabase.from('pocket_advances_ledger').insert({
-              user_id: finalActingUserId,
-              card_id: activeCardId,
-              amount: -amtNum,
-              entry_type: 'advance',
-              transaction_date: finalDate,
-              linked_card_transaction_id: billTx?.id || null,
-              remarks: `Card bill payment advanced from pocket ${remarks ? '- ' + remarks : ''}`
-            });
-            const { data: curAdv } = await supabase.from('pocket_advances').select('current_balance').eq('user_id', finalActingUserId).eq('card_id', activeCardId).maybeSingle();
-            const nextAdv = (Number(curAdv?.current_balance) || 0) - amtNum;
-            await supabase.from('pocket_advances').upsert({ user_id: finalActingUserId, card_id: activeCardId, current_balance: nextAdv });
-          }
+        const { data: billTx } = await supabase.from('card_transactions').insert({
+          amount: amtNum,
+          type: 'bill_payment',
+          status: 'settled',
+          transaction_date: finalDate,
+          recorded_by: finalActingUserId,
+          payment_method: billMethod,
+          remarks,
+          card_id: activeCardId,
+          billing_cycle_id: activeCycleId,
+          cash_source_breakdown: billMethod === 'cash_on_hand' ? breakdownForInsert : null
+        }).select('id').single();
+        createdBillTxId = billTx?.id || null;
+
+        if (billMethod === "cash_on_hand") {
+          await deductBillCashFromSources(finalActingUserId, validCashSources, `Bill payment ${remarks ? '- ' + remarks : ''}`, billTx?.id || null);
+        } else if (billMethod === "own_pocket") {
+          await supabase.from('pocket_advances_ledger').insert({
+            user_id: finalActingUserId,
+            card_id: activeCardId,
+            amount: -amtNum,
+            entry_type: 'advance',
+            transaction_date: finalDate,
+            linked_card_transaction_id: billTx?.id || null,
+            remarks: `Card bill payment advanced from pocket ${remarks ? '- ' + remarks : ''}`
+          });
+          const { data: curAdv } = await supabase.from('pocket_advances').select('current_balance').eq('user_id', finalActingUserId).eq('card_id', activeCardId).maybeSingle();
+          const nextAdv = (Number(curAdv?.current_balance) || 0) - amtNum;
+          await supabase.from('pocket_advances').upsert({ user_id: finalActingUserId, card_id: activeCardId, current_balance: nextAdv });
         }
 
         if (isDebtRepayment) {
