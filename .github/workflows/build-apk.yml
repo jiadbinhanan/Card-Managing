@@ -49,8 +49,7 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY || 'dummy_for_build' }}
           NEXT_TELEMETRY_DISABLED: 1
         run: |
-          pnpm build
-          pnpm cap sync android
+          pnpm cap:build
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4

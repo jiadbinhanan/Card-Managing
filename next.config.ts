@@ -15,12 +15,14 @@ const replCoVariants = replitDomains
 const allowedDevOrigins = [...new Set([...replitDomains, ...replCoVariants])];
 
 const nextConfig: NextConfig = {
+  output: process.env.CAPACITOR_BUILD === 'true' ? 'export' : undefined,
   reactStrictMode: true,
   typescript: {
     ignoreBuildErrors: false,
   },
   allowedDevOrigins,
   images: {
+    unoptimized: process.env.CAPACITOR_BUILD === 'true' ? true : undefined,
     remotePatterns: [
       {
         protocol: 'https',

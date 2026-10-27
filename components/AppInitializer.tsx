@@ -3,9 +3,17 @@
 import { useEffect } from "react";
 import { useAuthStore } from "@/store/authStore";
 import { supabase } from "@/lib/supabase";
+import { Capacitor } from "@capacitor/core";
+import { StatusBar, Style } from "@capacitor/status-bar";
 
 export function AppInitializer() {
   useEffect(() => {
+    // 0. Initialize native Android Status Bar style (#030014 background + white text/icons)
+    if (Capacitor.isNativePlatform()) {
+      StatusBar.setStyle({ style: Style.Dark }).catch(() => {});
+      StatusBar.setBackgroundColor({ color: "#030014" }).catch(() => {});
+    }
+
     // 1. Kick off background auth & cards initialization on initial app load
     useAuthStore.getState().initAuth();
 

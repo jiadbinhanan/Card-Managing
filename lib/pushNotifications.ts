@@ -106,12 +106,19 @@ export async function initCapacitorPush(
   }
 }
 
+const getApiBaseUrl = () => {
+  if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
+    return 'https://credics.vercel.app';
+  }
+  return '';
+};
+
 /**
  * Sends a push alert through our backend API
  */
 export async function sendPushAlert(payload: PushAlertPayload): Promise<boolean> {
   try {
-    const res = await fetch('/api/send-push', {
+    const res = await fetch(`${getApiBaseUrl()}/api/send-push`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),

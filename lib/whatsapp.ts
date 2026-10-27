@@ -1,3 +1,12 @@
+import { Capacitor } from '@capacitor/core';
+
+const getApiBaseUrl = () => {
+  if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
+    return 'https://credics.vercel.app';
+  }
+  return '';
+};
+
 export const sendWhatsAppAlert = async (
   phone: string,
   templateName: string,
@@ -9,7 +18,7 @@ export const sendWhatsAppAlert = async (
     // Array হলে components, object হলে variables হিসেবে পাঠাও
     const isComponents = Array.isArray(variablesOrComponents);
 
-    const res = await fetch('/api/send-whatsapp', {
+    const res = await fetch(`${getApiBaseUrl()}/api/send-whatsapp`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

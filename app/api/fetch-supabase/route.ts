@@ -5,6 +5,8 @@ import path from "path";
 
 const HUB_SECRET = process.env.HUB_SECRET;
 
+export const dynamic = 'force-static';
+
 export async function GET(req: NextRequest) {
   const authHeader = req.headers.get("authorization");
   if (authHeader !== `Bearer ${HUB_SECRET}`) {
