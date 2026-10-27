@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { BottomNav } from "@/components/BottomNav";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { sendWhatsAppAlert } from "@/lib/whatsapp";
 import { sendPushAlert } from "@/lib/pushNotifications";
@@ -74,6 +75,7 @@ function SmokeText({ text, className = "" }: { text: string; className?: string 
 }
 
 export default function Dashboard() {
+  const router = useRouter();
   const [userName, setUserName] = useState<string>("Loading...");
   const [firstName, setFirstName] = useState<string>("");
   const [userAvatar, setUserAvatar] = useState<string>("");
@@ -144,7 +146,18 @@ export default function Dashboard() {
   };
 
   const fetchDashboardData = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
+    const { data: { session } } = await supabase.auth.getSession();
+    let user: any = session?.user;
+    if (!user) {
+      const userRes = await supabase.auth.getUser().catch(() => ({ data: { user: null } }));
+      user = userRes.data.user;
+    }
+
+    if (!user) {
+      router.replace('/login');
+      return;
+    }
+
     let currentFName = "";
     if (user) {
       setCurrentUser(user);
