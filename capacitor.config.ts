@@ -6,9 +6,8 @@ const config: CapacitorConfig = {
   webDir: 'public',
   server: {
     androidScheme: 'https',
-    // প্রোডাকশন লাইভ ওয়েব ডোমেইন থাকলে নিচে কমেন্ট তুলে দিয়ে আপনার ডোমেইন দিন:
-    // url: 'https://credics.vercel.app',
-    // cleartext: true,
+    url: 'https://credics.vercel.app',
+    cleartext: true,
   },
   plugins: {
     PushNotifications: {
