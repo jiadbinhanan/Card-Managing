@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Credics</string>
+    <string name="title_activity_main">Credics</string>
+    <string name="package_name">com.credics.app</string>
+    <string name="custom_url_scheme">com.credics.app</string>
+</resources>

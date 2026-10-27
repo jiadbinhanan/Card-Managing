@@ -16,6 +16,7 @@ import { BottomNav } from "@/components/BottomNav";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { sendWhatsAppAlert } from "@/lib/whatsapp";
+import { sendPushAlert } from "@/lib/pushNotifications";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import DashboardQRs from "./qrs";
@@ -336,6 +337,17 @@ export default function Dashboard() {
            });
 
            await Promise.all(alertPromises);
+
+           // 🔔 অ্যান্ড্রয়েড পিওর পুশ নোটিফিকেশন ডিসপ্যাচ
+           sendPushAlert({
+             title: `📅 নতুন বিল স্টেটমেন্ট: ৳${generated}`,
+             body: `${selectedCard.card_name} (${selectedCard.last_4_digits}) এর ${billMonthName} মাসের বিল জেনারেট হয়েছে। ডিউ ডেট: ${dueDay} তারিখ।`,
+             inAppTitle: `📅 কার্ড বিল অ্যালার্ট (${selectedCard.card_name})`,
+             inAppBody: `${billMonthName} মাসের বিল ৳${generated} জেনারেট হয়েছে। শেষ পরিশোধের তারিখ: ${dueDay}।`,
+             url: "/dashboard",
+             type: "bill_entry",
+             data: { cardName: selectedCard.card_name, billAmount: generated, dueDate: dueDay, month: billMonthName }
+           }).catch(err => console.error("Failed to send push for bill alert:", err));
          }
 
          setIsBillModalOpen(false);

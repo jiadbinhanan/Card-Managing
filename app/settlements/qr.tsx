@@ -22,6 +22,7 @@ import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase";
 import { sendWhatsAppAlert } from "@/lib/whatsapp";
+import { sendPushAlert } from "@/lib/pushNotifications";
 
 interface QR {
   id: string;
@@ -407,6 +408,17 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
             await sendWhatsAppAlert(cleanPhone, "rotation_withdraw_alert", safeVars);
           }
         }
+
+        // 🔔 অ্যান্ড্রয়েড পিওর পুশ নোটিফিকেশন ডিসপ্যাচ
+        sendPushAlert({
+          title: `🔄 কিউআর উইথড্রয়াল: ৳${totalAmt}`,
+          body: `${paymentCard?.card_name || 'Card'} (${paymentCard?.last_4_digits || '0000'}) থেকে ৳${totalAmt} তোলা হয়েছে।`,
+          inAppTitle: `🔄 কিউআর উইথড্রয়াল (${selectedQr.merchant_name})`,
+          inAppBody: `${currentUser.name} কর্তৃক ৳${totalAmt} তোলা হয়েছে। বর্তমান ব্যালেন্স: ৳${currentBal}।`,
+          url: "/settlements",
+          type: "rotation_withdraw",
+          data: { amount: totalAmt, cardName: paymentCard?.card_name, balance: currentBal }
+        }).catch(err => console.error("Failed to send push for QR withdraw:", err));
 
         // 2. SCHEDULE COOLING PERIOD ALERT (24h 5m later) via QStash
         const coolingEndTime = new Date(Date.now() + (24 * 60 * 60 * 1000) + (5 * 60 * 1000));

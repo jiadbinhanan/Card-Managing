@@ -12,3 +12,20 @@ public/workbox-*.js
 .agents/
 .Brain/
 supabase/.temp/
+
+# Firebase Service Account Keys & Secrets
+*-firebase-adminsdk-*.json
+service-account*.json
+*.keystore
+*.jks
+
+# Android Local & Build Outputs
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/*.iml
+android/app/*.iml
+*.apk
+*.aab

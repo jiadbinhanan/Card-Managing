@@ -22,6 +22,7 @@ import { BottomNav } from "@/components/BottomNav";
 import { supabase } from "@/lib/supabase";
 import Link from "next/link";
 import { sendWhatsAppAlert } from "@/lib/whatsapp";
+import { sendPushAlert } from "@/lib/pushNotifications";
 import QRTab from "./qr";
 import TransactionTraceInline, { type TraceTarget } from "@/components/TransactionTraceInline";
 
@@ -476,6 +477,17 @@ export default function SettlementsPage() {
               await sendWhatsAppAlert(cleanPhone, "rotation_withdraw_alert", safeVars);
            }
          }
+
+         // 🔔 অ্যান্ড্রয়েড পিওর পুশ নোটিফিকেশন ডিসপ্যাচ
+         sendPushAlert({
+           title: `🔄 রোটেশন উইথড্রয়াল: ৳${manualAmount}`,
+           body: `${manualCard?.card_name || 'Card'} (${manualCard?.last_4_digits || '0000'}) থেকে ৳${manualAmount} তোলা হয়েছে।`,
+           inAppTitle: `🔄 রোটেশন উইথড্রয়াল (${qrInfo ? "QR" : "Manual"})`,
+           inAppBody: `${currentUser?.name || '-'} কর্তৃক ৳${manualAmount} তোলা হয়েছে। বর্তমান ব্যালেন্স: ৳${currentBal}।`,
+           url: "/settlements",
+           type: "rotation_withdraw",
+           data: { amount: manualAmount, cardName: manualCard?.card_name, balance: currentBal }
+         }).catch(err => console.error("Failed to send push for rotation withdraw:", err));
 
          // Scheduled cooling alert via QStash (24h 5m later)
          const coolingEndTime = new Date(Date.now() + (24 * 60 * 60 * 1000) + (5 * 60 * 1000));

@@ -1,4 +1,5 @@
 import { sendWhatsAppAlert } from "@/lib/whatsapp";
+import { sendPushAlert } from "@/lib/pushNotifications";
 
 // --- Interfaces ---
 export interface Profile {
@@ -66,6 +67,17 @@ export const sendLentIssueAlert = (
     sendWhatsAppAlert(cleanPhone, "lent_issue_alert", alertComponents)
       .catch(err => console.error(`Failed to send lent_issue_alert to ${cleanPhone}:`, err));
   });
+
+  // 🔔 অ্যান্ড্রয়েড পিওর পুশ নোটিফিকেশন ডিসপ্যাচ (স্ক্রিন লক vs ইন-অ্যাপ ডুয়েল মেসেজ)
+  sendPushAlert({
+    title: `💳 নতুন লোন প্রদান: ৳${amount}`,
+    body: `${borrowerName} কে ৳${amount} লোন দেওয়া হয়েছে (${sourceName})। ডিউ তারিখ: ${dueDate}।`,
+    inAppTitle: `💳 লোন প্রদান এন্ট্রি (${borrowerName})`,
+    inAppBody: `${entryUserName} কর্তৃক ৳${amount} ঋণ দেওয়া হয়েছে। বর্তমান ব্যালেন্স: ৳${remainingBalance}। মোট বকেয়া: ৳${totalDueLent}।`,
+    url: "/lents",
+    type: "lent_issue",
+    data: { amount, borrowerName, sourceName, entryUserName }
+  }).catch(err => console.error("Failed to send push for lent_issue_alert:", err));
 };
 
 /**
@@ -123,4 +135,15 @@ export const sendLentRecoveryAlert = (
     sendWhatsAppAlert(cleanPhone, "lent_recovery_alert", alertComponents)
       .catch(err => console.error(`Failed to send lent_recovery_alert to ${cleanPhone}:`, err));
   });
+
+  // 🔔 অ্যান্ড্রয়েড পিওর পুশ নোটিফিকেশন ডিসপ্যাচ (স্ক্রিন লক vs ইন-অ্যাপ ডুয়েল মেসেজ)
+  sendPushAlert({
+    title: `💵 লোন আদায়: ৳${amount}`,
+    body: `${borrowerName} এর থেকে ৳${amount} লোন আদায় হয়েছে (${fullOrPartial})।`,
+    inAppTitle: `💵 লোন আদায় সম্পন্ন (${borrowerName})`,
+    inAppBody: `${entryUserName} কর্তৃক ৳${amount} সংগ্রহ হয়েছে। অবশিষ্ট বকেয়া: ৳${remainingDue}। বর্তমান ব্যালেন্স: ৳${currentBal}।`,
+    url: "/lents",
+    type: "lent_recovery",
+    data: { amount, borrowerName, fullOrPartial, entryUserName }
+  }).catch(err => console.error("Failed to send push for lent_recovery_alert:", err));
 };

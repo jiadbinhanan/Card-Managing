@@ -41,10 +41,15 @@ export const metadata: Metadata = {
   },
 };
 
+import { InAppNotificationBanner } from '@/components/InAppNotificationBanner';
+import { AppInitializer } from '@/components/AppInitializer';
+
 export default function RootLayout({children}: {children: React.ReactNode}) {
   return (
     <html lang="en" className={cn("font-sans dark", geist.variable, spaceGrotesk.variable)}>
       <body suppressHydrationWarning>
+        <AppInitializer />
+        <InAppNotificationBanner />
         {children}
         <Analytics />
         <SpeedInsights />
