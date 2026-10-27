@@ -10,6 +10,7 @@ export function AppInitializer() {
   useEffect(() => {
     // 0. Initialize native Android Status Bar style (#030014 background + white text/icons)
     if (Capacitor.isNativePlatform()) {
+      StatusBar.setOverlaysWebView({ overlay: false }).catch(() => {});
       StatusBar.setStyle({ style: Style.Dark }).catch(() => {});
       StatusBar.setBackgroundColor({ color: "#030014" }).catch(() => {});
     }

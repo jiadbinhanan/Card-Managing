@@ -435,7 +435,7 @@ export default function Dashboard() {
           initial={{ opacity: 0, y: 24 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
-          className="relative p-5 bg-gradient-to-b from-white/[0.06] to-transparent border border-white/10 rounded-[32px] sm:rounded-[36px] backdrop-blur-xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] flex flex-col justify-between min-h-[350px] overflow-hidden"
+          className="relative pt-6 pb-5 px-5 bg-gradient-to-b from-white/[0.06] to-transparent border border-white/10 rounded-[32px] sm:rounded-[36px] backdrop-blur-xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] flex flex-col justify-between min-h-[350px]"
         >
           {/* Top Edge Glow */}
           <div className="absolute top-0 left-1/2 -translate-x-1/2 w-40 h-1 bg-gradient-to-r from-transparent via-[#0ea5e9] to-transparent opacity-50 blur-[2px]" />
