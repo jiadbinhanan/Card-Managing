@@ -1,10 +1,7 @@
 name: Build Android APK
 
 on:
-  push:
-    branches:
-      - main
-  workflow_dispatch: # Allows manual trigger from GitHub Actions UI
+  workflow_dispatch: # Manual trigger only from GitHub Actions UI
 
 jobs:
   build-apk:
@@ -70,21 +67,39 @@ jobs:
       - name: Make Gradlew Executable
         run: chmod +x android/gradlew
 
-      - name: Build Debug APK with Gradle
+      - name: Decode Release Keystore (if provided via Secret)
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
         run: |
-          cd android
-          ./gradlew assembleDebug --no-daemon
-          cd ..
-          if [ -f "android/app/build/outputs/apk/debug/credics.apk" ]; then
-            echo "✅ credics.apk generated successfully"
-          elif [ -f "android/app/build/outputs/apk/debug/app-debug.apk" ]; then
-            cp android/app/build/outputs/apk/debug/app-debug.apk android/app/build/outputs/apk/debug/credics.apk
-            echo "✅ Copied app-debug.apk to credics.apk"
+          if [ -n "$RELEASE_KEYSTORE_BASE64" ]; then
+            echo "Decoding keystore from RELEASE_KEYSTORE_BASE64 secret..."
+            echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > android/app/credics-release.jks
+          elif [ -f "android/app/credics-release.jks" ]; then
+            echo "Using repository credics-release.jks"
+          else
+            echo "Error: No release keystore found!"
+            exit 1
           fi
 
-      - name: Upload Debug APK Artifact
+      - name: Build Signed Release APK with Gradle
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD || 'credics123456' }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS || 'credics' }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'credics123456' }}
+        run: |
+          cd android
+          ./gradlew assembleRelease --no-daemon
+          cd ..
+          if [ -f "android/app/build/outputs/apk/release/credics.apk" ]; then
+            echo "✅ credics.apk (release) generated successfully"
+          elif [ -f "android/app/build/outputs/apk/release/app-release.apk" ]; then
+            cp android/app/build/outputs/apk/release/app-release.apk android/app/build/outputs/apk/release/credics.apk
+            echo "✅ Copied app-release.apk to credics.apk"
+          fi
+
+      - name: Upload Release APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: credics
-          path: android/app/build/outputs/apk/debug/credics.apk
+          path: android/app/build/outputs/apk/release/credics.apk
           retention-days: 14

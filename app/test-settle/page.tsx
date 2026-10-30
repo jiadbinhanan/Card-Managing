@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { BottomNav } from "@/components/BottomNav";
 import { supabase } from "@/lib/supabase";
 import { sendWhatsAppAlert } from "@/lib/whatsapp";
+import { sendPushAlert } from "@/lib/pushNotifications";
 import Link from "next/link";
 import QRTab from "./qr";
 
@@ -299,7 +300,17 @@ export default function TestSettlementsPage() {
            }
         }
 
-        alert("✅ [TEST MODE] Settlement Alert Sent Successfully!\nNo data was saved to Database.");
+        // 🔔 TEST MODE: Send Push Notification (Bypassing DB modification)
+        sendPushAlert({
+          title: `[TEST LAB] রোটেশন সেটেলমেন্ট টেস্ট: ৳${amtToSettle}`,
+          body: `${receiverProfile?.name || 'User'} কে ৳${amtToSettle} ক্যাশ হস্তান্তর টেস্ট করা হয়েছে (${targetCard?.card_name || 'Card'})।`,
+          inAppTitle: `[TEST] সেটেলমেন্ট টেস্ট ৳${amtToSettle}`,
+          inAppBody: `${targetCard?.card_name || 'Card'} এর ৳${amtToSettle} সেটেলমেন্ট টেস্ট সম্পন্ন।`,
+          url: "/settlements",
+          type: "general",
+        }).catch(err => console.error("Test Push Alert failed:", err));
+
+        alert("✅ [TEST MODE] ডাটাবেস পরিবর্তন ছাড়া সফলভাবে টেস্ট পুশ নোটিফিকেশন ও অ্যালার্ট পাঠানো হয়েছে!");
         setIsSettleModalOpen(false);
      } catch (error: any) {
         alert("Test Error: " + error.message);
@@ -351,7 +362,17 @@ export default function TestSettlementsPage() {
            }
          }
 
-         alert("✅ [TEST MODE] Manual Rotation Alert Sent Successfully!\nNo data was saved to Database.");
+         // 🔔 TEST MODE: Send Push Notification (Bypassing DB modification)
+         sendPushAlert({
+           title: `[TEST LAB] কার্ড রোটেশন টেস্ট: ৳${manualAmount}`,
+           body: `${manualCard?.card_name || 'Card'} দিয়ে ৳${manualAmount} উত্তোলন টেস্ট সম্পন্ন (${qrInfo ? qrInfo.merchant_name : 'Manual'})।`,
+           inAppTitle: `[TEST] রোটেশন টেস্ট ৳${manualAmount}`,
+           inAppBody: `${manualCard?.card_name || 'Card'} থেকে ৳${manualAmount} তোলা হয়েছে।`,
+           url: "/settlements",
+           type: "rotation_withdraw",
+         }).catch(err => console.error("Test Push Alert failed:", err));
+
+         alert("✅ [TEST MODE] ডাটাবেস পরিবর্তন ছাড়া সফলভাবে টেস্ট পুশ নোটিফিকেশন ও অ্যালার্ট পাঠানো হয়েছে!");
          setIsManualEntryOpen(false);
          setManualAmount(""); setManualRemarks(""); setManualQrId(""); 
      } catch(e: any) {

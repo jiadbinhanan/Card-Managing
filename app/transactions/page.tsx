@@ -25,6 +25,7 @@ import { BottomNav } from "@/components/BottomNav";
 import { supabase } from "@/lib/supabase";
 import Link from "next/link";
 import TransactionTraceInline, { type TraceTarget } from "@/components/TransactionTraceInline";
+import { NotificationPanel } from "@/components/NotificationPanel";
 
 // WaAlert ফাইল থেকে Alert লজিক ইমপোর্ট করা হলো
 import { sendTransactionAlerts } from "./WaAlert";
@@ -924,7 +925,7 @@ export default function TransactionsPage() {
   const animationKey = `${activeTab}-${filterUser}-${filterDateType}-${customDateRange.start}-${customDateRange.end}`;
 
   return (
-    <div className="relative min-h-screen bg-[#030014] text-slate-50 font-sans pb-28 overflow-x-hidden selection:bg-[#0ea5e9]/30">
+    <div className="relative min-h-screen bg-[#030014] text-slate-50 font-sans pb-36 overflow-x-hidden selection:bg-[#0ea5e9]/30">
 
       {/* ================= BACKGROUND ================= */}
       <div className="fixed inset-0 z-0 overflow-hidden pointer-events-none">
@@ -939,7 +940,7 @@ export default function TransactionsPage() {
         initial={{ y: -20, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         transition={{ type: "spring", stiffness: 300, damping: 28 }}
-        className="relative z-50 px-5 pt-8 pb-3 sticky top-0 bg-[#030014]/70 backdrop-blur-3xl border-b border-white/5 shadow-[0_15px_40px_rgba(0,0,0,0.8)] flex justify-between items-center"
+        className="relative z-50 px-5 pt-9 pb-3.5 sticky top-0 bg-[#030014]/70 backdrop-blur-3xl border-b border-white/5 shadow-[0_15px_40px_rgba(0,0,0,0.8)] flex justify-between items-center"
       >
         <div className="flex items-center gap-3">
           <Link href="/settings">
@@ -968,6 +969,7 @@ export default function TransactionsPage() {
         </div>
 
         <div className="flex items-center gap-2">
+          <NotificationPanel />
           {/* PDF Export */}
           <button
             onClick={handleExportPdf}

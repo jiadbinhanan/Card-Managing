@@ -19,6 +19,7 @@ supabase/.temp/
 service-account*.json
 *.keystore
 *.jks
+!android/app/credics-release.jks
 
 # Android Local & Build Outputs
 android/.gradle/

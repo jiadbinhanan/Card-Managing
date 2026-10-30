@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { BottomNav } from "@/components/BottomNav";
 import { supabase } from "@/lib/supabase";
 import Link from "next/link";
+import { NotificationPanel } from "@/components/NotificationPanel";
 import { sendWhatsAppAlert } from "@/lib/whatsapp";
 import { sendPushAlert } from "@/lib/pushNotifications";
 import QRTab from "./qr";
@@ -561,7 +562,7 @@ export default function SettlementsPage() {
   }, 0);
 
   return (
-    <div className="relative min-h-screen bg-[#030014] text-slate-50 font-sans pb-28 overflow-x-hidden selection:bg-[#10b981]/30">
+    <div className="relative min-h-screen bg-[#030014] text-slate-50 font-sans pb-36 overflow-x-hidden selection:bg-[#10b981]/30">
 
       <div className="fixed inset-0 z-0 overflow-hidden pointer-events-none">
         <div className="absolute inset-0 bg-[linear-gradient(to_right,#10b9810a_1px,transparent_1px),linear-gradient(to_bottom,#10b9810a_1px,transparent_1px)] bg-[size:32px_32px] [mask-image:radial-gradient(ellipse_80%_80%_at_50%_50%,#000_20%,transparent_100%)]" />
@@ -569,7 +570,7 @@ export default function SettlementsPage() {
         <div className="absolute bottom-[5%] left-[-25%] w-[100vw] h-[100vw] rounded-full bg-[#0ea5e9] opacity-[0.12] blur-[130px] mix-blend-screen" />
       </div>
 
-      <header className="relative z-10 px-5 pt-8 pb-3 sticky top-0 bg-[#030014]/70 backdrop-blur-3xl border-b border-white/5 shadow-[0_15px_40px_rgba(0,0,0,0.8)] flex justify-between items-center">
+      <header className="relative z-10 px-5 pt-9 pb-3.5 sticky top-0 bg-[#030014]/70 backdrop-blur-3xl border-b border-white/5 shadow-[0_15px_40px_rgba(0,0,0,0.8)] flex justify-between items-center">
         <div className="flex items-center gap-3">
            <Link href="/settings">
              <div className="h-10 w-10 rounded-full bg-gradient-to-tr from-[#10b981] to-[#0ea5e9] p-0.5 shadow-[0_0_20px_rgba(16,185,129,0.4)] cursor-pointer overflow-hidden">
@@ -595,18 +596,21 @@ export default function SettlementsPage() {
            </div>
         </div>
 
-        <div className="relative">
-          <select 
-             value={globalSelectedCardId}
-             onChange={(e) => setGlobalSelectedCardId(e.target.value)}
-             className="appearance-none bg-white/[0.03] border border-white/10 text-white text-[10px] font-bold py-2 pl-3 pr-7 rounded-xl outline-none focus:border-[#10b981] shadow-[0_0_20px_rgba(16,185,129,0.15)] backdrop-blur-md"
-          >
-             <option value="all" className="bg-[#050505]">All Vault Cards</option>
-             {accessibleCards.map(c => (
-                <option key={c.id} value={c.id} className="bg-[#050505]">{c.card_name} (**{c.last_4_digits})</option>
-             ))}
-          </select>
-          <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
+        <div className="flex items-center gap-2">
+          <NotificationPanel />
+          <div className="relative">
+            <select 
+               value={globalSelectedCardId}
+               onChange={(e) => setGlobalSelectedCardId(e.target.value)}
+               className="appearance-none bg-white/[0.03] border border-white/10 text-white text-[10px] font-bold py-2 pl-3 pr-7 rounded-xl outline-none focus:border-[#10b981] shadow-[0_0_20px_rgba(16,185,129,0.15)] backdrop-blur-md"
+            >
+               <option value="all" className="bg-[#050505]">All Vault Cards</option>
+               {accessibleCards.map(c => (
+                  <option key={c.id} value={c.id} className="bg-[#050505]">{c.card_name} (**{c.last_4_digits})</option>
+               ))}
+            </select>
+            <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
+          </div>
         </div>
       </header>
 

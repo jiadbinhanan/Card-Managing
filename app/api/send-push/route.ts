@@ -53,23 +53,41 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const app = getFirebaseAdminApp();
-    if (!app) {
-      console.warn(
-        "Firebase credentials not found in environment. Push notification skipped."
-      );
-      return NextResponse.json({
-        success: false,
-        warning: "FIREBASE_CREDENTIALS_MISSING",
-        message: "Firebase credentials not yet configured in .env",
-      });
-    }
-
-    // Connect to Supabase using service role to fetch active tokens
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
+
+    // Save notification to public.notifications table (with JSONB payload) for notification history panel
+    try {
+      await supabase.from("notifications").insert({
+        title,
+        body: messageBody,
+        category: type || "general",
+        payload: {
+          url,
+          inAppTitle,
+          inAppBody,
+          ...extraData,
+        },
+        is_read: false,
+      });
+    } catch (logErr) {
+      console.error("Failed to log notification to database:", logErr);
+    }
+
+    const app = getFirebaseAdminApp();
+    if (!app) {
+      console.warn(
+        "Firebase credentials not found in environment. Push notification skipped, but logged to database."
+      );
+      return NextResponse.json({
+        success: true,
+        loggedToHistory: true,
+        warning: "FIREBASE_CREDENTIALS_MISSING",
+        message: "Notification logged to history. Push skipped as Firebase is not configured in .env",
+      });
+    }
 
     let query = supabase
       .from("user_push_tokens")

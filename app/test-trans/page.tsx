@@ -29,6 +29,7 @@ import { Switch } from "@/components/ui/switch";
 import { BottomNav } from "@/components/BottomNav";
 import { supabase } from "@/lib/supabase";
 import Link from "next/link";
+import { sendPushAlert } from "@/lib/pushNotifications";
 
 // WaAlert ফাইল থেকে Alert লজিক ইমপোর্ট করা হলো
 import { sendTransactionAlerts } from "@/app/transactions/WaAlert";
@@ -415,10 +416,9 @@ export default function TestTransactionsPage() {
     setIsModalOpen(false);
 
     // ==========================================
-    // TEST MODE: DATABASE SYNC SKIPPED
+    // TEST MODE: DATABASE SYNC SKIPPED & PUSH TRIGGERED
     // ==========================================
-    console.log("TEST MODE: Bypassing actual database inserts.");
-    alert("Test Mode: Database sync bypassed. Only sending WhatsApp alerts.");
+    console.log("TEST MODE: Bypassing actual database inserts. Dispatching test notifications.");
 
     // MOCK BILL RESULT (Calculated from actual DB data without modifying it)
     let billResult = { status: 'paid', remainingDue: 0 };
@@ -428,6 +428,38 @@ export default function TestTransactionsPage() {
     }
 
     resetForm();
+
+    // 🔔 TEST MODE: Send Push Notification (Bypassing DB modification)
+    const sourceLabel = spendMethod === 'credit_card' ? (activeCardObj?.card_name || 'Card') : 'Cash on Hand';
+    let testTitle = `[TEST LAB] নতুন লেনদেন ৳${amtNum}`;
+    let testBody = `${currentUser?.name || 'User'} টেস্ট লেনদেন করেছেন (${sourceLabel})`;
+    let testType: any = "general";
+
+    if (txType === "bill") {
+      testTitle = `[TEST] বিল পেমেন্ট টেস্ট: ৳${amtNum}`;
+      testBody = `${activeCardObj?.card_name || 'Card'} এর ৳${amtNum} টেস্ট বিল রেকর্ড করা হয়েছে।`;
+      testType = "bill_entry";
+    } else if (txType === "rotate") {
+      const qrName = qrs.find(q => q.id === selectedQrId)?.merchant_name || 'QR';
+      testTitle = `[TEST] কার্ড রোটেশন টেস্ট: ৳${amtNum}`;
+      testBody = `${qrName} থেকে ${activeCardObj?.card_name || 'Card'} দিয়ে ৳${amtNum} টেস্ট রোটেশন হয়েছে।`;
+      testType = "rotation_withdraw";
+    } else if (txType === "spend") {
+      testTitle = `[TEST] খরচ এন্ট্রি টেস্ট: ৳${amtNum}`;
+      testBody = `${sourceLabel} থেকে ৳${amtNum} খরচ টেস্ট হয়েছে (${remarks || 'N/A'})।`;
+      testType = "general";
+    }
+
+    sendPushAlert({
+      title: testTitle,
+      body: testBody,
+      inAppTitle: testTitle,
+      inAppBody: testBody,
+      url: "/transactions",
+      type: testType,
+    }).catch(err => console.error("Test Push Alert failed:", err));
+
+    alert("✅ টেস্ট মোড: ডাটাবেসে কোনো ডাটা সেভ হয়নি। সফলভাবে টেস্ট পুশ নোটিফিকেশন পাঠানো হয়েছে!");
 
     // ==========================================
     // WHATSAPP ALERTS (Using Shared WaAlert)

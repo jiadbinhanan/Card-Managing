@@ -22,6 +22,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Button } from "@/components/ui/button";
 import DashboardQRs from "./qrs";
 import DashboardAnalytics from "./analytics";
+import { NotificationPanel } from "@/components/NotificationPanel";
 
 interface UserStat {
   id: string;
@@ -61,9 +62,9 @@ function SmokeText({ text, className = "" }: { text: string; className?: string 
       {text.split("").map((char, i) => (
         <motion.span
           key={i}
-          initial={{ opacity: 0, filter: "blur(10px)", y: 6 }}
-          animate={{ opacity: 1, filter: "blur(0px)", y: 0 }}
-          transition={{ delay: i * 0.04, duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+          initial={{ opacity: 0, y: 3 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: i * 0.03, duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
           className="inline-block bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent"
           style={{ whiteSpace: char === " " ? "pre" : "normal" }}
         >
@@ -378,18 +379,18 @@ export default function Dashboard() {
 
 
   return (
-    <div className="min-h-screen bg-[#030014] text-slate-50 font-sans pb-28 overflow-x-hidden selection:bg-[#0ea5e9]/30">
+    <div className="min-h-screen bg-[#030014] text-slate-50 font-sans pb-36 overflow-x-hidden selection:bg-[#0ea5e9]/30">
 
       {/* ── BACKGROUND ── */}
       <div className="fixed inset-0 z-0 overflow-hidden pointer-events-none">
         <div className="absolute inset-0 bg-[linear-gradient(to_right,#4f46e51a_1px,transparent_1px),linear-gradient(to_bottom,#4f46e51a_1px,transparent_1px)] bg-[size:32px_32px] [mask-image:radial-gradient(ellipse_80%_80%_at_50%_50%,#000_10%,transparent_100%)]" />
-        <motion.div animate={{ x: [0, 40, -40, 0], y: [0, -50, 50, 0] }} transition={{ duration: 25, repeat: Infinity, ease: "linear" }} className="absolute top-[-15%] left-[-15%] w-[80vw] h-[80vw] rounded-full bg-[#0ea5e9] opacity-[0.15] blur-[100px] mix-blend-screen" />
-        <motion.div animate={{ x: [0, -30, 30, 0], y: [0, 40, -40, 0] }} transition={{ duration: 20, repeat: Infinity, ease: "linear" }} className="absolute bottom-[20%] right-[-10%] w-[70vw] h-[70vw] rounded-full bg-[#a855f7] opacity-[0.15] blur-[120px] mix-blend-screen" />
-        <motion.div animate={{ scale: [1, 1.2, 1], opacity: [0.08, 0.15, 0.08] }} transition={{ duration: 8, repeat: Infinity }} className="absolute top-[40%] left-[20%] w-[50vw] h-[50vw] rounded-full bg-[#38bdf8] opacity-10 blur-[90px] mix-blend-screen" />
+        <div className="absolute top-[-10%] left-[-10%] w-[75vw] h-[75vw] rounded-full bg-[#0ea5e9]/15 blur-[80px] pointer-events-none" />
+        <div className="absolute bottom-[20%] right-[-10%] w-[65vw] h-[65vw] rounded-full bg-[#a855f7]/15 blur-[90px] pointer-events-none" />
+        <div className="absolute top-[40%] left-[20%] w-[45vw] h-[45vw] rounded-full bg-[#38bdf8]/10 blur-[70px] pointer-events-none" />
       </div>
 
       {/* ── HEADER ── */}
-      <header className="relative z-10 px-5 pt-8 pb-3 sticky top-0 bg-[#030014]/60 backdrop-blur-3xl border-b border-white/5 shadow-[0_15px_40px_rgba(0,0,0,0.6)]">
+      <header className="relative z-20 px-5 pt-9 pb-3.5 sticky top-0 bg-[#030014]/80 backdrop-blur-3xl border-b border-white/5 shadow-[0_15px_40px_rgba(0,0,0,0.6)]">
         <div className="max-w-md mx-auto flex justify-between items-center">
           <div className="flex items-center gap-3">
             <Link href="/settings">
@@ -409,9 +410,9 @@ export default function Dashboard() {
                   {["Live", "Status", "•", "Active"].map((word, i) => (
                     <motion.span
                       key={i}
-                      initial={{ opacity: 0, filter: "blur(6px)", y: 4 }}
-                      animate={{ opacity: 1, filter: "blur(0px)", y: 0 }}
-                      transition={{ delay: 0.2 + i * 0.07, duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+                      initial={{ opacity: 0, y: 3 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.15 + i * 0.05, duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
                       className="inline-block mr-[0.25em] bg-gradient-to-r from-emerald-400 via-cyan-400 to-emerald-400 bg-clip-text text-transparent"
                     >
                       {word}
@@ -425,18 +426,21 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div className="relative">
-            <select 
-               value={selectedCardId}
-               onChange={(e) => setSelectedCardId(e.target.value)}
-               className="appearance-none bg-white/[0.03] border border-white/10 text-white text-[10px] font-bold py-2 pl-3 pr-7 rounded-xl outline-none focus:border-[#0ea5e9] shadow-[0_0_20px_rgba(14,165,233,0.15)] backdrop-blur-md"
-            >
-               <option value="all" className="bg-[#050505]">All Vault Cards</option>
-               {accessibleCards.map(c => (
-                  <option key={c.id} value={c.id} className="bg-[#050505]">{c.card_name} (**{c.last_4_digits})</option>
-               ))}
-            </select>
-            <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
+          <div className="flex items-center gap-2">
+            <NotificationPanel />
+            <div className="relative">
+              <select 
+                 value={selectedCardId}
+                 onChange={(e) => setSelectedCardId(e.target.value)}
+                 className="appearance-none bg-white/[0.03] border border-white/10 text-white text-[10px] font-bold py-2 pl-3 pr-7 rounded-xl outline-none focus:border-[#0ea5e9] shadow-[0_0_20px_rgba(14,165,233,0.15)] backdrop-blur-md"
+              >
+                 <option value="all" className="bg-[#050505]">All Vault Cards</option>
+                 {accessibleCards.map(c => (
+                    <option key={c.id} value={c.id} className="bg-[#050505]">{c.card_name} (**{c.last_4_digits})</option>
+                 ))}
+              </select>
+              <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
+            </div>
           </div>
         </div>
       </header>
@@ -445,10 +449,10 @@ export default function Dashboard() {
 
         {/* ================= LIMIT RING & STATS (Split Layout) ================= */}
         <motion.section
-          initial={{ opacity: 0, y: 24 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
-          className="relative pt-6 pb-5 px-5 bg-gradient-to-b from-white/[0.06] to-transparent border border-white/10 rounded-[32px] sm:rounded-[36px] backdrop-blur-xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] flex flex-col justify-between min-h-[350px]"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.45, ease: "easeOut" }}
+          className="relative pt-6 pb-5 px-5 bg-gradient-to-b from-white/[0.06] to-transparent border border-white/10 rounded-[32px] sm:rounded-[36px] backdrop-blur-xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] flex flex-col justify-between min-h-[350px] isolate"
         >
           {/* Top Edge Glow */}
           <div className="absolute top-0 left-1/2 -translate-x-1/2 w-40 h-1 bg-gradient-to-r from-transparent via-[#0ea5e9] to-transparent opacity-50 blur-[2px]" />
@@ -509,7 +513,7 @@ export default function Dashboard() {
             </div>
 
             {/* GLOWING VERTICAL DIVIDER */}
-            <div className="w-[1px] h-[85%] bg-gradient-to-b from-transparent via-[#0ea5e9]/50 to-transparent shadow-[0_0_10px_rgba(14,165,233,0.6)]" />
+            <div className="w-[1px] self-stretch my-2 bg-gradient-to-b from-transparent via-[#0ea5e9]/60 to-transparent shadow-[0_0_10px_rgba(14,165,233,0.6)]" />
 
             {/* RIGHT COLUMN: In Transit + Users Cash */}
             <div className="w-[45%] flex flex-col justify-center gap-5 pl-3">
@@ -586,10 +590,10 @@ export default function Dashboard() {
 
         {/* ================= BILLING CYCLES ================= */}
         <motion.section
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1, duration: 0.5 }}
-          className="bg-gradient-to-br from-[#10b981]/10 to-[#0ea5e9]/5 border border-[#10b981]/20 rounded-[28px] p-5 backdrop-blur-2xl shadow-[0_10px_30px_rgba(16,185,129,0.15)] relative overflow-hidden"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.1, duration: 0.45, ease: "easeOut" }}
+          className="bg-gradient-to-br from-[#10b981]/10 to-[#0ea5e9]/5 border border-[#10b981]/20 rounded-[28px] p-5 backdrop-blur-2xl shadow-[0_10px_30px_rgba(16,185,129,0.15)] relative overflow-hidden isolate"
         >
           <div className="absolute top-0 right-0 w-32 h-32 bg-[#10b981]/20 rounded-full blur-[30px] pointer-events-none" />
 
@@ -610,7 +614,7 @@ export default function Dashboard() {
              </Button>
           </div>
 
-          <div className="space-y-3 relative z-10 border-t border-white/10 pt-4 max-h-72 overflow-y-auto custom-scrollbar">
+          <div className="space-y-3 relative z-10 border-t border-white/10 pt-4 max-h-72 overflow-y-auto custom-scrollbar isolate overscroll-contain">
             {activeBills.length > 0 ? activeBills.map((bill, idx) => {
                 const card = accessibleCards.find(c => c.id === bill.card_id);
                 const due = Number(bill.generated_amount) - Number(bill.paid_amount);
@@ -636,9 +640,9 @@ export default function Dashboard() {
                 return (
                   <motion.div
                     key={bill.id}
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: idx * 0.06 }}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: idx * 0.05, duration: 0.3 }}
                     className={`border rounded-2xl p-3 ${isPaid ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-white/[0.03] border-white/5'}`}
                   >
                     <div className="flex items-center justify-between mb-2">

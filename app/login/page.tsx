@@ -5,6 +5,7 @@ import { motion, AnimatePresence, Variants } from "motion/react";
 import { 
   ArrowRight, 
   ChevronLeft, 
+  ChevronDown,
   Lock, 
   Mail, 
   Sparkles, 
@@ -34,8 +35,8 @@ export default function LoginPage() {
   const [view, setView] = useState<ViewState>("login");
   const [activeTab, setActiveTab] = useState<LoginTab>("password");
 
-  // Form States
-  const [email, setEmail] = useState("");
+  // Form States - Default to first user
+  const [email, setEmail] = useState("jiadbinhanan@gmail.com");
   const [password, setPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [otp, setOtp] = useState("");
@@ -146,8 +147,9 @@ export default function LoginPage() {
 
   // ৩. ওটিপি ভেরিফাই করে লগইন
   const handleVerifyOtpLogin = async () => {
-    if (otp.trim().length !== 6) {
-      setError("অনুগ্রহ করে ৬ ডিজিটের ওটিপি কোডটি লিখুন।");
+    const trimmedOtp = otp.trim();
+    if (trimmedOtp.length !== 8 && trimmedOtp.length !== 6) {
+      setError("অনুগ্রহ করে ৮ ডিজিটের ওটিপি কোডটি লিখুন।");
       return;
     }
 
@@ -157,7 +159,7 @@ export default function LoginPage() {
     try {
       const { error } = await supabase.auth.verifyOtp({
         email: email.trim(),
-        token: otp.trim(),
+        token: trimmedOtp,
         type: 'email',
       });
 
@@ -201,8 +203,9 @@ export default function LoginPage() {
 
   // ৫. পাসওয়ার্ড রিসেট ওটিপি ভেরিফাই করা
   const handleVerifyResetOtp = async () => {
-    if (otp.trim().length !== 6) {
-      setError("অনুগ্রহ করে ৬ ডিজিটের ওটিপি কোডটি লিখুন।");
+    const trimmedOtp = otp.trim();
+    if (trimmedOtp.length !== 8 && trimmedOtp.length !== 6) {
+      setError("অনুগ্রহ করে ৮ ডিজিটের ওটিপি কোডটি লিখুন।");
       return;
     }
 
@@ -212,7 +215,7 @@ export default function LoginPage() {
     try {
       const { error } = await supabase.auth.verifyOtp({
         email: email.trim(),
-        token: otp.trim(),
+        token: trimmedOtp,
         type: 'recovery',
       });
 
@@ -341,23 +344,27 @@ export default function LoginPage() {
               {/* ── TAB 1: PASSWORD LOGIN ── */}
               {activeTab === "password" && (
                 <form onSubmit={handlePasswordLogin} className="space-y-4">
-                  {/* Email */}
+                  {/* Email Dropdown */}
                   <motion.div variants={itemVariants} className="space-y-1.5">
-                    <label htmlFor="login-email" className="text-[11px] font-bold text-slate-400 uppercase tracking-wider ml-1">
+                    <label htmlFor="login-email-select" className="text-[11px] font-bold text-slate-400 uppercase tracking-wider ml-1">
                       ইমেইল আইডি
                     </label>
                     <div className="relative">
-                      <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-                      <Input 
-                        id="login-email"
-                        type="email" 
+                      <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 pointer-events-none z-10" />
+                      <select 
+                        id="login-email-select"
                         value={email}
                         onChange={(e) => setEmail(e.target.value)}
-                        placeholder="yourname@gmail.com" 
-                        required
-                        autoComplete="email"
-                        className="pl-10 h-12 bg-black/40 border-white/10 text-white placeholder:text-slate-600 focus-visible:ring-[#0ea5e9]/50 focus-visible:border-[#0ea5e9] rounded-xl transition-all"
-                      />
+                        className="w-full pl-10 pr-10 h-12 bg-black/40 border border-white/10 text-white rounded-xl focus:outline-none focus:ring-2 focus:ring-[#0ea5e9]/50 focus:border-[#0ea5e9] appearance-none font-medium text-sm transition-all cursor-pointer shadow-inner"
+                      >
+                        <option value="jiadbinhanan@gmail.com" className="bg-[#030014] text-white py-2">
+                          jiadbinhanan@gmail.com (Jiad)
+                        </option>
+                        <option value="iasik7591@gmail.com" className="bg-[#030014] text-white py-2">
+                          iasik7591@gmail.com (Asik)
+                        </option>
+                      </select>
+                      <ChevronDown className="absolute right-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
                     </div>
                   </motion.div>
 
@@ -433,27 +440,31 @@ export default function LoginPage() {
               {activeTab === "otp" && (
                 <div className="space-y-4">
                   {!otpSent ? (
-                    // Step A: Enter Email to Send Code
+                    // Step A: Select Email to Send Code
                     <form onSubmit={handleSendOtpLogin} className="space-y-4">
                       <motion.div variants={itemVariants} className="space-y-1.5">
-                        <label htmlFor="otp-email" className="text-[11px] font-bold text-slate-400 uppercase tracking-wider ml-1">
+                        <label htmlFor="otp-email-select" className="text-[11px] font-bold text-slate-400 uppercase tracking-wider ml-1">
                           আপনার ইমেইল আইডি
                         </label>
                         <div className="relative">
-                          <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-                          <Input 
-                            id="otp-email"
-                            type="email" 
+                          <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 pointer-events-none z-10" />
+                          <select 
+                            id="otp-email-select"
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
-                            placeholder="yourname@gmail.com" 
-                            required
-                            autoComplete="email"
-                            className="pl-10 h-12 bg-black/40 border-white/10 text-white placeholder:text-slate-600 focus-visible:ring-[#0ea5e9]/50 focus-visible:border-[#0ea5e9] rounded-xl transition-all"
-                          />
+                            className="w-full pl-10 pr-10 h-12 bg-black/40 border border-white/10 text-white rounded-xl focus:outline-none focus:ring-2 focus:ring-[#0ea5e9]/50 focus:border-[#0ea5e9] appearance-none font-medium text-sm transition-all cursor-pointer shadow-inner"
+                          >
+                            <option value="jiadbinhanan@gmail.com" className="bg-[#030014] text-white py-2">
+                              jiadbinhanan@gmail.com (Jiad)
+                            </option>
+                            <option value="iasik7591@gmail.com" className="bg-[#030014] text-white py-2">
+                              iasik7591@gmail.com (Asik)
+                            </option>
+                          </select>
+                          <ChevronDown className="absolute right-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
                         </div>
                         <p className="text-[11px] text-slate-500 ml-1">
-                          পাসওয়ার্ডের প্রয়োজন নেই—আপনার ইমেইলে সরাসরি ৬ ডিজিটের সিকিউর কোড যাবে।
+                          পাসওয়ার্ডের প্রয়োজন নেই—নির্বাচিত ইমেইলে সরাসরি ৮ ডিজিটের সিকিউর কোড যাবে।
                         </p>
                       </motion.div>
 
@@ -478,7 +489,7 @@ export default function LoginPage() {
                               <Loader2 className="w-5 h-5 animate-spin" />
                             ) : (
                               <>
-                                ৬ ডিজিটের লগইন কোড পাঠান
+                                ৮ ডিজিটের লগইন কোড পাঠান
                                 <Sparkles className="w-4 h-4 ml-2" />
                               </>
                             )}
@@ -487,7 +498,7 @@ export default function LoginPage() {
                       </motion.div>
                     </form>
                   ) : (
-                    // Step B: Enter Received 6-Digit OTP
+                    // Step B: Enter Received 8-Digit OTP
                     <div className="space-y-5 flex flex-col items-center">
                       <div className="text-center space-y-1">
                         <div className="inline-flex items-center justify-center w-10 h-10 rounded-full bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 mb-1">
@@ -503,17 +514,17 @@ export default function LoginPage() {
 
                       <div className="w-full flex justify-center py-2">
                         <InputOTP 
-                          maxLength={6} 
+                          maxLength={8} 
                           value={otp}
                           onChange={setOtp}
-                          containerClassName="gap-2 justify-center"
+                          containerClassName="gap-1.5 sm:gap-2 justify-center"
                         >
-                          <InputOTPGroup className="gap-2">
-                            {[...Array(6)].map((_, i) => (
+                          <InputOTPGroup className="gap-1.5 sm:gap-2">
+                            {[...Array(8)].map((_, i) => (
                               <InputOTPSlot 
                                 key={i} 
                                 index={i} 
-                                className="w-11 h-13 bg-black/50 border-white/15 rounded-xl text-lg font-black text-white focus-visible:ring-[#0ea5e9]/50 focus-visible:border-[#0ea5e9] transition-all shadow-inner"
+                                className="w-8.5 sm:w-10 h-12 sm:h-13 bg-black/50 border-white/15 rounded-xl text-base sm:text-lg font-black text-white focus-visible:ring-[#0ea5e9]/50 focus-visible:border-[#0ea5e9] transition-all shadow-inner"
                               />
                             ))}
                           </InputOTPGroup>
@@ -533,7 +544,7 @@ export default function LoginPage() {
                       <div className="w-full space-y-2.5">
                         <Button 
                           onClick={handleVerifyOtpLogin}
-                          disabled={isLoading || otp.length !== 6}
+                          disabled={isLoading || (otp.length !== 8 && otp.length !== 6)}
                           className="w-full h-12 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 hover:opacity-95 text-white font-bold text-sm shadow-[0_0_20px_rgba(16,185,129,0.35)] transition-all border-0 disabled:opacity-50 cursor-pointer"
                         >
                           {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : "কোড ভেরিফাই ও লগইন"}
@@ -597,19 +608,25 @@ export default function LoginPage() {
 
               <div className="space-y-4">
                 <motion.div variants={itemVariants} className="space-y-1.5">
-                  <label htmlFor="forgot-email-input" className="text-[11px] font-bold text-slate-400 uppercase tracking-wider ml-1">
-                    ইমেইল আইডি
+                  <label htmlFor="forgot-email-select" className="text-[11px] font-bold text-slate-400 uppercase tracking-wider ml-1">
+                    ইউজার নির্বাচন করুন
                   </label>
                   <div className="relative">
-                    <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-                    <Input 
-                      id="forgot-email-input"
-                      type="email" 
+                    <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 pointer-events-none z-10" />
+                    <select 
+                      id="forgot-email-select"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      placeholder="yourname@gmail.com" 
-                      className="pl-10 h-12 bg-black/40 border-white/10 text-white placeholder:text-slate-600 focus-visible:ring-[#a855f7]/50 focus-visible:border-[#a855f7] rounded-xl transition-all"
-                    />
+                      className="w-full pl-10 pr-10 h-12 bg-black/40 border border-white/10 text-white rounded-xl focus:outline-none focus:ring-2 focus:ring-[#a855f7]/50 focus:border-[#a855f7] appearance-none font-medium text-sm transition-all cursor-pointer shadow-inner"
+                    >
+                      <option value="jiadbinhanan@gmail.com" className="bg-[#030014] text-white py-2">
+                        jiadbinhanan@gmail.com (Jiad)
+                      </option>
+                      <option value="iasik7591@gmail.com" className="bg-[#030014] text-white py-2">
+                        iasik7591@gmail.com (Asik)
+                      </option>
+                    </select>
+                    <ChevronDown className="absolute right-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
                   </div>
                 </motion.div>
 
@@ -654,7 +671,7 @@ export default function LoginPage() {
                 </div>
                 <h2 className="text-2xl font-black tracking-tight font-space text-white">কোড লিখুন</h2>
                 <p className="text-xs text-slate-400 mt-1">
-                  আমরা ৬ ডিজিটের ভেরিফিকেশন কোড পাঠিয়েছি: <br />
+                  আমরা ৮ ডিজিটের ভেরিফিকেশন কোড পাঠিয়েছি: <br />
                   <span className="text-cyan-400 font-semibold">{email}</span>
                 </p>
               </motion.div>
@@ -662,17 +679,17 @@ export default function LoginPage() {
               <div className="space-y-6 flex flex-col items-center">
                 <div className="w-full flex justify-center py-2">
                   <InputOTP 
-                    maxLength={6} 
+                    maxLength={8} 
                     value={otp}
                     onChange={setOtp}
-                    containerClassName="gap-2 justify-center"
+                    containerClassName="gap-1.5 sm:gap-2 justify-center"
                   >
-                    <InputOTPGroup className="gap-2">
-                      {[...Array(6)].map((_, i) => (
+                    <InputOTPGroup className="gap-1.5 sm:gap-2">
+                      {[...Array(8)].map((_, i) => (
                         <InputOTPSlot 
                           key={i} 
                           index={i} 
-                          className="w-11 h-13 bg-black/50 border-white/15 rounded-xl text-lg font-black text-white focus-visible:ring-[#a855f7]/50 focus-visible:border-[#a855f7] transition-all shadow-inner"
+                          className="w-8.5 sm:w-10 h-12 sm:h-13 bg-black/50 border-white/15 rounded-xl text-base sm:text-lg font-black text-white focus-visible:ring-[#a855f7]/50 focus-visible:border-[#a855f7] transition-all shadow-inner"
                         />
                       ))}
                     </InputOTPGroup>
@@ -692,7 +709,7 @@ export default function LoginPage() {
                 <div className="w-full space-y-2.5">
                   <Button 
                     onClick={handleVerifyResetOtp}
-                    disabled={isLoading || otp.length !== 6}
+                    disabled={isLoading || (otp.length !== 8 && otp.length !== 6)}
                     className="w-full h-12 rounded-xl bg-gradient-to-r from-[#a855f7] to-[#0ea5e9] hover:opacity-95 text-white font-bold text-sm shadow-[0_0_20px_rgba(168,85,247,0.35)] transition-all border-0 disabled:opacity-50 cursor-pointer"
                   >
                     {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : "কোড যাচাই করুন"}

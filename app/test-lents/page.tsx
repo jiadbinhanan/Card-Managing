@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { BottomNav } from "@/components/BottomNav";
 import { supabase } from "@/lib/supabase";
 import Link from "next/link";
+import { sendPushAlert } from "@/lib/pushNotifications";
 // NEW: Imported separated WhatsApp alert logic from lents folder
 import { sendLentIssueAlert, sendLentRecoveryAlert } from "@/app/lents/WaAlert";
 
@@ -225,8 +226,18 @@ export default function TestLentsPage() {
         remarks
       );
 
+      // 🔔 TEST MODE: Send Push Notification (Bypassing DB modification)
+      sendPushAlert({
+        title: `[TEST LAB] লোন প্রদান টেস্ট: ৳${amtNum}`,
+        body: `${borrowerName} কে ৳${amtNum} প্রদান টেস্ট হয়েছে (${sourceName})।`,
+        inAppTitle: `[TEST] লোন প্রদান টেস্ট ৳${amtNum}`,
+        inAppBody: `${borrowerName} কে ৳${amtNum} দেওয়া হয়েছে। ডিউ ডেট: ${dueDate}`,
+        url: "/lents",
+        type: "lent_issue",
+      }).catch(err => console.error("Test Push Alert failed:", err));
+
       console.log("Simulated lent payload ready and utility invoked.");
-      alert("✅ [TEST MODE] Lent Issue Alert Sent Successfully!\nCheck your console logs for details.");
+      alert("✅ [TEST MODE] ডাটাবেস পরিবর্তন ছাড়া সফলভাবে টেস্ট পুশ নোটিফিকেশন ও অ্যালার্ট পাঠানো হয়েছে!");
       setIsModalOpen(false);
     } catch (error: any) {
       alert("Test Error: " + error.message);
@@ -277,8 +288,18 @@ export default function TestLentsPage() {
           collectingLent.remarks
         );
 
+        // 🔔 TEST MODE: Send Push Notification (Bypassing DB modification)
+        sendPushAlert({
+          title: `[TEST LAB] লোন আদায় টেস্ট: ৳${amtNum}`,
+          body: `${collectingLent.borrower_name} থেকে ৳${amtNum} আদায় টেস্ট সম্পন্ন (${receivedOn})।`,
+          inAppTitle: `[TEST] লোন কালেকশন টেস্ট ৳${amtNum}`,
+          inAppBody: `${collectingLent.borrower_name} থেকে ৳${amtNum} গ্রহণ টেস্ট করা হয়েছে।`,
+          url: "/lents",
+          type: "lent_recovery",
+        }).catch(err => console.error("Test Push Alert failed:", err));
+
         console.log("Simulated recovery payload ready and utility invoked.");
-        alert("✅ [TEST MODE] Lent Recovery Alert Sent Successfully!\nCheck your console logs for details.");
+        alert("✅ [TEST MODE] ডাটাবেস পরিবর্তন ছাড়া সফলভাবে টেস্ট পুশ নোটিফিকেশন ও অ্যালার্ট পাঠানো হয়েছে!");
         setIsCollectModalOpen(false);
      } catch (err: any) {
         alert("Test Error: " + err.message);

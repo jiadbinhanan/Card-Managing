@@ -32,6 +32,7 @@ import { supabase } from "@/lib/supabase";
 import { useCardStore } from "@/store/cardStore";
 import { BottomNav } from "@/components/BottomNav";
 import TransactionTraceInline, { type TraceTarget } from "@/components/TransactionTraceInline";
+import { NotificationPanel } from "@/components/NotificationPanel";
 
 interface CardItem {
   id: string;
@@ -849,7 +850,7 @@ function LedgersContent() {
   };
 
   return (
-    <div className="relative min-h-screen bg-[#030014] text-slate-50 font-sans pb-28 overflow-x-hidden selection:bg-[#0ea5e9]/30">
+    <div className="relative min-h-screen bg-[#030014] text-slate-50 font-sans pb-36 overflow-x-hidden selection:bg-[#0ea5e9]/30">
       {/* ================= BACKGROUND GRID & AMBIENT LIGHTS ================= */}
       <div className="fixed inset-0 z-0 overflow-hidden pointer-events-none">
         <div className="absolute inset-0 bg-[linear-gradient(to_right,#4f46e51a_1px,transparent_1px),linear-gradient(to_bottom,#4f46e51a_1px,transparent_1px)] bg-[size:32px_32px] [mask-image:radial-gradient(ellipse_80%_80%_at_50%_50%,#000_20%,transparent_100%)]" />
@@ -863,7 +864,7 @@ function LedgersContent() {
         initial={{ y: -20, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         transition={{ type: "spring", stiffness: 300, damping: 28 }}
-        className="relative z-50 px-5 pt-8 pb-3 sticky top-0 bg-[#030014]/70 backdrop-blur-3xl border-b border-white/5 shadow-[0_15px_40px_rgba(0,0,0,0.8)] flex justify-between items-center"
+        className="relative z-50 px-5 pt-9 pb-3.5 sticky top-0 bg-[#030014]/70 backdrop-blur-3xl border-b border-white/5 shadow-[0_15px_40px_rgba(0,0,0,0.8)] flex justify-between items-center"
       >
         <div className="flex items-center gap-3">
           <Link href="/settings">
@@ -898,6 +899,7 @@ function LedgersContent() {
         </div>
 
         <div className="flex items-center gap-2">
+          <NotificationPanel />
           {/* Refresh Button */}
           <button
             onClick={() => fetchAllLedgers()}

@@ -16,6 +16,7 @@ import { supabase } from "@/lib/supabase";
 import { useAuthStore } from "@/store/authStore";
 import { useDataCacheStore } from "@/store/dataCacheStore";
 import Link from "next/link";
+import { NotificationPanel } from "@/components/NotificationPanel";
 import BorrowerProfilePanel, { Borrower, Profile, CardData } from "./BorrowerProfilePanel";
 import BorrowerPicker from "./BorrowerPicker";
 import LentsFromPocket from "./LentsFromPocket";
@@ -399,16 +400,15 @@ export default function LentsPage() {
   };
 
   return (
-    <div className="relative min-h-screen bg-[#030014] text-slate-50 font-sans pb-28 overflow-x-hidden selection:bg-[#f59e0b]/30">
+    <div className="relative min-h-screen bg-[#030014] text-slate-50 font-sans pb-36 overflow-x-hidden selection:bg-[#f59e0b]/30">
       <div className="fixed inset-0 z-0 overflow-hidden pointer-events-none">
         <div className="absolute inset-0 bg-[linear-gradient(to_right,#f59e0b0a_1px,transparent_1px),linear-gradient(to_bottom,#f59e0b0a_1px,transparent_1px)] bg-[size:32px_32px] [mask-image:radial-gradient(ellipse_80%_80%_at_50%_50%,#000_10%,transparent_100%)]" />
         <div className="absolute top-[-10%] left-[-20%] w-[70vw] h-[70vw] rounded-full bg-[#f59e0b] opacity-[0.12] blur-[120px] mix-blend-screen" />
         <div className="absolute bottom-[20%] right-[-10%] w-[60vw] h-[60vw] rounded-full bg-[#ef4444] opacity-[0.12] blur-[100px] mix-blend-screen" />
       </div>
 
-      {/* Header — শুধু top padding ২/৭ অংশ কমানো হয়েছে (pt-8 → ~pt-6), বাকি সবকিছু আগের সাইজেই।
-          z-30 রাখা হয়েছে যাতে card-selector dropdown সবসময় উপরে থাকে (আগের bug fix, অক্ষত)। */}
-      <header className="relative z-30 px-5 pt-[23px] pb-3 sticky top-0 bg-[#030014]/70 backdrop-blur-3xl border-b border-white/5 shadow-[0_15px_40px_rgba(0,0,0,0.8)] flex justify-between items-center">
+      {/* Header - Standardized header size with +1mm width/padding matching all pages */}
+      <header className="relative z-30 px-5 pt-9 pb-3.5 sticky top-0 bg-[#030014]/70 backdrop-blur-3xl border-b border-white/5 shadow-[0_15px_40px_rgba(0,0,0,0.8)] flex justify-between items-center">
         <div className="flex items-center gap-3">
           <Link href="/settings">
             <div className="h-10 w-10 rounded-full bg-gradient-to-tr from-[#f59e0b] to-[#ef4444] p-0.5 shadow-[0_0_20px_rgba(245,158,11,0.4)] cursor-pointer hover:scale-105 transition-transform overflow-hidden">
@@ -427,8 +427,10 @@ export default function LentsPage() {
           </div>
         </div>
 
-        {activeTab === "card" && (
-          <div className="relative" ref={cardDropdownRef}>
+        <div className="flex items-center gap-2">
+          <NotificationPanel />
+          {activeTab === "card" && (
+            <div className="relative" ref={cardDropdownRef}>
             <button
               onClick={() => setCardDropdownOpen((p) => !p)}
               className="flex items-center gap-1.5 bg-white/[0.03] border border-white/10 text-white text-[10px] font-bold py-2 pl-3 pr-2.5 rounded-xl outline-none focus:border-[#f59e0b] shadow-[0_0_20px_rgba(245,158,11,0.15)] backdrop-blur-md min-w-[110px] max-w-[140px]"
@@ -495,6 +497,7 @@ export default function LentsPage() {
             </AnimatePresence>
           </div>
         )}
+        </div>
       </header>
 
       <main className="relative z-10 px-4 pt-6 max-w-md mx-auto space-y-6">

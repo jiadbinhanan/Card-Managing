@@ -14,6 +14,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase";
 import { sendWhatsAppAlert } from "@/lib/whatsapp";
+import { sendPushAlert } from "@/lib/pushNotifications";
 
 interface QR {
   id: string;
@@ -205,7 +206,17 @@ export default function QRTab({ accessibleCards, globalSelectedCardId, currentUs
            }
         }
 
-        alert("✅ [TEST MODE] QR Alert Sent & Cooling Alert Scheduled!\nRedirecting to Transit Tab...");
+        // 🔔 TEST MODE: Send Push Notification (Bypassing DB modification)
+        sendPushAlert({
+          title: `[TEST LAB] QR রোটেশন টেস্ট: ৳${totalAmt}`,
+          body: `${selectedQr.merchant_name} এ ${paymentCard?.card_name || 'Card'} দিয়ে ৳${totalAmt} রোটেশন টেস্ট সম্পন্ন।`,
+          inAppTitle: `[TEST] QR রোটেশন টেস্ট ৳${totalAmt}`,
+          inAppBody: `${selectedQr.merchant_name} এর মাধ্যমে টেস্ট রোটেশন নোটিফিকেশন।`,
+          url: "/settlements",
+          type: "rotation_withdraw",
+        }).catch(err => console.error("Test Push Alert failed:", err));
+
+        alert("✅ [TEST MODE] ডাটাবেস পরিবর্তন ছাড়া সফলভাবে টেস্ট পুশ নোটিফিকেশন ও অ্যালার্ট পাঠানো হয়েছে!\nRedirecting to Transit Tab...");
 
         setIsViewModalOpen(false);
         window.dispatchEvent(new CustomEvent('switch-tab-to-pending'));

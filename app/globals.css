@@ -119,11 +119,30 @@
 @layer base {
   * {
     @apply border-border outline-ring/50;
-    }
+    -webkit-font-smoothing: antialiased;
+  }
   body {
     @apply bg-background text-foreground;
-    }
+  }
   html {
     @apply font-sans;
-    }
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+/* ── Android WebView & Mobile GPU Compositor Stabilization ── */
+.backdrop-blur-xl,
+.backdrop-blur-2xl,
+.backdrop-blur-3xl,
+[class*="backdrop-blur"] {
+  -webkit-backdrop-filter: blur(20px);
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.custom-scrollbar {
+  -webkit-overflow-scrolling: touch;
+  transform: translateZ(0);
 }

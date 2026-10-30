@@ -25,13 +25,18 @@ import {
   AlertTriangle,
   Link as LinkIcon,
   X,
-  Check
+  Check,
+  FlaskConical,
+  QrCode,
+  Coins
 } from "lucide-react";
+import Link from "next/link";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { BottomNav } from "@/components/BottomNav";
 import { supabase } from "@/lib/supabase";
+import { NotificationPanel } from "@/components/NotificationPanel";
 
 interface Profile {
   id: string;
@@ -503,7 +508,7 @@ export default function SettingsPage() {
   const isInherited = !isPrimary && parentCardId !== "";
 
   return (
-    <div className="relative min-h-screen bg-[#030014] text-slate-50 font-sans pb-28 overflow-x-hidden selection:bg-[#0ea5e9]/30">
+    <div className="relative min-h-screen bg-[#030014] text-slate-50 font-sans pb-36 overflow-x-hidden selection:bg-[#0ea5e9]/30">
 
       {/* ================= EXTREME GLOWING BACKGROUND ================= */}
       <div className="fixed inset-0 z-0 overflow-hidden pointer-events-none">
@@ -513,7 +518,7 @@ export default function SettingsPage() {
       </div>
 
       {/* ================= HEADER ================= */}
-      <header className="relative z-10 px-5 pt-8 pb-3 sticky top-0 bg-[#030014]/70 backdrop-blur-3xl border-b border-white/5 shadow-[0_15px_40px_rgba(0,0,0,0.8)]">
+      <header className="relative z-10 px-5 pt-9 pb-3.5 sticky top-0 bg-[#030014]/70 backdrop-blur-3xl border-b border-white/5 shadow-[0_15px_40px_rgba(0,0,0,0.8)]">
         <div className="max-w-md mx-auto flex justify-between items-center">
           <div>
             <motion.div
@@ -529,8 +534,11 @@ export default function SettingsPage() {
               Settings & Profile
             </h1>
           </div>
-          <div className="p-2 bg-white/[0.03] rounded-xl border border-white/10 backdrop-blur-md shadow-[0_0_20px_rgba(168,85,247,0.2)] flex items-center justify-center">
-            <SettingsIcon className="w-5 h-5 text-slate-300" />
+          <div className="flex items-center gap-2">
+            <NotificationPanel />
+            <div className="p-2 bg-white/[0.03] rounded-xl border border-white/10 backdrop-blur-md shadow-[0_0_20px_rgba(168,85,247,0.2)] flex items-center justify-center">
+              <SettingsIcon className="w-5 h-5 text-slate-300" />
+            </div>
           </div>
         </div>
       </header>
@@ -722,6 +730,76 @@ export default function SettingsPage() {
                 </div>
 
               </div>
+            </motion.section>
+
+            {/* ================= TEST LAB & PUSH NOTIFICATION SIMULATOR ================= */}
+            <motion.section variants={itemVariants} className="space-y-3">
+              <div className="flex items-center justify-between px-1">
+                <h2 className="text-xs font-black text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-cyan-400 uppercase tracking-wider flex items-center gap-2 drop-shadow-[0_0_15px_rgba(16,185,129,0.4)]">
+                  <FlaskConical className="w-4 h-4 text-emerald-400" /> পুশ নোটিফিকেশন ও টেস্ট ল্যাব
+                </h2>
+                <span className="text-[10px] font-bold text-emerald-400/80 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+                  Read Only
+                </span>
+              </div>
+
+              <div className="bg-gradient-to-br from-white/[0.04] to-white/[0.01] border border-white/10 rounded-[28px] p-2 backdrop-blur-xl shadow-[0_10px_30px_rgba(0,0,0,0.5)] divide-y divide-white/5">
+                
+                {/* 1. Transactions Test */}
+                <Link href="/test-trans" className="p-3.5 flex items-center justify-between hover:bg-white/[0.03] active:bg-white/[0.05] rounded-2xl transition-all group">
+                  <div className="flex items-center gap-3.5">
+                    <div className="w-10 h-10 rounded-xl bg-[#0ea5e9]/10 border border-[#0ea5e9]/30 flex items-center justify-center text-[#0ea5e9] group-hover:scale-105 transition-transform shadow-[0_0_15px_rgba(14,165,233,0.15)]">
+                      <CreditCard className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                        ট্রানজাকশন ও রোটেশন টেস্ট
+                        <span className="text-[9px] text-cyan-400 font-semibold px-1.5 py-0.2 rounded bg-cyan-400/10">Test</span>
+                      </div>
+                      <div className="text-[10px] text-slate-400">কার্ড রোটেশন, খরচ ও বিল পেমেন্ট পুশ টেস্ট</div>
+                    </div>
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-white group-hover:translate-x-0.5 transition-all" />
+                </Link>
+
+                {/* 2. Lents Test */}
+                <Link href="/test-lents" className="p-3.5 flex items-center justify-between hover:bg-white/[0.03] active:bg-white/[0.05] rounded-2xl transition-all group">
+                  <div className="flex items-center gap-3.5">
+                    <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 group-hover:scale-105 transition-transform shadow-[0_0_15px_rgba(245,158,11,0.15)]">
+                      <Coins className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                        লোন ও কালেকশন টেস্ট
+                        <span className="text-[9px] text-amber-400 font-semibold px-1.5 py-0.2 rounded bg-amber-400/10">Test</span>
+                      </div>
+                      <div className="text-[10px] text-slate-400">লোন প্রদান ও কিস্তি আদায় টেস্ট পুশ</div>
+                    </div>
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-white group-hover:translate-x-0.5 transition-all" />
+                </Link>
+
+                {/* 3. Settlements Test */}
+                <Link href="/test-settle" className="p-3.5 flex items-center justify-between hover:bg-white/[0.03] active:bg-white/[0.05] rounded-2xl transition-all group">
+                  <div className="flex items-center gap-3.5">
+                    <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 group-hover:scale-105 transition-transform shadow-[0_0_15px_rgba(16,185,129,0.15)]">
+                      <QrCode className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                        QR ও সেটেলমেন্ট টেস্ট
+                        <span className="text-[9px] text-emerald-400 font-semibold px-1.5 py-0.2 rounded bg-emerald-400/10">Test</span>
+                      </div>
+                      <div className="text-[10px] text-slate-400">QR রোটেশন ও ক্যাশ হস্তান্তর নোটিফিকেশন</div>
+                    </div>
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-white group-hover:translate-x-0.5 transition-all" />
+                </Link>
+
+              </div>
+              <p className="text-[10px] text-slate-500 px-1 italic">
+                * টেস্ট পেজগুলো সম্পূর্ণ Read-Only। এখানে এন্ট্রি করলে ডাটাবেসে কোনো পরিবর্তন ঘটবে না, শুধু পুশ নোটিফিকেশন পরীক্ষা করা যাবে।
+              </p>
             </motion.section>
 
             {/* ================= LOGOUT ACTION ================= */}

@@ -127,7 +127,23 @@ export async function sendPushAlert(payload: PushAlertPayload): Promise<boolean>
     const result = await res.json();
     return !!result.success;
   } catch (error) {
-    console.error('Failed to dispatch push notification:', error);
-    return false;
+    console.error('Failed to dispatch push notification via API, falling back to direct DB log:', error);
+    try {
+      await supabase.from('notifications').insert({
+        title: payload.title,
+        body: payload.body,
+        category: payload.type || 'general',
+        payload: {
+          url: payload.url,
+          inAppTitle: payload.inAppTitle,
+          inAppBody: payload.inAppBody,
+          ...payload.data,
+        },
+        is_read: false,
+      });
+      return true;
+    } catch {
+      return false;
+    }
   }
 }

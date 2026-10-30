@@ -586,7 +586,7 @@ export default function DashboardAnalytics({
             whileHover={!isLoading ? { scale: 1.02 } : {}}
             whileTap={!isLoading ? { scale: 0.98 } : {}}
             onClick={() => !isLoading && handleUserStatClick(stat as UserStat)}
-            className={`bg-white/[0.03] border border-white/10 rounded-[24px] p-5 backdrop-blur-xl relative overflow-hidden flex flex-col shadow-inner ${isLoading ? "animate-pulse" : "group hover:bg-white/[0.06] transition-all cursor-pointer"}`}
+            className={`bg-white/[0.03] border border-white/10 rounded-[24px] p-5 backdrop-blur-xl relative overflow-hidden flex flex-col shadow-inner isolate ${isLoading ? "animate-pulse" : "group hover:bg-white/[0.06] transition-all cursor-pointer"}`}
           >
             <div className={`absolute -top-8 -right-8 w-24 h-24 rounded-full blur-[30px] opacity-30 ${i === 0 ? "bg-[#0ea5e9]" : "bg-[#a855f7]"}`} />
             <div className="flex items-center gap-2 mb-4 relative z-10">

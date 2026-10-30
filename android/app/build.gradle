@@ -16,9 +16,21 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        release {
+            storeFile file("credics-release.jks")
+            storePassword System.getenv("KEYSTORE_PASSWORD") ?: "credics123456"
+            keyAlias System.getenv("KEY_ALIAS") ?: "credics"
+            keyPassword System.getenv("KEY_PASSWORD") ?: "credics123456"
+            v1SigningEnabled true
+            v2SigningEnabled true
+        }
+    }
     buildTypes {
         release {
+            signingConfig signingConfigs.release
             minifyEnabled false
+            debuggable false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
