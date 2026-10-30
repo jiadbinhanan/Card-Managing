@@ -60,12 +60,12 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('android/**/*.gradle*', 'android/**/gradle-wrapper.properties') }}
+          key: ${{ runner.os }}-gradle-${{ hashFiles('apps/web/android/**/*.gradle*', 'apps/web/android/**/gradle-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-gradle-
 
       - name: Make Gradlew Executable
-        run: chmod +x android/gradlew
+        run: chmod +x apps/web/android/gradlew
 
       - name: Decode Release Keystore (if provided via Secret)
         env:
@@ -73,8 +73,8 @@ jobs:
         run: |
           if [ -n "$RELEASE_KEYSTORE_BASE64" ]; then
             echo "Decoding keystore from RELEASE_KEYSTORE_BASE64 secret..."
-            echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > android/app/credics-release.jks
-          elif [ -f "android/app/credics-release.jks" ]; then
+            echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > apps/web/android/app/credics-release.jks
+          elif [ -f "apps/web/android/app/credics-release.jks" ]; then
             echo "Using repository credics-release.jks"
           else
             echo "Error: No release keystore found!"
@@ -87,13 +87,13 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS || 'credics' }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'credics123456' }}
         run: |
-          cd android
+          cd apps/web/android
           ./gradlew assembleRelease --no-daemon
-          cd ..
-          if [ -f "android/app/build/outputs/apk/release/credics.apk" ]; then
+          cd ../../..
+          if [ -f "apps/web/android/app/build/outputs/apk/release/credics.apk" ]; then
             echo "✅ credics.apk (release) generated successfully"
-          elif [ -f "android/app/build/outputs/apk/release/app-release.apk" ]; then
-            cp android/app/build/outputs/apk/release/app-release.apk android/app/build/outputs/apk/release/credics.apk
+          elif [ -f "apps/web/android/app/build/outputs/apk/release/app-release.apk" ]; then
+            cp apps/web/android/app/build/outputs/apk/release/app-release.apk apps/web/android/app/build/outputs/apk/release/credics.apk
             echo "✅ Copied app-release.apk to credics.apk"
           fi
 
@@ -101,5 +101,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: credics
-          path: android/app/build/outputs/apk/release/credics.apk
+          path: apps/web/android/app/build/outputs/apk/release/credics.apk
           retention-days: 14

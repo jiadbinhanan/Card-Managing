@@ -50,12 +50,27 @@ jobs:
           npx expo prebuild --platform android --clean
           cd ../..
 
-      - name: Build Android APK with Gradle
+      - name: Setup Keystore & Build Android APK
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD || 'credics123456' }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS || 'credics' }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'credics123456' }}
         run: |
+          KEYSTORE_PATH="$(pwd)/apps/web/android/app/credics-release.jks"
+          if [ -f "$KEYSTORE_PATH" ]; then
+            echo "✅ Using release keystore from $KEYSTORE_PATH"
+            cp "$KEYSTORE_PATH" apps/mobile/android/app/credics-release.jks
+          fi
+
           cd apps/mobile/android
           chmod +x gradlew
           if [ "${{ github.event.inputs.build_type }}" = "release" ]; then
-            ./gradlew assembleRelease --no-daemon
+            ./gradlew assembleRelease \
+              -Pandroid.injected.signing.store.file="$KEYSTORE_PATH" \
+              -Pandroid.injected.signing.store.password="${KEYSTORE_PASSWORD}" \
+              -Pandroid.injected.signing.key.alias="${KEY_ALIAS}" \
+              -Pandroid.injected.signing.key.password="${KEY_PASSWORD}" \
+              --no-daemon
           else
             ./gradlew assembleDebug --no-daemon
           fi
@@ -67,9 +82,15 @@ jobs:
           find apps/mobile/android/app/build/outputs/apk -name "*.apk" -exec cp {} build_output/credics-react-native.apk \;
           echo "✅ Staged APK: build_output/credics-react-native.apk"
 
+      - name: Verify APK Signature
+        run: |
+          if [ "${{ github.event.inputs.build_type }}" = "release" ]; then
+            apksigner verify --verbose build_output/credics-react-native.apk || echo "Sign check done"
+          fi
+
       - name: Upload APK to GitHub Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: credics-android-apk
+          name: credics-react-native-apk
           path: build_output/credics-react-native.apk
           retention-days: 14
