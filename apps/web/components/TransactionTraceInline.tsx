@@ -79,7 +79,7 @@ export default function TransactionTraceInline({
       exit={{ opacity: 0, height: 0, scale: 0.98 }}
       transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
       className={`w-full overflow-hidden my-2.5 ${className}`}
-      onClick={(e) => e.stopPropagation()}
+      onClick={(e: React.MouseEvent) => e.stopPropagation()}
     >
       <div className="w-full bg-[#09071c]/95 border border-sky-500/30 rounded-2xl p-3.5 sm:p-4 text-slate-100 shadow-xl relative">
         {/* Subtle Ambient Accent (No blur over page, local to card only) */}

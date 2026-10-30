@@ -1,0 +1,75 @@
+name: Build React Native Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build Type (release or debug)'
+        required: true
+        default: 'release'
+        type: choice
+        options:
+          - release
+          - debug
+
+jobs:
+  build-android-apk:
+    name: Build Credics Android APK (React Native)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.26.1
+          run_install: false
+
+      - name: Install Dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Expo Prebuild (Generate Android Native Project)
+        run: |
+          cd apps/mobile
+          npx expo prebuild --platform android --clean
+          cd ../..
+
+      - name: Build Android APK with Gradle
+        run: |
+          cd apps/mobile/android
+          chmod +x gradlew
+          if [ "${{ github.event.inputs.build_type }}" = "release" ]; then
+            ./gradlew assembleRelease --no-daemon
+          else
+            ./gradlew assembleDebug --no-daemon
+          fi
+          cd ../../..
+
+      - name: Find and Stage APK
+        run: |
+          mkdir -p build_output
+          find apps/mobile/android/app/build/outputs/apk -name "*.apk" -exec cp {} build_output/credics-react-native.apk \;
+          echo "✅ Staged APK: build_output/credics-react-native.apk"
+
+      - name: Upload APK to GitHub Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: credics-android-apk
+          path: build_output/credics-react-native.apk
+          retention-days: 14

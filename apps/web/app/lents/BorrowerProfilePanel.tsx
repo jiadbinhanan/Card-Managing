@@ -1019,7 +1019,7 @@ export default function BorrowerProfilePanel({
                                       initial={{ opacity: 0, scale: 0.95, y: -4 }}
                                       animate={{ opacity: 1, scale: 1, y: 0 }}
                                       exit={{ opacity: 0, scale: 0.95 }}
-                                      onClick={(ev) => ev.stopPropagation()}
+                                      onClick={(ev: React.MouseEvent) => ev.stopPropagation()}
                                       className="absolute right-0 top-7 bg-[#0d0d0d] border border-white/10 rounded-xl shadow-2xl overflow-hidden min-w-[110px]"
                                     >
                                       <button

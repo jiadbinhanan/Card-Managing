@@ -224,7 +224,7 @@ export default function BorrowerPicker({ open, onClose, onSelectExisting, onCrea
                               initial={{ opacity: 0, scale: 0.95, y: -4 }}
                               animate={{ opacity: 1, scale: 1, y: 0 }}
                               exit={{ opacity: 0, scale: 0.95 }}
-                              onClick={(e) => e.stopPropagation()}
+                              onClick={(e: React.MouseEvent) => e.stopPropagation()}
                               className="absolute right-0 top-8 z-[75] bg-[#0d0d0d] border border-white/10 rounded-xl shadow-2xl overflow-hidden min-w-[130px]"
                             >
                               <button

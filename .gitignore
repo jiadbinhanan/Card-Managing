@@ -12,7 +12,7 @@ public/workbox-*.js
 # Agents & AI Brain
 .agents/
 .Brain/
-supabase/.temp/
+**/supabase/.temp/
 
 # Firebase Service Account Keys & Secrets
 *-firebase-adminsdk-*.json
