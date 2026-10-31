@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { View, ActivityIndicator } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -7,33 +8,37 @@ import { CedarColors } from '@credics/core';
 import { supabase } from '../lib/supabase';
 
 export default function RootLayout() {
-  const [sessionChecked, setSessionChecked] = useState(false);
+  const [session, setSession] = useState<any>(null);
+  const [initialized, setInitialized] = useState(false);
   const segments = useSegments();
   const router = useRouter();
 
+  // 1. Initial Session Restoration & Auth Listener
   useEffect(() => {
     let isMounted = true;
 
-    // 1. Initial Session Check from AsyncStorage
+    // Restore persisted session from AsyncStorage
     supabase.auth.getSession().then(({ data }: any) => {
       if (!isMounted) return;
-      setSessionChecked(true);
-      if (!data?.session) {
-        router.replace('/login');
-      }
+      setSession(data?.session ?? null);
+      setInitialized(true);
     });
 
-    // 2. Auth State Transition Listener
+    // Listen for explicit SIGNED_IN / SIGNED_OUT transitions
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event: any, session: any) => {
+    } = supabase.auth.onAuthStateChange((event: string, currentSession: any) => {
       if (!isMounted) return;
-      const inLoginScreen = segments[0] === 'login';
-
-      if (!session && !inLoginScreen) {
-        router.replace('/login');
-      } else if (session && inLoginScreen) {
-        router.replace('/(tabs)');
+      if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
+        if (currentSession) {
+          setSession(currentSession);
+          setInitialized(true);
+        }
+      } else if (event === 'SIGNED_OUT') {
+        setSession(null);
+        setInitialized(true);
+      } else if (event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
+        setSession(currentSession);
       }
     });
 
@@ -42,6 +47,27 @@ export default function RootLayout() {
       subscription.unsubscribe();
     };
   }, []);
+
+  // 2. Fresh Route Protection Guard
+  useEffect(() => {
+    if (!initialized) return;
+
+    const inLoginScreen = segments[0] === 'login';
+
+    if (!session && !inLoginScreen) {
+      router.replace('/login');
+    } else if (session && inLoginScreen) {
+      router.replace('/(tabs)');
+    }
+  }, [session, initialized, segments]);
+
+  if (!initialized) {
+    return (
+      <View style={{ flex: 1, backgroundColor: CedarColors.canvas, justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color={CedarColors.forest800} />
+      </View>
+    );
+  }
 
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: CedarColors.canvas }}>
@@ -62,3 +88,4 @@ export default function RootLayout() {
     </GestureHandlerRootView>
   );
 }
+

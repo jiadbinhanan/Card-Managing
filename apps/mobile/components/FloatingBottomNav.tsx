@@ -41,7 +41,7 @@ const SPRING_CONFIG = {
   mass: 0.8,
 };
 
-const DRAWER_HEIGHT = 180;
+const DRAWER_HEIGHT = 215;
 
 export function FloatingBottomNav({ state, descriptors, navigation }: BottomTabBarProps) {
   const [isExpanded, setIsExpanded] = useState(false);
@@ -196,19 +196,18 @@ export function FloatingBottomNav({ state, descriptors, navigation }: BottomTabB
               <Animated.View style={[styles.handlePill, handleIndicatorStyle]} />
             </Pressable>
 
-            {/* Swipe-Up Extra Options Drawer (Web App Ledgers Parity) */}
+            {/* Swipe-Up Extra Options Drawer (Web App Ledgers Parity - Solid Opaque Surfaces) */}
             <Animated.View style={[styles.drawerContent, drawerAnimStyle]}>
               <View style={styles.drawerGrid}>
                 {/* 1. Cash on Hand */}
                 <Pressable
                   style={({ pressed }) => [
                     styles.drawerCard,
-                    { backgroundColor: 'rgba(46, 148, 75, 0.08)' },
                     pressed && styles.drawerCardPressed,
                   ]}
                   onPress={() => handleExtraOptionPress('ledgers')}
                 >
-                  <View style={[styles.drawerIconBadge, { backgroundColor: 'rgba(46, 148, 75, 0.16)' }]}>
+                  <View style={[styles.drawerIconBadge, { backgroundColor: 'rgba(46, 148, 75, 0.15)' }]}>
                     <Banknote size={15} color="#2E944B" strokeWidth={2.4} />
                   </View>
                   <Text style={styles.drawerCardTitle}>Cash on Hand</Text>
@@ -219,12 +218,11 @@ export function FloatingBottomNav({ state, descriptors, navigation }: BottomTabB
                 <Pressable
                   style={({ pressed }) => [
                     styles.drawerCard,
-                    { backgroundColor: 'rgba(217, 119, 6, 0.08)' },
                     pressed && styles.drawerCardPressed,
                   ]}
                   onPress={() => handleExtraOptionPress('ledgers')}
                 >
-                  <View style={[styles.drawerIconBadge, { backgroundColor: 'rgba(217, 119, 6, 0.16)' }]}>
+                  <View style={[styles.drawerIconBadge, { backgroundColor: 'rgba(217, 119, 6, 0.15)' }]}>
                     <Receipt size={15} color="#D97706" strokeWidth={2.4} />
                   </View>
                   <Text style={styles.drawerCardTitle}>Personal Spends</Text>
@@ -235,12 +233,11 @@ export function FloatingBottomNav({ state, descriptors, navigation }: BottomTabB
                 <Pressable
                   style={({ pressed }) => [
                     styles.drawerCard,
-                    { backgroundColor: 'rgba(125, 90, 224, 0.08)' },
                     pressed && styles.drawerCardPressed,
                   ]}
                   onPress={() => handleExtraOptionPress('ledgers')}
                 >
-                  <View style={[styles.drawerIconBadge, { backgroundColor: 'rgba(125, 90, 224, 0.16)' }]}>
+                  <View style={[styles.drawerIconBadge, { backgroundColor: 'rgba(125, 90, 224, 0.15)' }]}>
                     <Coins size={15} color="#7D5AE0" strokeWidth={2.4} />
                   </View>
                   <Text style={styles.drawerCardTitle}>Pocket Advance</Text>
@@ -251,12 +248,11 @@ export function FloatingBottomNav({ state, descriptors, navigation }: BottomTabB
                 <Pressable
                   style={({ pressed }) => [
                     styles.drawerCard,
-                    { backgroundColor: 'rgba(10, 38, 28, 0.08)' },
                     pressed && styles.drawerCardPressed,
                   ]}
                   onPress={() => handleExtraOptionPress('cards')}
                 >
-                  <View style={[styles.drawerIconBadge, { backgroundColor: 'rgba(10, 38, 28, 0.16)' }]}>
+                  <View style={[styles.drawerIconBadge, { backgroundColor: 'rgba(10, 38, 28, 0.15)' }]}>
                     <CreditCard size={15} color={CedarColors.forest800} strokeWidth={2.4} />
                   </View>
                   <Text style={styles.drawerCardTitle}>My Cards</Text>
@@ -273,9 +269,10 @@ export function FloatingBottomNav({ state, descriptors, navigation }: BottomTabB
                 const route = state.routes[routeIndex];
 
                 if (item.isFab) {
-                  // Central Elevated Green FAB navigating to 'settlement'
+                  // Central Elevated Green FAB navigating to 'settlements' nestled in contoured cradle
                   return (
                     <View key={item.name} style={styles.fabWrapper}>
+                      <View style={styles.fabCradleBackdrop} />
                       <Pressable
                         style={({ pressed }) => [
                           styles.fabButton,
@@ -386,24 +383,30 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     justifyContent: 'space-between',
     gap: 8,
-    paddingVertical: 4,
+    paddingVertical: 6,
   },
   drawerCard: {
     width: '48.5%',
-    borderRadius: 18,
-    paddingVertical: 10,
+    borderRadius: 20,
+    paddingVertical: 12,
     paddingHorizontal: 12,
+    backgroundColor: '#FFFFFF', // Solid opaque surface - prevents blur & text ghosting
     borderWidth: 1.2,
     borderColor: '#DCE7DD',
     alignItems: 'flex-start',
-    minHeight: 74,
+    minHeight: 80,
+    shadowColor: '#071A12',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 3,
   },
   drawerCardPressed: {
     transform: [{ scale: 0.97 }],
   },
   drawerIconBadge: {
-    width: 30,
-    height: 30,
+    width: 32,
+    height: 32,
     borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
@@ -468,7 +471,22 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    top: -18, // Concept elevated notched pop-up
+    top: -20, // Concept elevated notched pop-up
+  },
+  fabCradleBackdrop: {
+    position: 'absolute',
+    top: -5,
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    backgroundColor: '#F7FAF7',
+    borderWidth: 2,
+    borderColor: '#D4E2D5',
+    shadowColor: '#071A12',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    elevation: 8,
   },
   fabButton: {
     width: 58,
@@ -477,8 +495,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#071A12', // Deep luxury forest
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 4,
-    borderColor: '#D9E6DC', // Contour ring matching ambient gradient
+    borderWidth: 2,
+    borderColor: '#2E944B', // Emerald contour highlight
     shadowColor: '#071A12',
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.38,
@@ -490,6 +508,6 @@ const styles = StyleSheet.create({
   },
   fabActive: {
     backgroundColor: CedarColors.forest900,
-    borderColor: CedarColors.borderDark,
+    borderColor: '#34D399',
   },
 });

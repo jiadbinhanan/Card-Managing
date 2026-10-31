@@ -21,12 +21,15 @@ import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withSpring,
+  withTiming,
+  withSequence,
   FadeInDown,
+  FadeInUp,
 } from 'react-native-reanimated';
 import { CedarColors, CedarTypography } from '@credics/core';
 import { QuickActions } from '../../components/QuickActions';
 import { NotificationSidePanel } from '../../components/NotificationSidePanel';
-import { SwipeDownDrawer } from '../../components/SwipeDownDrawer';
+import { SwipeDownDrawer, DrawerScrollView } from '../../components/SwipeDownDrawer';
 import { HapticButton } from '../../components/HapticButton';
 import { HomeSkeleton } from '../../components/Skeleton';
 import { supabase } from '../../lib/supabase';
@@ -194,16 +197,26 @@ export default function HomeScreen() {
   // Recent Transactions
   const [recentTransactions, setRecentTransactions] = useState<RecentTx[]>([]);
 
-  // 120Hz Spring micro-bounce for Notification Bell
+  // 120Hz Spring micro-bounce and playful ring for Notification Bell
   const bellScale = useSharedValue(1);
+  const bellRotate = useSharedValue(0);
   const bellAnimStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: bellScale.value }],
+    transform: [
+      { scale: bellScale.value },
+      { rotate: `${bellRotate.value}deg` },
+    ],
   }));
 
   const handleNotificationBellPress = () => {
     bellScale.value = withSpring(0.82, { damping: 14, stiffness: 450 }, () => {
       bellScale.value = withSpring(1, { damping: 18, stiffness: 350 });
     });
+    bellRotate.value = withSequence(
+      withTiming(-14, { duration: 60 }),
+      withTiming(14, { duration: 90 }),
+      withTiming(-8, { duration: 70 }),
+      withTiming(0, { duration: 70 })
+    );
     setShowNotificationPanel(true);
   };
 
@@ -874,10 +887,10 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.screenContainer}>
-      {/* 6. Deep Luxury Green Gradient Background */}
+      {/* 6. Deep Multi-Stop Rich Luxury Green Gradient Background */}
       <LinearGradient
-        colors={['#071C12', '#0E2E20', '#154230', '#DCE8DF', '#CEDCCE']}
-        locations={[0, 0.14, 0.28, 0.64, 1]}
+        colors={['#061910', '#0B291B', '#113A27', '#1A4F35', '#7A9E89', '#96B8A4']}
+        locations={[0, 0.16, 0.35, 0.60, 0.82, 1]}
         style={StyleSheet.absoluteFill}
       />
 
@@ -980,11 +993,14 @@ export default function HomeScreen() {
                 </View>
               </View>
 
-              {/* Large Balance Typography */}
+              {/* Large Balance Typography with Text Animation */}
               <View style={styles.heroAmountRow}>
-                <Text style={styles.heroAmount}>
+                <Animated.Text
+                  entering={FadeInDown.duration(400).springify()}
+                  style={styles.heroAmount}
+                >
                   {showBalance ? `₹${availableLimit.toLocaleString('en-IN')}` : '••••••••'}
-                </Text>
+                </Animated.Text>
                 <View style={styles.trendPill}>
                   <TrendingUp size={12} color="#4ADE80" />
                   <Text style={styles.trendText}>Active Vault</Text>
@@ -1000,9 +1016,12 @@ export default function HomeScreen() {
                     <Wallet size={12} color="#34A853" />
                     <Text style={styles.metricLabel}>Total Limit</Text>
                   </View>
-                  <Text style={styles.metricValue}>
+                  <Animated.Text
+                    entering={FadeInUp.delay(100).duration(300)}
+                    style={styles.metricValue}
+                  >
                     {showBalance ? `₹${totalLimit.toLocaleString('en-IN')}` : '••••'}
-                  </Text>
+                  </Animated.Text>
                 </View>
 
                 <View style={styles.metricItem}>
@@ -1010,9 +1029,12 @@ export default function HomeScreen() {
                     <Layers size={12} color="#38BDF8" />
                     <Text style={styles.metricLabel}>In Transit</Text>
                   </View>
-                  <Text style={[styles.metricValue, { color: '#38BDF8' }]}>
+                  <Animated.Text
+                    entering={FadeInUp.delay(160).duration(300)}
+                    style={[styles.metricValue, { color: '#38BDF8' }]}
+                  >
                     {showBalance ? `₹${inTransit.toLocaleString('en-IN')}` : '••••'}
-                  </Text>
+                  </Animated.Text>
                 </View>
 
                 <View style={styles.metricItem}>
@@ -1020,9 +1042,12 @@ export default function HomeScreen() {
                     <Users size={12} color="#4ADE80" />
                     <Text style={styles.metricLabel}>Users Cash</Text>
                   </View>
-                  <Text style={[styles.metricValue, { color: '#4ADE80' }]}>
+                  <Animated.Text
+                    entering={FadeInUp.delay(220).duration(300)}
+                    style={[styles.metricValue, { color: '#4ADE80' }]}
+                  >
                     {showBalance ? `₹${usersCash.toLocaleString('en-IN')}` : '••••'}
-                  </Text>
+                  </Animated.Text>
                 </View>
               </View>
 
@@ -1089,7 +1114,15 @@ export default function HomeScreen() {
                     key={bill.id}
                     entering={FadeInDown.delay(100 + index * 60).springify().damping(22)}
                   >
-                    <View
+                    <TouchableOpacity
+                      activeOpacity={0.92}
+                      onPress={() => {
+                        setBillFormCardId(bill.card_id);
+                        setBillFormMonth(bill.billing_month.slice(0, 7));
+                        setBillFormGenAmount(String(bill.generated_amount));
+                        setBillFormPaidAmount(String(bill.paid_amount));
+                        setIsBillModalOpen(true);
+                      }}
                       style={[
                         styles.billCard,
                         isPaid ? styles.billCardPaid : styles.billCardPending,
@@ -1130,26 +1163,33 @@ export default function HomeScreen() {
                       <View style={styles.billGrid}>
                         <View style={styles.billCol}>
                           <Text style={styles.billColLabel}>GENERATED</Text>
-                          <Text style={styles.billColValue}>
+                          <Animated.Text
+                            entering={FadeInDown.delay(120).duration(260)}
+                            style={styles.billColValue}
+                          >
                             ₹{Number(bill.generated_amount).toLocaleString('en-IN')}
-                          </Text>
+                          </Animated.Text>
                         </View>
                         <View style={[styles.billCol, styles.billColBorder]}>
                           <Text style={styles.billColLabel}>PAID</Text>
-                          <Text style={[styles.billColValue, { color: '#15803D' }]}>
+                          <Animated.Text
+                            entering={FadeInDown.delay(160).duration(260)}
+                            style={[styles.billColValue, { color: '#15803D' }]}
+                          >
                             ₹{Number(bill.paid_amount).toLocaleString('en-IN')}
-                          </Text>
+                          </Animated.Text>
                         </View>
                         <View style={[styles.billCol, styles.billColBorder]}>
                           <Text style={styles.billColLabel}>DUE</Text>
-                          <Text
+                          <Animated.Text
+                            entering={FadeInDown.delay(200).duration(260)}
                             style={[
                               styles.billColValue,
                               { color: due > 0 ? '#DC2626' : '#15803D' },
                             ]}
                           >
                             ₹{due > 0 ? due.toLocaleString('en-IN') : 0}
-                          </Text>
+                          </Animated.Text>
                         </View>
                       </View>
 
@@ -1164,7 +1204,7 @@ export default function HomeScreen() {
                           Due: {fmtDate(dueDate)}
                         </Text>
                       </View>
-                    </View>
+                    </TouchableOpacity>
                   </Animated.View>
                 );
               })
@@ -1387,7 +1427,7 @@ export default function HomeScreen() {
           subtitle="Filter dashboard metrics by individual card or unified vault"
           heightPercent={0.65}
         >
-          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 18, gap: 10 }}>
+          <DrawerScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 18, gap: 10 }}>
             <TouchableOpacity
               style={[
                 styles.cardOptionRow,
@@ -1429,7 +1469,7 @@ export default function HomeScreen() {
                 </TouchableOpacity>
               );
             })}
-          </ScrollView>
+          </DrawerScrollView>
         </SwipeDownDrawer>
 
         {/* ================= BILL ENTRY DRAWER (Slide Down to Dismiss) ================= */}
@@ -1440,7 +1480,7 @@ export default function HomeScreen() {
           subtitle="Record and update card monthly statement amounts"
           heightPercent={0.72}
         >
-          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 20, gap: 12 }}>
+          <DrawerScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 20, gap: 12 }}>
             <Text style={styles.inputLabel}>Select Vault Card</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.selectorScroll}>
               {accessibleCards.filter((c) => c.is_primary).map((c) => {
@@ -1499,7 +1539,7 @@ export default function HomeScreen() {
                 <Text style={styles.sheetSaveText}>Save Bill Details</Text>
               )}
             </HapticButton>
-          </ScrollView>
+          </DrawerScrollView>
         </SwipeDownDrawer>
 
         {/* ================= 7. USER DETAIL LEDGER MODAL (Deep Green Gradient & Royal Gold) ================= */}
@@ -1561,7 +1601,7 @@ export default function HomeScreen() {
           )}
 
           {/* Tab Contents */}
-          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.drawerScrollBody}>
+          <DrawerScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.drawerScrollBody}>
             {/* ── TAB 1: SUMMARY (with Cash Transfer System) ── */}
             {userModalTab === 'summary' && selectedUserStat && (
               <View style={{ gap: 14 }}>
@@ -1840,7 +1880,7 @@ export default function HomeScreen() {
                 )}
               </View>
             )}
-          </ScrollView>
+          </DrawerScrollView>
         </SwipeDownDrawer>
 
         {/* ================= CASH TRANSFER DRAWER (Slide Down to Dismiss) ================= */}
@@ -1853,7 +1893,7 @@ export default function HomeScreen() {
           subtitle="Send cash balance between users & vault cards"
           heightPercent={0.78}
         >
-          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 20, gap: 14 }}>
+          <DrawerScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 20, gap: 14 }}>
             {/* 1. Sender Card */}
             <Text style={styles.goldInputLabel}>আপনার কোন কার্ড থেকে পাঠাবেন?</Text>
             {transferSenderCards.length === 0 ? (
@@ -1964,7 +2004,7 @@ export default function HomeScreen() {
                 <Text style={styles.confirmTransferBtnText}>Confirm Cash Transfer</Text>
               )}
             </TouchableOpacity>
-          </ScrollView>
+          </DrawerScrollView>
         </SwipeDownDrawer>
 
         {/* ================= QR PAYMENT MODAL (Slide Down to Dismiss) ================= */}
@@ -1975,7 +2015,7 @@ export default function HomeScreen() {
           subtitle={selectedQr?.upi_id || 'Pay from vault card'}
           heightPercent={0.76}
         >
-          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 20, gap: 12 }}>
+          <DrawerScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 20, gap: 12 }}>
             <Text style={styles.inputLabel}>Paying From Vault Card</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.selectorScroll}>
               {accessibleCards.map((c) => {
@@ -2055,7 +2095,7 @@ export default function HomeScreen() {
                 <Text style={styles.sheetSaveText}>Mark Used & Save Rotation</Text>
               )}
             </TouchableOpacity>
-          </ScrollView>
+          </DrawerScrollView>
         </SwipeDownDrawer>
 
         {/* ================= 3. NOTIFICATION SIDE PANEL (Sliding in from Right Side) ================= */}
@@ -2375,25 +2415,25 @@ const styles = StyleSheet.create({
     fontFamily: CedarTypography.body,
     color: CedarColors.ink500,
   },
-  // 5. Active Billing Cycles Card with Luxury Shadow
+  // 5. Active Billing Cycles Card with Enhanced Luxury Shadow
   billCard: {
-    borderRadius: 22,
-    padding: 16,
-    borderWidth: 1.2,
-    marginBottom: 12,
+    borderRadius: 24,
+    padding: 18,
+    borderWidth: 1.5,
+    marginBottom: 14,
     backgroundColor: '#FFFFFF',
     shadowColor: '#071A12',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.12,
-    shadowRadius: 16,
-    elevation: 6,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.16,
+    shadowRadius: 20,
+    elevation: 8,
   },
   billCardPending: {
-    borderColor: '#D4E2D6',
+    borderColor: '#C6D8CB',
   },
   billCardPaid: {
-    borderColor: '#A8D5B5',
-    backgroundColor: '#F7FCF8',
+    borderColor: '#A0D4AF',
+    backgroundColor: '#F8FCF9',
   },
   billTopRow: {
     flexDirection: 'row',

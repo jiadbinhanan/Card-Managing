@@ -497,7 +497,7 @@ export default function LoginScreen() {
                           placeholder="12345678"
                           placeholderTextColor={CedarColors.ink500}
                           keyboardType="numeric"
-                          maxLength={8}
+                          maxLength={16}
                           value={otp}
                           onChangeText={(t) => setOtp(t.replace(/\D/g, '').slice(0, 8))}
                         />
@@ -643,7 +643,7 @@ export default function LoginScreen() {
                   placeholder="••••••••"
                   placeholderTextColor={CedarColors.ink500}
                   keyboardType="numeric"
-                  maxLength={8}
+                  maxLength={16}
                   value={otp}
                   onChangeText={(t) => setOtp(t.replace(/\D/g, '').slice(0, 8))}
                 />

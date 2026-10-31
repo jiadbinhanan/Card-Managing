@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, createContext, useContext } from 'react';
 import {
   View,
   Text,
@@ -6,13 +6,15 @@ import {
   Dimensions,
   Modal,
   Pressable,
-  Platform,
+  ScrollView,
+  ScrollViewProps,
+  NativeSyntheticEvent,
+  NativeScrollEvent,
 } from 'react-native';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withSpring,
-  withTiming,
   runOnJS,
   interpolate,
   Extrapolation,
@@ -28,6 +30,32 @@ const SPRING_CONFIG = {
   damping: 28,
   stiffness: 350,
   mass: 0.8,
+};
+
+interface DrawerContextValue {
+  onScroll: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
+  scrollEventThrottle: number;
+}
+
+export const DrawerContext = createContext<DrawerContextValue>({
+  onScroll: () => {},
+  scrollEventThrottle: 16,
+});
+
+export const useDrawerScroll = () => useContext(DrawerContext);
+
+export const DrawerScrollView: React.FC<ScrollViewProps> = ({ onScroll, ...props }) => {
+  const { onScroll: drawerScroll, scrollEventThrottle } = useDrawerScroll();
+  return (
+    <ScrollView
+      {...props}
+      scrollEventThrottle={scrollEventThrottle}
+      onScroll={(e) => {
+        drawerScroll(e);
+        onScroll?.(e);
+      }}
+    />
+  );
 };
 
 interface SwipeDownDrawerProps {
@@ -55,11 +83,12 @@ export function SwipeDownDrawer({
 }: SwipeDownDrawerProps) {
   const SHEET_HEIGHT = SCREEN_HEIGHT * heightPercent;
   const translateY = useSharedValue(SHEET_HEIGHT);
-  const isDragging = useSharedValue(false);
+  const isScrollAtTop = useSharedValue(true);
 
   useEffect(() => {
     if (visible) {
       translateY.value = withSpring(0, SPRING_CONFIG);
+      isScrollAtTop.value = true;
     } else {
       translateY.value = SHEET_HEIGHT;
     }
@@ -77,19 +106,37 @@ export function SwipeDownDrawer({
     );
   };
 
-  // Pan gesture for dragging down to dismiss (after internal scroll reaches top)
-  const panGesture = Gesture.Pan()
-    .onStart(() => {
-      isDragging.value = true;
-    })
+  const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const y = event.nativeEvent.contentOffset.y;
+    isScrollAtTop.value = y <= 2;
+  };
+
+  // 1. Dedicated Pan gesture on the top handle and header area (always slides down)
+  const handlePanGesture = Gesture.Pan()
     .onUpdate((event) => {
       if (event.translationY > 0) {
         translateY.value = event.translationY;
       }
     })
     .onEnd((event) => {
-      isDragging.value = false;
-      if (event.translationY > 90 || event.velocityY > 500) {
+      if (event.translationY > 80 || event.velocityY > 450) {
+        runOnJS(handleDismiss)();
+      } else {
+        translateY.value = withSpring(0, SPRING_CONFIG);
+      }
+    });
+
+  // 2. Pan gesture on inner body that only triggers when inner scroll is at top
+  const contentPanGesture = Gesture.Pan()
+    .activeOffsetY([18, 1000])
+    .failOffsetY([-1000, -6])
+    .onUpdate((event) => {
+      if (isScrollAtTop.value && event.translationY > 0) {
+        translateY.value = event.translationY;
+      }
+    })
+    .onEnd((event) => {
+      if (isScrollAtTop.value && (event.translationY > 90 || event.velocityY > 500)) {
         runOnJS(handleDismiss)();
       } else {
         translateY.value = withSpring(0, SPRING_CONFIG);
@@ -112,31 +159,36 @@ export function SwipeDownDrawer({
   if (!visible) return null;
 
   const contentContainer = (
-    <>
-      {/* Top Drag Handle */}
-      <View style={styles.handleWrapper}>
-        <View style={styles.handlePill} />
-      </View>
-
-      {/* Header if title provided */}
-      {title && (
-        <View style={styles.header}>
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.headerTitle, { color: headerAccentColor }]}>{title}</Text>
-            {subtitle && <Text style={styles.headerSubtitle}>{subtitle}</Text>}
+    <DrawerContext.Provider value={{ onScroll: handleScroll, scrollEventThrottle: 16 }}>
+      {/* Top Drag Handle & Header - Always interactive drag zone */}
+      <GestureDetector gesture={handlePanGesture}>
+        <View style={styles.handleAndHeaderZone}>
+          <View style={styles.handleWrapper}>
+            <View style={styles.handlePill} />
           </View>
-          {headerRight}
-          <Pressable onPress={handleDismiss} style={styles.closeBtn} hitSlop={10}>
-            <X size={20} color={headerAccentColor === '#F6F9F5' ? '#F6F9F5' : CedarColors.ink700} />
-          </Pressable>
-        </View>
-      )}
 
-      {/* Inner Children (Scrollable content) */}
-      <View style={styles.innerBody}>
-        {children}
-      </View>
-    </>
+          {title && (
+            <View style={styles.header}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.headerTitle, { color: headerAccentColor }]}>{title}</Text>
+                {subtitle && <Text style={styles.headerSubtitle}>{subtitle}</Text>}
+              </View>
+              {headerRight}
+              <Pressable onPress={handleDismiss} style={styles.closeBtn} hitSlop={10}>
+                <X size={20} color={headerAccentColor === '#F6F9F5' ? '#F6F9F5' : CedarColors.ink700} />
+              </Pressable>
+            </View>
+          )}
+        </View>
+      </GestureDetector>
+
+      {/* Inner Children (Scrollable content with top-check drag coordination) */}
+      <GestureDetector gesture={contentPanGesture}>
+        <View style={styles.innerBody}>
+          {children}
+        </View>
+      </GestureDetector>
+    </DrawerContext.Provider>
   );
 
   return (
@@ -154,28 +206,26 @@ export function SwipeDownDrawer({
         </Animated.View>
 
         {/* Bottom Drawer Container */}
-        <GestureDetector gesture={panGesture}>
-          <Animated.View
-            style={[
-              styles.sheet,
-              { height: SHEET_HEIGHT },
-              animatedSheetStyle,
-            ]}
-          >
-            {gradientColors ? (
-              <LinearGradient
-                colors={gradientColors}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={[StyleSheet.absoluteFill, { borderRadius: 32 }]}
-              >
-                {contentContainer}
-              </LinearGradient>
-            ) : (
-              contentContainer
-            )}
-          </Animated.View>
-        </GestureDetector>
+        <Animated.View
+          style={[
+            styles.sheet,
+            { height: SHEET_HEIGHT },
+            animatedSheetStyle,
+          ]}
+        >
+          {gradientColors ? (
+            <LinearGradient
+              colors={gradientColors}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={[StyleSheet.absoluteFill, { borderRadius: 32 }]}
+            >
+              {contentContainer}
+            </LinearGradient>
+          ) : (
+            contentContainer
+          )}
+        </Animated.View>
       </View>
     </Modal>
   );
@@ -203,6 +253,9 @@ const styles = StyleSheet.create({
     borderTopWidth: 1.5,
     borderTopColor: '#DCE8DE',
     overflow: 'hidden',
+  },
+  handleAndHeaderZone: {
+    backgroundColor: 'transparent',
   },
   handleWrapper: {
     alignItems: 'center',

@@ -28,7 +28,7 @@ export function NumericKeypad({ onKeyPress, onBackspace }: NumericKeypadProps) {
                   key={k}
                   style={styles.keyBtn}
                   onPress={onBackspace}
-                  feedbackType="medium"
+                  feedbackType="none"
                 >
                   <Delete size={22} color={CedarColors.ink900} />
                 </HapticButton>
@@ -40,7 +40,7 @@ export function NumericKeypad({ onKeyPress, onBackspace }: NumericKeypadProps) {
                 key={k}
                 style={styles.keyBtn}
                 onPress={() => onKeyPress(k)}
-                feedbackType="light"
+                feedbackType="none"
               >
                 <Text style={styles.keyText}>{k}</Text>
               </HapticButton>
