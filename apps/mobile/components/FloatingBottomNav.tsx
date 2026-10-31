@@ -41,7 +41,7 @@ const SPRING_CONFIG = {
   mass: 0.8,
 };
 
-const DRAWER_HEIGHT = 160;
+const DRAWER_HEIGHT = 136;
 
 export function FloatingBottomNav({ state, descriptors, navigation }: BottomTabBarProps) {
   const [isExpanded, setIsExpanded] = useState(false);
@@ -50,7 +50,6 @@ export function FloatingBottomNav({ state, descriptors, navigation }: BottomTabB
 
   const toggleExpand = useCallback((expand: boolean) => {
     setIsExpanded(expand);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
   }, []);
 
   const openDrawer = useCallback(() => {
@@ -140,8 +139,6 @@ export function FloatingBottomNav({ state, descriptors, navigation }: BottomTabB
   });
 
   const handleNavigate = (routeKey: string, routeName: string, isFocused: boolean) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
-
     if (isExpanded) {
       closeDrawer();
     }
@@ -158,7 +155,6 @@ export function FloatingBottomNav({ state, descriptors, navigation }: BottomTabB
   };
 
   const handleExtraOptionPress = (path: string) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
     closeDrawer();
     navigation.navigate(path);
   };
@@ -215,7 +211,7 @@ export function FloatingBottomNav({ state, descriptors, navigation }: BottomTabB
                   onPress={() => handleExtraOptionPress('ledgers')}
                 >
                   <View style={[styles.drawerIconBadge, { backgroundColor: 'rgba(46, 148, 75, 0.16)' }]}>
-                    <Banknote size={18} color="#2E944B" strokeWidth={2.4} />
+                    <Banknote size={15} color="#2E944B" strokeWidth={2.4} />
                   </View>
                   <Text style={styles.drawerCardTitle}>Cash on Hand</Text>
                   <Text style={styles.drawerCardSub}>Ledger & Vault</Text>
@@ -231,7 +227,7 @@ export function FloatingBottomNav({ state, descriptors, navigation }: BottomTabB
                   onPress={() => handleExtraOptionPress('ledgers')}
                 >
                   <View style={[styles.drawerIconBadge, { backgroundColor: 'rgba(217, 119, 6, 0.16)' }]}>
-                    <Receipt size={18} color="#D97706" strokeWidth={2.4} />
+                    <Receipt size={15} color="#D97706" strokeWidth={2.4} />
                   </View>
                   <Text style={styles.drawerCardTitle}>Personal Spends</Text>
                   <Text style={styles.drawerCardSub}>Card & Cash Logs</Text>
@@ -247,7 +243,7 @@ export function FloatingBottomNav({ state, descriptors, navigation }: BottomTabB
                   onPress={() => handleExtraOptionPress('ledgers')}
                 >
                   <View style={[styles.drawerIconBadge, { backgroundColor: 'rgba(125, 90, 224, 0.16)' }]}>
-                    <Coins size={18} color="#7D5AE0" strokeWidth={2.4} />
+                    <Coins size={15} color="#7D5AE0" strokeWidth={2.4} />
                   </View>
                   <Text style={styles.drawerCardTitle}>Pocket Advance</Text>
                   <Text style={styles.drawerCardSub}>Cross Reclaim</Text>
@@ -263,7 +259,7 @@ export function FloatingBottomNav({ state, descriptors, navigation }: BottomTabB
                   onPress={() => handleExtraOptionPress('cards')}
                 >
                   <View style={[styles.drawerIconBadge, { backgroundColor: 'rgba(10, 38, 28, 0.16)' }]}>
-                    <CreditCard size={18} color={CedarColors.forest800} strokeWidth={2.4} />
+                    <CreditCard size={15} color={CedarColors.forest800} strokeWidth={2.4} />
                   </View>
                   <Text style={styles.drawerCardTitle}>My Cards</Text>
                   <Text style={styles.drawerCardSub}>Limits & Dates</Text>
@@ -384,20 +380,21 @@ const styles = StyleSheet.create({
   },
   drawerContent: {
     overflow: 'hidden',
-    paddingHorizontal: 4,
-    marginBottom: 8,
+    paddingHorizontal: 2,
+    marginBottom: 4,
   },
   drawerGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'space-between',
-    gap: 8,
-    paddingVertical: 6,
+    gap: 6,
+    paddingVertical: 2,
   },
   drawerCard: {
-    width: '48%',
-    borderRadius: 18,
-    padding: 10,
+    width: '48.5%',
+    borderRadius: 14,
+    paddingVertical: 7,
+    paddingHorizontal: 9,
     borderWidth: 1,
     borderColor: CedarColors.border,
     alignItems: 'flex-start',
@@ -406,24 +403,24 @@ const styles = StyleSheet.create({
     transform: [{ scale: 0.97 }],
   },
   drawerIconBadge: {
-    width: 34,
-    height: 34,
-    borderRadius: 12,
+    width: 28,
+    height: 28,
+    borderRadius: 9,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 6,
+    marginBottom: 4,
   },
   drawerCardTitle: {
-    fontSize: 12,
+    fontSize: 11,
     fontFamily: CedarTypography.bodySemiBold,
     color: CedarColors.ink900,
     fontWeight: '700',
   },
   drawerCardSub: {
-    fontSize: 10,
+    fontSize: 9,
     fontFamily: CedarTypography.body,
     color: CedarColors.ink500,
-    marginTop: 1,
+    marginTop: 0.5,
   },
   navRow: {
     flexDirection: 'row',

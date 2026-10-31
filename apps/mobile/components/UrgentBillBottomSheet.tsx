@@ -59,9 +59,16 @@ export function UrgentBillBottomSheet({
     transform: [{ translateY: translateY.value }],
   }));
 
+  const animatedBackdropStyle = useAnimatedStyle(() => {
+    const opacity = (1 - translateY.value / SHEET_HEIGHT) * 0.55;
+    return {
+      opacity: Math.max(0, Math.min(0.55, opacity)),
+    };
+  });
+
   const handleDismiss = () => {
     Haptics.selectionAsync();
-    translateY.value = withSpring(SHEET_HEIGHT, { damping: 24, stiffness: 350 }, (finished) => {
+    translateY.value = withSpring(SHEET_HEIGHT, { damping: 30, stiffness: 450, mass: 0.6 }, (finished) => {
       if (finished) {
         runOnJS(onClose)();
       }
@@ -78,7 +85,7 @@ export function UrgentBillBottomSheet({
       onRequestClose={handleDismiss}
     >
       <TouchableWithoutFeedback onPress={handleDismiss}>
-        <View style={styles.backdrop}>
+        <Animated.View style={[styles.backdrop, animatedBackdropStyle]}>
           <TouchableWithoutFeedback>
             <Animated.View style={[styles.sheet, animatedSheetStyle]}>
               {/* Drag Handle */}
@@ -140,7 +147,7 @@ export function UrgentBillBottomSheet({
               </HapticButton>
             </Animated.View>
           </TouchableWithoutFeedback>
-        </View>
+        </Animated.View>
       </TouchableWithoutFeedback>
     </Modal>
   );
