@@ -91,18 +91,23 @@ jobs:
       - name: Find and Stage APK
         run: |
           mkdir -p build_output
-          find apps/mobile/android/app/build/outputs/apk -name "*.apk" -exec cp {} build_output/credics-react-native.apk \;
-          echo "✅ Staged APK: build_output/credics-react-native.apk"
+          VERSION=$(node -p "require('./apps/mobile/app.json').expo.version || '1.0.0'")
+          APK_NAME="Credics-v${VERSION}.apk"
+          echo "APP_VERSION=${VERSION}" >> $GITHUB_ENV
+          echo "APK_FILENAME=${APK_NAME}" >> $GITHUB_ENV
+          find apps/mobile/android/app/build/outputs/apk -name "*.apk" -exec cp {} "build_output/${APK_NAME}" \;
+          echo "✅ Staged APK: build_output/${APK_NAME}"
 
       - name: Verify APK Signature
         run: |
           if [ "${{ github.event.inputs.build_type }}" = "release" ]; then
-            apksigner verify --verbose build_output/credics-react-native.apk || echo "Sign check done"
+            apksigner verify --verbose "build_output/${{ env.APK_FILENAME }}" || echo "Sign check done"
           fi
 
       - name: Upload APK to GitHub Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: credics-react-native-apk
-          path: build_output/credics-react-native.apk
+          name: Credics-v${{ env.APP_VERSION }}
+          path: build_output/Credics-v*.apk
           retention-days: 14
+

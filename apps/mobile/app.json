@@ -17,7 +17,7 @@
       "edgeToEdgeEnabled": true,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#0C2C21"
+        "backgroundColor": "#FCFDFB"
       },
       "permissions": [
         "android.permission.VIBRATE",
