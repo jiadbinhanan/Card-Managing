@@ -30,7 +30,7 @@ export function NumericKeypad({ onKeyPress, onBackspace }: NumericKeypadProps) {
                   onPress={onBackspace}
                   feedbackType="medium"
                 >
-                  <Delete size={24} color={CedarColors.bone} />
+                  <Delete size={22} color={CedarColors.ink900} />
                 </HapticButton>
               );
             }
@@ -54,24 +54,32 @@ export function NumericKeypad({ onKeyPress, onBackspace }: NumericKeypadProps) {
 
 const styles = StyleSheet.create({
   container: {
-    paddingHorizontal: 24,
-    paddingVertical: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 8,
   },
   row: {
     flexDirection: 'row',
     justifyContent: 'space-around',
-    marginVertical: 10,
+    marginVertical: 6,
   },
   keyBtn: {
-    width: 75,
-    height: 60,
+    width: 78,
+    height: 56,
     justifyContent: 'center',
     alignItems: 'center',
-    borderRadius: 16,
+    borderRadius: 18,
+    backgroundColor: CedarColors.card,
+    borderWidth: 1,
+    borderColor: CedarColors.border,
+    shadowColor: '#0F382A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 2,
   },
   keyText: {
-    color: CedarColors.bone,
-    fontSize: 26,
+    color: CedarColors.ink900,
+    fontSize: 24,
     fontWeight: '700',
     fontFamily: 'SpaceGrotesk-Bold',
   },

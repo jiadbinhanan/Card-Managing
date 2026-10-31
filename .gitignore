@@ -22,12 +22,21 @@ service-account*.json
 !android/app/credics-release.jks
 
 # Android Local & Build Outputs
+.expo/
+**/.expo/
+**/.cxx/
 android/.gradle/
 android/build/
 android/app/build/
+**/android/.gradle/
+**/android/build/
+**/android/app/build/
 android/local.properties
+**/android/local.properties
 android/.idea/
+**/android/.idea/
 android/*.iml
 android/app/*.iml
+*.tsbuildinfo
 *.apk
 *.aab

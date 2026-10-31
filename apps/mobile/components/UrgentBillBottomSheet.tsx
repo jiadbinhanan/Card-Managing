@@ -6,44 +6,49 @@ import Animated, {
   withSpring,
   runOnJS,
 } from 'react-native-reanimated';
-import { CedarColors } from '@credics/core';
+import { CedarColors, CedarTypography } from '@credics/core';
 import { HapticButton } from './HapticButton';
 import { AlertTriangle, X, ArrowRight, RefreshCw, ShieldAlert } from 'lucide-react-native';
 import { requestOverlayPermission } from '../utils/overlayPermission';
 import * as Haptics from 'expo-haptics';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
-const SHEET_HEIGHT = SCREEN_HEIGHT * 0.38; // 38% screen height
+const SHEET_HEIGHT = SCREEN_HEIGHT * 0.40;
 
 interface UrgentBillBottomSheetProps {
   visible: boolean;
-  cardName: string;
-  last4Digits: string;
-  dueAmount: number;
-  dueDate: string;
-  onPayNow: () => void;
-  onRotateLimit: () => void;
+  cardName?: string;
+  last4Digits?: string;
+  dueAmount?: number;
+  dueDate?: string;
+  amountDue?: number;
+  daysLeft?: number;
+  onPayNow?: () => void;
+  onRotateLimit?: () => void;
   onClose: () => void;
 }
 
 export function UrgentBillBottomSheet({
   visible,
-  cardName,
-  last4Digits,
+  cardName = 'Primary Credit Vault',
+  last4Digits = '••••',
   dueAmount,
-  dueDate,
+  dueDate = 'Soon',
+  amountDue,
+  daysLeft = 1,
   onPayNow,
   onRotateLimit,
   onClose,
 }: UrgentBillBottomSheetProps) {
   const translateY = useSharedValue(SHEET_HEIGHT);
+  const displayAmount = dueAmount !== undefined ? dueAmount : (amountDue || 0);
 
   useEffect(() => {
     if (visible) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
       translateY.value = withSpring(0, {
-        damping: 18,
-        stiffness: 180,
+        damping: 24,
+        stiffness: 350,
       });
     } else {
       translateY.value = SHEET_HEIGHT;
@@ -55,7 +60,8 @@ export function UrgentBillBottomSheet({
   }));
 
   const handleDismiss = () => {
-    translateY.value = withSpring(SHEET_HEIGHT, { damping: 20 }, (finished) => {
+    Haptics.selectionAsync();
+    translateY.value = withSpring(SHEET_HEIGHT, { damping: 24, stiffness: 350 }, (finished) => {
       if (finished) {
         runOnJS(onClose)();
       }
@@ -81,40 +87,42 @@ export function UrgentBillBottomSheet({
               {/* Alert Header */}
               <View style={styles.header}>
                 <View style={styles.alertBadge}>
-                  <AlertTriangle size={18} color="#FFF" />
-                  <Text style={styles.alertBadgeText}>BILL DUE IN 24 HOURS</Text>
+                  <AlertTriangle size={15} color="#F6F9F5" />
+                  <Text style={styles.alertBadgeText}>
+                    {daysLeft <= 1 ? 'BILL DUE IN 24 HOURS' : `BILL DUE IN ${daysLeft} DAYS`}
+                  </Text>
                 </View>
-                <HapticButton onPress={handleDismiss} style={styles.closeBtn}>
-                  <X size={20} color={CedarColors.pine300} />
+                <HapticButton onPress={handleDismiss} style={styles.closeBtn} feedbackType="rigid">
+                  <X size={20} color={CedarColors.ink700} />
                 </HapticButton>
               </View>
 
               {/* Card & Amount Row */}
               <View style={styles.amountContainer}>
                 <View>
-                  <Text style={styles.cardLabel}>{cardName} (•••• {last4Digits})</Text>
+                  <Text style={styles.cardLabel}>{cardName} (•• {last4Digits})</Text>
                   <Text style={styles.dueSubLabel}>Due Date: {dueDate}</Text>
                 </View>
-                <Text style={styles.amountText}>₹{dueAmount.toLocaleString()}</Text>
+                <Text style={styles.amountText}>₹{displayAmount.toLocaleString('en-IN')}</Text>
               </View>
 
               {/* Actions Row */}
               <View style={styles.actionsContainer}>
                 <HapticButton
                   style={[styles.btn, styles.payBtn]}
-                  onPress={onPayNow}
-                  feedbackType="success"
+                  onPress={onPayNow || handleDismiss}
+                  feedbackType="rigid"
                 >
                   <Text style={styles.payBtnText}>Pay Bill Now</Text>
-                  <ArrowRight size={18} color={CedarColors.pine900} />
+                  <ArrowRight size={18} color="#F6F9F5" strokeWidth={2.4} />
                 </HapticButton>
 
                 <HapticButton
                   style={[styles.btn, styles.rotateBtn]}
-                  onPress={onRotateLimit}
-                  feedbackType="heavy"
+                  onPress={onRotateLimit || handleDismiss}
+                  feedbackType="rigid"
                 >
-                  <RefreshCw size={16} color={CedarColors.bone} />
+                  <RefreshCw size={16} color={CedarColors.forest800} strokeWidth={2.2} />
                   <Text style={styles.rotateBtnText}>Rotate Limit</Text>
                 </HapticButton>
               </View>
@@ -123,11 +131,11 @@ export function UrgentBillBottomSheet({
               <HapticButton
                 style={styles.overlayPermBtn}
                 onPress={requestOverlayPermission}
-                feedbackType="light"
+                feedbackType="rigid"
               >
-                <ShieldAlert size={14} color={CedarColors.gold500} />
+                <ShieldAlert size={14} color="#2E944B" />
                 <Text style={styles.overlayPermText}>
-                  Enable "Display Over Other Apps" for background alerts
+                  Enable "Display Over Other Apps" for background alert popups
                 </Text>
               </HapticButton>
             </Animated.View>
@@ -141,28 +149,28 @@ export function UrgentBillBottomSheet({
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    backgroundColor: 'rgba(7, 26, 18, 0.55)',
     justifyContent: 'flex-end',
   },
   sheet: {
     height: SHEET_HEIGHT,
-    backgroundColor: CedarColors.pine900,
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
+    backgroundColor: CedarColors.card,
+    borderTopLeftRadius: 32,
+    borderTopRightRadius: 32,
     paddingHorizontal: 22,
     paddingTop: 12,
-    borderTopWidth: 1.5,
-    borderTopColor: CedarColors.gold500,
-    shadowColor: '#000',
+    borderTopWidth: 2,
+    borderTopColor: CedarColors.negative,
+    shadowColor: '#071A12',
     shadowOffset: { width: 0, height: -8 },
-    shadowOpacity: 0.4,
+    shadowOpacity: 0.18,
     shadowRadius: 20,
     elevation: 24,
   },
   dragHandle: {
     width: 44,
     height: 4,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    backgroundColor: CedarColors.borderDark,
     borderRadius: 2,
     alignSelf: 'center',
     marginBottom: 16,
@@ -183,10 +191,11 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   alertBadgeText: {
-    color: '#FFF',
-    fontSize: 11,
+    color: '#F6F9F5',
+    fontSize: 10,
+    fontFamily: CedarTypography.bodySemiBold,
     fontWeight: '800',
-    letterSpacing: 0.6,
+    letterSpacing: 0.5,
   },
   closeBtn: {
     padding: 6,
@@ -195,35 +204,39 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: CedarColors.pine800,
+    backgroundColor: CedarColors.canvas,
     padding: 16,
     borderRadius: 18,
-    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: CedarColors.border,
+    marginBottom: 16,
   },
   cardLabel: {
-    color: CedarColors.bone,
+    color: CedarColors.ink900,
     fontSize: 14,
+    fontFamily: CedarTypography.bodySemiBold,
     fontWeight: '700',
   },
   dueSubLabel: {
-    color: CedarColors.pine300,
-    fontSize: 12,
-    fontWeight: '500',
-    marginTop: 4,
+    color: CedarColors.ink500,
+    fontSize: 11,
+    fontFamily: CedarTypography.body,
+    marginTop: 2,
   },
   amountText: {
-    color: CedarColors.gold500,
-    fontSize: 22,
+    color: CedarColors.negative,
+    fontSize: 20,
+    fontFamily: CedarTypography.display,
     fontWeight: '800',
-    fontFamily: 'SpaceGrotesk-Bold',
   },
   actionsContainer: {
     flexDirection: 'row',
     gap: 12,
+    marginBottom: 14,
   },
   btn: {
     flex: 1,
-    height: 52,
+    paddingVertical: 13,
     borderRadius: 16,
     flexDirection: 'row',
     justifyContent: 'center',
@@ -231,36 +244,35 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   payBtn: {
-    backgroundColor: CedarColors.gold500,
-    flex: 1.4,
+    backgroundColor: CedarColors.forest800,
   },
   payBtnText: {
-    color: CedarColors.pine900,
-    fontSize: 14,
-    fontWeight: '800',
+    color: '#F6F9F5',
+    fontSize: 13,
+    fontFamily: CedarTypography.bodySemiBold,
+    fontWeight: '700',
   },
   rotateBtn: {
-    backgroundColor: CedarColors.pine700,
+    backgroundColor: CedarColors.canvas,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderColor: CedarColors.border,
   },
   rotateBtnText: {
-    color: CedarColors.bone,
+    color: CedarColors.forest800,
     fontSize: 13,
+    fontFamily: CedarTypography.bodySemiBold,
     fontWeight: '700',
   },
   overlayPermBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 14,
     gap: 6,
     paddingVertical: 6,
   },
   overlayPermText: {
-    color: CedarColors.gold500,
-    fontSize: 11,
-    fontWeight: '600',
-    textDecorationLine: 'underline',
+    fontSize: 10,
+    fontFamily: CedarTypography.body,
+    color: CedarColors.ink500,
   },
 });

@@ -1,9 +1,9 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import Svg, { G, Circle } from 'react-native-svg';
-import { CedarColors } from '@credics/core';
+import { CedarColors, CedarTypography } from '@credics/core';
 
-interface CategorySlice {
+export interface CategorySlice {
   label: string;
   percentage: number;
   amount: number;
@@ -17,19 +17,16 @@ interface DonutChartProps {
 
 export function DonutChart({
   totalAmount,
-  slices = [
-    { label: 'Bills & Dues', percentage: 45, amount: 4500, color: CedarColors.positive },
-    { label: 'Shopping', percentage: 25, amount: 2500, color: CedarColors.gold500 },
-    { label: 'Lent Given', percentage: 18, amount: 1800, color: CedarColors.clay },
-    { label: 'Others', percentage: 12, amount: 1200, color: CedarColors.pine300 },
-  ],
+  slices = [],
 }: DonutChartProps) {
-  const size = 180;
-  const strokeWidth = 24;
+  const size = 190;
+  const strokeWidth = 22;
   const radius = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * radius;
 
   let accumulatedPercentage = 0;
+
+  const validSlices = slices.filter((s) => s.percentage > 0);
 
   return (
     <View style={styles.container}>
@@ -37,8 +34,19 @@ export function DonutChart({
       <View style={styles.chartWrapper}>
         <Svg width={size} height={size}>
           <G rotation="-90" origin={`${size / 2}, ${size / 2}`}>
-            {slices.map((slice, index) => {
-              const strokeDashoffset = circumference - (circumference * slice.percentage) / 100;
+            {/* Background Track */}
+            <Circle
+              cx={size / 2}
+              cy={size / 2}
+              r={radius}
+              stroke={CedarColors.cardAlt}
+              strokeWidth={strokeWidth}
+              fill="none"
+            />
+
+            {validSlices.map((slice, index) => {
+              const strokeDashoffset =
+                circumference - (circumference * slice.percentage) / 100;
               const rotationAngle = (accumulatedPercentage / 100) * 360;
               accumulatedPercentage += slice.percentage;
 
@@ -63,17 +71,19 @@ export function DonutChart({
 
         {/* Center Total Text */}
         <View style={styles.centerTextContainer}>
-          <Text style={styles.centerAmount}>₹{totalAmount.toLocaleString()}</Text>
+          <Text style={styles.centerAmount}>₹{Math.round(totalAmount).toLocaleString('en-IN')}</Text>
           <Text style={styles.centerLabel}>Total Spent</Text>
         </View>
       </View>
 
-      {/* Legend Grid */}
+      {/* 2-Column Legend Grid */}
       <View style={styles.legendContainer}>
-        {slices.map((slice, index) => (
+        {validSlices.map((slice, index) => (
           <View key={index} style={styles.legendItem}>
             <View style={[styles.legendDot, { backgroundColor: slice.color }]} />
-            <Text style={styles.legendLabel}>{slice.label}</Text>
+            <Text style={styles.legendLabel} numberOfLines={1}>
+              {slice.label}
+            </Text>
             <Text style={styles.legendValue}>{slice.percentage}%</Text>
           </View>
         ))}
@@ -85,28 +95,30 @@ export function DonutChart({
 const styles = StyleSheet.create({
   container: {
     alignItems: 'center',
-    marginVertical: 16,
+    width: '100%',
   },
   chartWrapper: {
-    width: 180,
-    height: 180,
+    width: 190,
+    height: 190,
     justifyContent: 'center',
     alignItems: 'center',
+    marginVertical: 8,
   },
   centerTextContainer: {
     position: 'absolute',
     alignItems: 'center',
+    justifyContent: 'center',
   },
   centerAmount: {
-    color: CedarColors.bone,
-    fontSize: 22,
+    fontSize: 20,
+    fontFamily: CedarTypography.display,
     fontWeight: '800',
-    fontFamily: 'SpaceGrotesk-Bold',
+    color: CedarColors.ink900,
   },
   centerLabel: {
-    color: CedarColors.pine300,
-    fontSize: 12,
-    fontWeight: '500',
+    fontSize: 11,
+    fontFamily: CedarTypography.body,
+    color: CedarColors.ink500,
     marginTop: 2,
   },
   legendContainer: {
@@ -114,30 +126,32 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     justifyContent: 'space-between',
     width: '100%',
-    paddingHorizontal: 24,
-    marginTop: 24,
+    marginTop: 14,
+    paddingHorizontal: 4,
   },
   legendItem: {
     flexDirection: 'row',
     alignItems: 'center',
     width: '48%',
-    marginBottom: 12,
+    marginBottom: 8,
   },
   legendDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    marginRight: 8,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 6,
   },
   legendLabel: {
-    color: CedarColors.bone,
-    fontSize: 13,
-    fontWeight: '500',
     flex: 1,
+    fontSize: 11,
+    fontFamily: CedarTypography.body,
+    color: CedarColors.ink700,
   },
   legendValue: {
-    color: CedarColors.pine300,
-    fontSize: 13,
+    fontSize: 11,
+    fontFamily: CedarTypography.bodySemiBold,
+    color: CedarColors.ink900,
     fontWeight: '700',
+    marginLeft: 4,
   },
 });

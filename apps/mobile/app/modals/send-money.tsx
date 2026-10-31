@@ -1,22 +1,23 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CedarColors } from '@credics/core';
 import { NumericKeypad } from '../../components/NumericKeypad';
 import { HapticButton } from '../../components/HapticButton';
 import { ArrowLeft, UserPlus, Check } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
+import * as Haptics from 'expo-haptics';
 
 export default function SendMoneyModal() {
   const router = useRouter();
-  const [amount, setAmount] = useState('240');
+  const [amount, setAmount] = useState('2500');
   const [selectedRecipient, setSelectedRecipient] = useState('1');
 
   const recipients = [
-    { id: '1', name: 'Noah B.', handle: '@noah' },
-    { id: '2', name: 'Mia K.', handle: '@mia' },
-    { id: '3', name: 'Theo R.', handle: '@theo' },
-    { id: '4', name: 'Priya S.', handle: '@priya' },
+    { id: '1', name: 'Rahim Khan', handle: '@rahim' },
+    { id: '2', name: 'Tanvir H.', handle: '@tanvir' },
+    { id: '3', name: 'Sabbir A.', handle: '@sabbir' },
+    { id: '4', name: 'Farhan M.', handle: '@farhan' },
   ];
 
   const handleKeyPress = (val: string) => {
@@ -32,39 +33,81 @@ export default function SendMoneyModal() {
     setAmount((prev) => (prev.length > 1 ? prev.slice(0, -1) : '0'));
   };
 
+  const handleReviewPayment = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    Alert.alert(
+      'Confirm Payment',
+      `Send ₹${amount} to ${recipients.find((r) => r.id === selectedRecipient)?.name}?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Send Now',
+          onPress: () => {
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            router.back();
+          },
+        },
+      ]
+    );
+  };
+
   return (
     <SafeAreaView style={styles.safeArea}>
       {/* Header */}
       <View style={styles.header}>
-        <HapticButton style={styles.backBtn} onPress={() => router.back()}>
-          <ArrowLeft size={20} color={CedarColors.bone} />
+        <HapticButton
+          style={styles.backBtn}
+          onPress={() => router.back()}
+          feedbackType="light"
+        >
+          <ArrowLeft size={20} color={CedarColors.ink900} />
         </HapticButton>
-        <Text style={styles.headerTitle}>Send money</Text>
+        <Text style={styles.headerTitle}>Send Money</Text>
         <Text style={styles.stepIndicator}>Step 1 of 2</Text>
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {/* Recipient Avatars Row */}
         <View style={styles.recipientRow}>
-          <HapticButton style={styles.addRecipientBtn} feedbackType="light">
-            <UserPlus size={20} color={CedarColors.bone} />
+          <TouchableOpacity
+            style={styles.addRecipientBtn}
+            onPress={() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)}
+          >
+            <UserPlus size={18} color={CedarColors.forest800} />
             <Text style={styles.addText}>Add</Text>
-          </HapticButton>
+          </TouchableOpacity>
 
           {recipients.map((rec) => {
             const isSelected = selectedRecipient === rec.id;
             return (
-              <HapticButton
+              <TouchableOpacity
                 key={rec.id}
                 style={[styles.recipientItem, isSelected && styles.selectedRecipientItem]}
-                onPress={() => setSelectedRecipient(rec.id)}
-                feedbackType="light"
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setSelectedRecipient(rec.id);
+                }}
+                activeOpacity={0.8}
               >
-                <View style={[styles.avatarCircle, isSelected && styles.selectedAvatarCircle]}>
-                  <Text style={styles.avatarInitial}>{rec.name.charAt(0)}</Text>
+                <View
+                  style={[
+                    styles.avatarCircle,
+                    isSelected && styles.selectedAvatarCircle,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.avatarInitial,
+                      isSelected && styles.selectedAvatarInitial,
+                    ]}
+                  >
+                    {rec.name.charAt(0)}
+                  </Text>
                 </View>
-                <Text style={styles.recipientName}>{rec.name}</Text>
-              </HapticButton>
+                <Text style={styles.recipientName} numberOfLines={1}>
+                  {rec.name}
+                </Text>
+              </TouchableOpacity>
             );
           })}
         </View>
@@ -80,14 +123,18 @@ export default function SendMoneyModal() {
         {/* Quick Amount Presets */}
         <View style={styles.presetsRow}>
           {['500', '1000', '2500', '5000'].map((val) => (
-            <HapticButton
+            <TouchableOpacity
               key={val}
-              style={styles.presetPill}
-              onPress={() => setAmount(val)}
-              feedbackType="light"
+              style={[styles.presetPill, amount === val && styles.activePresetPill]}
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setAmount(val);
+              }}
             >
-              <Text style={styles.presetText}>₹{val}</Text>
-            </HapticButton>
+              <Text style={[styles.presetText, amount === val && styles.activePresetText]}>
+                ₹{val}
+              </Text>
+            </TouchableOpacity>
           ))}
         </View>
 
@@ -98,10 +145,10 @@ export default function SendMoneyModal() {
         <View style={styles.ctaContainer}>
           <HapticButton
             style={styles.reviewBtn}
-            onPress={() => router.back()}
-            feedbackType="success"
+            onPress={handleReviewPayment}
+            feedbackType="heavy"
           >
-            <Text style={styles.reviewBtnText}>Review transfer →</Text>
+            <Text style={styles.reviewBtnText}>Continue to Review</Text>
           </HapticButton>
         </View>
       </ScrollView>
@@ -112,7 +159,7 @@ export default function SendMoneyModal() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: CedarColors.pine900,
+    backgroundColor: CedarColors.canvas, // #F4F6F2
   },
   scrollContent: {
     paddingBottom: 40,
@@ -122,145 +169,176 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 8,
+    paddingTop: 10,
+    paddingBottom: 14,
   },
   backBtn: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: CedarColors.pine800,
+    backgroundColor: CedarColors.card,
+    borderWidth: 1,
+    borderColor: CedarColors.border,
     justifyContent: 'center',
     alignItems: 'center',
   },
   headerTitle: {
-    color: CedarColors.bone,
+    color: CedarColors.ink900,
     fontSize: 18,
     fontWeight: '800',
+    fontFamily: 'SpaceGrotesk-Bold',
   },
   stepIndicator: {
-    color: CedarColors.pine300,
+    color: CedarColors.ink700,
     fontSize: 12,
     fontWeight: '600',
   },
   recipientRow: {
     flexDirection: 'row',
     paddingHorizontal: 20,
-    paddingVertical: 14,
-    gap: 14,
+    paddingVertical: 12,
+    gap: 12,
   },
   addRecipientBtn: {
     alignItems: 'center',
     justifyContent: 'center',
     width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: CedarColors.card,
+    borderWidth: 1.5,
+    borderColor: CedarColors.border,
+    borderStyle: 'dashed',
   },
   addText: {
-    color: CedarColors.pine300,
-    fontSize: 11,
-    fontWeight: '600',
-    marginTop: 4,
+    color: CedarColors.forest800,
+    fontSize: 10,
+    fontWeight: '700',
+    marginTop: 2,
   },
   recipientItem: {
     alignItems: 'center',
-    width: 64,
+    width: 60,
   },
   selectedRecipientItem: {},
   avatarCircle: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: CedarColors.pine800,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: CedarColors.card,
+    borderWidth: 1,
+    borderColor: CedarColors.border,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 2,
-    borderColor: 'transparent',
+    shadowColor: '#0F382A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
   },
   selectedAvatarCircle: {
-    borderColor: CedarColors.gold500,
-    backgroundColor: CedarColors.pine700,
+    backgroundColor: CedarColors.forest800,
+    borderColor: CedarColors.forest800,
   },
   avatarInitial: {
-    color: CedarColors.bone,
-    fontSize: 18,
-    fontWeight: '700',
+    color: CedarColors.ink900,
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  selectedAvatarInitial: {
+    color: '#FFFFFF',
   },
   recipientName: {
-    color: CedarColors.bone,
-    fontSize: 12,
+    color: CedarColors.ink900,
+    fontSize: 11,
     fontWeight: '600',
-    marginTop: 4,
+    marginTop: 6,
+    textAlign: 'center',
   },
   amountDisplayContainer: {
     flexDirection: 'row',
     justifyContent: 'center',
-    alignItems: 'flex-start',
-    marginTop: 20,
-    marginBottom: 6,
+    alignItems: 'baseline',
+    marginTop: 24,
+    marginBottom: 4,
   },
   currencySymbol: {
-    color: CedarColors.bone,
-    fontSize: 32,
+    color: CedarColors.ink700,
+    fontSize: 28,
     fontWeight: '700',
-    marginTop: 6,
     marginRight: 4,
   },
   amountNumber: {
-    color: CedarColors.bone,
-    fontSize: 54,
+    color: CedarColors.ink900,
+    fontSize: 48,
     fontWeight: '900',
     fontFamily: 'SpaceGrotesk-Bold',
+    letterSpacing: -1,
   },
   decimalPart: {
-    color: CedarColors.pine300,
-    fontSize: 24,
+    color: CedarColors.ink500,
+    fontSize: 22,
     fontWeight: '700',
-    marginTop: 10,
+    marginLeft: 2,
   },
   sourceAccountLabel: {
-    color: CedarColors.pine300,
-    fontSize: 13,
-    fontWeight: '500',
+    color: CedarColors.ink700,
+    fontSize: 12,
+    fontWeight: '600',
     textAlign: 'center',
-    marginBottom: 16,
+    marginBottom: 20,
   },
   presetsRow: {
     flexDirection: 'row',
     justifyContent: 'center',
     gap: 10,
-    marginBottom: 14,
+    marginBottom: 16,
+    paddingHorizontal: 20,
   },
   presetPill: {
-    backgroundColor: CedarColors.pine800,
+    backgroundColor: CedarColors.card,
+    borderWidth: 1,
+    borderColor: CedarColors.border,
     paddingHorizontal: 16,
     paddingVertical: 8,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 16,
+    shadowColor: '#0F382A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  activePresetPill: {
+    backgroundColor: CedarColors.forest800,
+    borderColor: CedarColors.forest800,
   },
   presetText: {
-    color: CedarColors.bone,
+    color: CedarColors.ink900,
     fontSize: 13,
     fontWeight: '700',
   },
+  activePresetText: {
+    color: '#FFFFFF',
+  },
   ctaContainer: {
-    paddingHorizontal: 24,
-    marginTop: 10,
+    paddingHorizontal: 20,
+    marginTop: 12,
   },
   reviewBtn: {
-    height: 56,
-    backgroundColor: CedarColors.gold500,
+    backgroundColor: CedarColors.forest800, // #0F382A
     borderRadius: 20,
-    justifyContent: 'center',
+    paddingVertical: 16,
     alignItems: 'center',
-    shadowColor: CedarColors.gold500,
+    shadowColor: CedarColors.forest800,
     shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.35,
-    shadowRadius: 12,
-    elevation: 6,
+    shadowOpacity: 0.25,
+    shadowRadius: 10,
+    elevation: 5,
   },
   reviewBtnText: {
-    color: CedarColors.pine900,
+    color: '#FFFFFF',
     fontSize: 16,
-    fontWeight: '900',
+    fontWeight: '800',
+    fontFamily: 'SpaceGrotesk-Bold',
   },
 });

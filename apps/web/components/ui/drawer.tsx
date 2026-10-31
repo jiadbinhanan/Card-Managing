@@ -17,10 +17,8 @@ function DrawerTrigger({
   return <DrawerPrimitive.Trigger data-slot="drawer-trigger" {...props} />
 }
 
-function DrawerPortal({
-  ...props
-}: React.ComponentProps<typeof DrawerPrimitive.Portal>) {
-  return <DrawerPrimitive.Portal data-slot="drawer-portal" {...props} />
+function DrawerPortal(props: { children?: React.ReactNode; [key: string]: any }) {
+  return <DrawerPrimitive.Portal {...(props as any)} />
 }
 
 function DrawerClose({

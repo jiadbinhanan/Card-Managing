@@ -1,13 +1,14 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, Dimensions, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CedarColors } from '@credics/core';
 import { HapticButton } from '../../components/HapticButton';
 import { QrCode, Flashlight, Image as ImageIcon, ArrowLeft } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
+import * as Haptics from 'expo-haptics';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const SCAN_FRAME_SIZE = SCREEN_WIDTH * 0.68;
+const SCAN_FRAME_SIZE = SCREEN_WIDTH * 0.7;
 
 export default function ScanScreen() {
   const router = useRouter();
@@ -17,46 +18,59 @@ export default function ScanScreen() {
     <SafeAreaView style={styles.safeArea}>
       {/* Top Header */}
       <View style={styles.header}>
-        <HapticButton style={styles.iconCircle} onPress={() => router.back()}>
-          <ArrowLeft size={20} color={CedarColors.bone} />
+        <HapticButton
+          style={styles.iconCircle}
+          onPress={() => router.back()}
+          feedbackType="light"
+        >
+          <ArrowLeft size={20} color={CedarColors.ink900} />
         </HapticButton>
         <Text style={styles.headerTitle}>Scan & Pay</Text>
         <HapticButton
-          style={[styles.iconCircle, torchOn && { backgroundColor: CedarColors.gold500 }]}
-          onPress={() => setTorchOn(!torchOn)}
+          style={[styles.iconCircle, torchOn ? { backgroundColor: CedarColors.forest800 } : undefined]}
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+            setTorchOn(!torchOn);
+          }}
           feedbackType="medium"
         >
-          <Flashlight size={20} color={torchOn ? CedarColors.pine900 : CedarColors.bone} />
+          <Flashlight size={20} color={torchOn ? '#FFFFFF' : CedarColors.ink900} />
         </HapticButton>
       </View>
 
-      {/* Camera Viewfinder Mock */}
+      {/* Camera Viewfinder Frame */}
       <View style={styles.viewfinderContainer}>
         <View style={styles.scanBox}>
-          {/* Corner Borders */}
+          {/* 4 Deep Forest Corner Accents */}
           <View style={[styles.corner, styles.topLeft]} />
           <View style={[styles.corner, styles.topRight]} />
           <View style={[styles.corner, styles.bottomLeft]} />
           <View style={[styles.corner, styles.bottomRight]} />
 
           <View style={styles.scanLaser} />
-          <QrCode size={64} color="rgba(255, 255, 255, 0.2)" />
+          <QrCode size={72} color="rgba(15, 56, 42, 0.2)" />
         </View>
 
         <Text style={styles.scanHint}>Align QR code inside the frame to pay</Text>
       </View>
 
-      {/* Bottom Options */}
+      {/* Bottom Actions */}
       <View style={styles.bottomActions}>
-        <HapticButton style={styles.actionPill} feedbackType="light">
-          <ImageIcon size={18} color={CedarColors.bone} />
+        <TouchableOpacity
+          style={styles.actionPill}
+          onPress={() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)}
+        >
+          <ImageIcon size={18} color={CedarColors.ink900} />
           <Text style={styles.actionText}>Upload QR</Text>
-        </HapticButton>
+        </TouchableOpacity>
 
-        <HapticButton style={[styles.actionPill, styles.myQrPill]} feedbackType="medium">
-          <QrCode size={18} color={CedarColors.pine900} />
+        <TouchableOpacity
+          style={[styles.actionPill, styles.myQrPill]}
+          onPress={() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)}
+        >
+          <QrCode size={18} color="#FFFFFF" />
           <Text style={styles.myQrText}>My Receive QR</Text>
-        </HapticButton>
+        </TouchableOpacity>
       </View>
     </SafeAreaView>
   );
@@ -65,25 +79,29 @@ export default function ScanScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: CedarColors.pine900,
+    backgroundColor: CedarColors.canvas, // #F4F6F2
   },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 20,
-    paddingTop: 12,
+    paddingTop: 10,
+    paddingBottom: 14,
   },
   headerTitle: {
-    color: CedarColors.bone,
+    color: CedarColors.ink900,
     fontSize: 18,
     fontWeight: '800',
+    fontFamily: 'SpaceGrotesk-Bold',
   },
   iconCircle: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: CedarColors.pine800,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: CedarColors.card,
+    borderWidth: 1,
+    borderColor: CedarColors.border,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -95,87 +113,99 @@ const styles = StyleSheet.create({
   scanBox: {
     width: SCAN_FRAME_SIZE,
     height: SCAN_FRAME_SIZE,
-    borderRadius: 24,
+    borderRadius: 28,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    backgroundColor: 'rgba(15, 56, 42, 0.04)',
+    borderWidth: 1,
+    borderColor: 'rgba(15, 56, 42, 0.1)',
   },
   corner: {
     position: 'absolute',
-    width: 28,
-    height: 28,
-    borderColor: CedarColors.gold500,
+    width: 26,
+    height: 26,
+    borderColor: CedarColors.forest800, // #0F382A
   },
   topLeft: {
-    top: 0,
-    left: 0,
+    top: -2,
+    left: -2,
     borderTopWidth: 4,
     borderLeftWidth: 4,
-    borderTopLeftRadius: 18,
+    borderTopLeftRadius: 16,
   },
   topRight: {
-    top: 0,
-    right: 0,
+    top: -2,
+    right: -2,
     borderTopWidth: 4,
     borderRightWidth: 4,
-    borderTopRightRadius: 18,
+    borderTopRightRadius: 16,
   },
   bottomLeft: {
-    bottom: 0,
-    left: 0,
+    bottom: -2,
+    left: -2,
     borderBottomWidth: 4,
     borderLeftWidth: 4,
-    borderBottomLeftRadius: 18,
+    borderBottomLeftRadius: 16,
   },
   bottomRight: {
-    bottom: 0,
-    right: 0,
+    bottom: -2,
+    right: -2,
     borderBottomWidth: 4,
     borderRightWidth: 4,
-    borderBottomRightRadius: 18,
+    borderBottomRightRadius: 16,
   },
   scanLaser: {
     position: 'absolute',
-    width: '90%',
+    width: '80%',
     height: 2,
-    backgroundColor: CedarColors.gold500,
-    shadowColor: CedarColors.gold500,
+    backgroundColor: CedarColors.mint500, // #34A853
+    shadowColor: CedarColors.mint500,
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.8,
-    shadowRadius: 8,
+    shadowRadius: 6,
+    elevation: 4,
   },
   scanHint: {
-    color: CedarColors.pine300,
-    fontSize: 14,
+    color: CedarColors.ink700,
+    fontSize: 13,
     fontWeight: '600',
-    marginTop: 28,
+    marginTop: 24,
   },
   bottomActions: {
     flexDirection: 'row',
     justifyContent: 'center',
-    gap: 16,
-    paddingBottom: 100,
+    gap: 14,
+    paddingHorizontal: 20,
+    paddingBottom: 40,
   },
   actionPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: CedarColors.pine800,
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: 24,
     gap: 8,
+    backgroundColor: CedarColors.card,
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: CedarColors.border,
+    shadowColor: '#0F382A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 2,
   },
   actionText: {
-    color: CedarColors.bone,
+    color: CedarColors.ink900,
     fontSize: 13,
     fontWeight: '700',
   },
   myQrPill: {
-    backgroundColor: CedarColors.gold500,
+    backgroundColor: CedarColors.forest800,
+    borderColor: CedarColors.forest800,
   },
   myQrText: {
-    color: CedarColors.pine900,
+    color: '#FFFFFF',
     fontSize: 13,
-    fontWeight: '800',
+    fontWeight: '700',
   },
 });

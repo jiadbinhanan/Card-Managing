@@ -40,7 +40,7 @@ export function Skeleton({
     const backgroundColor = interpolateColor(
       shimmerProgress.value,
       [0, 1],
-      ['rgba(20, 81, 59, 0.45)', 'rgba(46, 139, 99, 0.7)'] // Shimmer between Cedar pine700 and pine500
+      ['#E0E8E2', '#F0F5F2'] // Crisp light sage shimmer
     );
 
     return {
@@ -94,8 +94,8 @@ export function HomeSkeleton() {
       <View style={skeletonStyles.actionsRow}>
         {[1, 2, 3, 4].map((i) => (
           <View key={i} style={{ alignItems: 'center' }}>
-            <Skeleton width={60} height={60} borderRadius={30} />
-            <Skeleton width={40} height={12} borderRadius={4} style={{ marginTop: 8 }} />
+            <Skeleton width={56} height={56} borderRadius={28} />
+            <Skeleton width={44} height={12} borderRadius={4} style={{ marginTop: 8 }} />
           </View>
         ))}
       </View>
@@ -166,8 +166,8 @@ export function InsightsSkeleton() {
       </View>
 
       <View style={{ flexDirection: 'row', gap: 10, paddingHorizontal: 20, marginBottom: 20 }}>
-        {[1, 2, 3].map((i) => (
-          <Skeleton key={i} width={90} height={38} borderRadius={20} />
+        {[1, 2, 3, 4].map((i) => (
+          <Skeleton key={i} width={85} height={36} borderRadius={18} />
         ))}
       </View>
 
@@ -202,11 +202,18 @@ const skeletonStyles = StyleSheet.create({
     marginBottom: 20,
   },
   cardPlaceholder: {
-    backgroundColor: CedarColors.pine800,
+    backgroundColor: CedarColors.card,
+    borderWidth: 1,
+    borderColor: CedarColors.border,
     marginHorizontal: 20,
     borderRadius: 24,
     padding: 22,
     marginBottom: 20,
+    shadowColor: '#0F382A',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 3,
   },
   actionsRow: {
     flexDirection: 'row',
@@ -218,9 +225,16 @@ const skeletonStyles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: CedarColors.pine800,
+    backgroundColor: CedarColors.card,
+    borderWidth: 1,
+    borderColor: CedarColors.border,
     borderRadius: 18,
     padding: 14,
     marginBottom: 10,
+    shadowColor: '#0F382A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 2,
   },
 });

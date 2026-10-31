@@ -6,7 +6,7 @@ import { HapticButton } from './HapticButton';
 import { Snowflake, Sliders, Lock, Info, Wifi } from 'lucide-react-native';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const CARD_WIDTH = SCREEN_WIDTH - 40;
+const CARD_WIDTH = SCREEN_WIDTH - 36;
 
 interface CedarCardProps {
   cardName: string;
@@ -27,7 +27,7 @@ export function CedarCard({
   last4Digits,
   totalLimit,
   availableLimit,
-  holderName = 'CARD HOLDER',
+  holderName = 'CREDICS USER',
   validThru = '08/29',
   isPrimary = true,
   onFreeze,
@@ -36,13 +36,14 @@ export function CedarCard({
   onDetails,
 }: CedarCardProps) {
   const usedAmount = Math.max(0, totalLimit - availableLimit);
-  const usagePercentage = totalLimit > 0 ? Math.min(100, Math.round((usedAmount / totalLimit) * 100)) : 0;
+  const usagePercentage =
+    totalLimit > 0 ? Math.min(100, Math.round((usedAmount / totalLimit) * 100)) : 0;
 
   return (
     <View style={styles.container}>
       {/* 3D Realistic Credit Card */}
       <LinearGradient
-        colors={[CedarColors.pine700, CedarColors.pine900]}
+        colors={[CedarColors.forest900, CedarColors.forest800]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={styles.card}
@@ -54,10 +55,12 @@ export function CedarCard({
         <View style={styles.cardHeader}>
           <Text style={styles.brandText}>{cardName.toUpperCase()}</Text>
           <View style={styles.headerRight}>
-            <Wifi color={CedarColors.gold200} size={18} style={styles.wifiIcon} />
+            <Wifi color="#A8C2B3" size={18} style={styles.wifiIcon} />
             <View style={styles.mastercardPill}>
               <View style={[styles.circle, { backgroundColor: '#EB001B' }]} />
-              <View style={[styles.circle, { backgroundColor: '#F79E1B', marginLeft: -8 }]} />
+              <View
+                style={[styles.circle, { backgroundColor: '#F79E1B', marginLeft: -8 }]}
+              />
             </View>
           </View>
         </View>
@@ -88,28 +91,28 @@ export function CedarCard({
 
       {/* Card Quick Actions: Freeze, Limits, PIN, Details */}
       <View style={styles.actionsRow}>
-        <HapticButton style={styles.actionBtn} onPress={onFreeze}>
-          <Snowflake size={18} color={CedarColors.bone} />
+        <HapticButton style={styles.actionBtn} onPress={onFreeze} feedbackType="rigid">
+          <Snowflake size={18} color={CedarColors.forest800} />
           <Text style={styles.actionLabel}>Freeze</Text>
         </HapticButton>
 
-        <HapticButton style={styles.actionBtn} onPress={onLimits}>
-          <Sliders size={18} color={CedarColors.bone} />
+        <HapticButton style={styles.actionBtn} onPress={onLimits} feedbackType="rigid">
+          <Sliders size={18} color={CedarColors.forest800} />
           <Text style={styles.actionLabel}>Limits</Text>
         </HapticButton>
 
-        <HapticButton style={styles.actionBtn} onPress={onPin}>
-          <Lock size={18} color={CedarColors.bone} />
+        <HapticButton style={styles.actionBtn} onPress={onPin} feedbackType="rigid">
+          <Lock size={18} color={CedarColors.forest800} />
           <Text style={styles.actionLabel}>PIN</Text>
         </HapticButton>
 
-        <HapticButton style={styles.actionBtn} onPress={onDetails}>
-          <Info size={18} color={CedarColors.bone} />
+        <HapticButton style={styles.actionBtn} onPress={onDetails} feedbackType="rigid">
+          <Info size={18} color={CedarColors.forest800} />
           <Text style={styles.actionLabel}>Details</Text>
         </HapticButton>
       </View>
 
-      {/* Limit Usage Progress Bar */}
+      {/* Limit Usage Progress Card */}
       <View style={styles.limitCard}>
         <View style={styles.limitHeader}>
           <Text style={styles.limitTitle}>THIS MONTH ON THIS CARD</Text>
@@ -118,10 +121,10 @@ export function CedarCard({
 
         <View style={styles.limitAmountRow}>
           <Text style={styles.usedAmountText}>
-            ₹{usedAmount.toLocaleString()}
+            ₹{usedAmount.toLocaleString('en-IN')}
           </Text>
           <Text style={styles.totalLimitText}>
-            {' '}of ₹{totalLimit.toLocaleString()} limit
+            {' '}of ₹{totalLimit.toLocaleString('en-IN')} limit
           </Text>
         </View>
 
@@ -132,12 +135,12 @@ export function CedarCard({
 
         <View style={styles.progressFooter}>
           <View style={styles.bulletRow}>
-            <View style={styles.goldBullet} />
+            <View style={styles.mintBullet} />
             <Text style={styles.progressFooterText}>
-              {usagePercentage}% of monthly limit
+              {usagePercentage}% utilized
             </Text>
           </View>
-          <Text style={styles.resetText}>resets next cycle</Text>
+          <Text style={styles.resetText}>resets on bill cycle</Text>
         </View>
       </View>
     </View>
@@ -148,7 +151,7 @@ const styles = StyleSheet.create({
   container: {
     width: CARD_WIDTH,
     alignSelf: 'center',
-    marginVertical: 12,
+    marginVertical: 10,
   },
   card: {
     height: 215,
@@ -156,12 +159,12 @@ const styles = StyleSheet.create({
     padding: 22,
     justifyContent: 'space-between',
     elevation: 8,
-    shadowColor: '#000',
+    shadowColor: '#0F382A',
     shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.35,
+    shadowOpacity: 0.28,
     shadowRadius: 16,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderColor: 'rgba(255, 255, 255, 0.12)',
     overflow: 'hidden',
   },
   glow: {
@@ -171,7 +174,7 @@ const styles = StyleSheet.create({
     width: 140,
     height: 140,
     borderRadius: 70,
-    backgroundColor: CedarColors.pine500,
+    backgroundColor: '#34A853',
     opacity: 0.15,
   },
   cardHeader: {
@@ -180,7 +183,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   brandText: {
-    color: CedarColors.bone,
+    color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '800',
     letterSpacing: 1.5,
@@ -210,9 +213,9 @@ const styles = StyleSheet.create({
     width: 44,
     height: 32,
     borderRadius: 6,
-    backgroundColor: CedarColors.gold500,
+    backgroundColor: '#C5A059',
     borderWidth: 1,
-    borderColor: CedarColors.gold600,
+    borderColor: '#9E7D3B',
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
@@ -230,7 +233,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 0, 0, 0.25)',
   },
   cardNumber: {
-    color: CedarColors.bone,
+    color: '#FFFFFF',
     fontSize: 18,
     fontWeight: '700',
     letterSpacing: 2.5,
@@ -242,14 +245,14 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
   },
   footerLabel: {
-    color: CedarColors.pine300,
+    color: '#A8C2B3',
     fontSize: 9,
     fontWeight: '600',
     letterSpacing: 0.8,
     marginBottom: 2,
   },
   footerValue: {
-    color: CedarColors.bone,
+    color: '#FFFFFF',
     fontSize: 13,
     fontWeight: '700',
     letterSpacing: 1,
@@ -260,30 +263,40 @@ const styles = StyleSheet.create({
   actionsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginVertical: 16,
+    marginVertical: 14,
   },
   actionBtn: {
     flex: 1,
-    backgroundColor: CedarColors.pine800,
+    backgroundColor: CedarColors.card, // Pure White
     borderRadius: 16,
     paddingVertical: 12,
     alignItems: 'center',
     marginHorizontal: 4,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
+    borderColor: CedarColors.border,
+    shadowColor: '#0F382A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 2,
   },
   actionLabel: {
-    color: CedarColors.bone,
+    color: CedarColors.ink900,
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: '700',
     marginTop: 6,
   },
   limitCard: {
-    backgroundColor: CedarColors.pine800,
+    backgroundColor: CedarColors.card, // Pure White
     borderRadius: 20,
     padding: 18,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.06)',
+    borderColor: CedarColors.border,
+    shadowColor: '#0F382A',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 3,
   },
   limitHeader: {
     flexDirection: 'row',
@@ -292,13 +305,13 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   limitTitle: {
-    color: CedarColors.pine300,
+    color: CedarColors.ink700,
     fontSize: 11,
     fontWeight: '700',
     letterSpacing: 0.5,
   },
   limitLast4: {
-    color: CedarColors.pine300,
+    color: CedarColors.ink700,
     fontSize: 11,
     fontWeight: '600',
   },
@@ -308,25 +321,25 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   usedAmountText: {
-    color: CedarColors.bone,
+    color: CedarColors.ink900,
     fontSize: 22,
     fontWeight: '800',
   },
   totalLimitText: {
-    color: CedarColors.pine300,
+    color: CedarColors.ink700,
     fontSize: 14,
     fontWeight: '500',
   },
   progressTrack: {
     height: 8,
     borderRadius: 4,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    backgroundColor: '#E5ECE5',
     overflow: 'hidden',
     marginBottom: 10,
   },
   progressFill: {
     height: '100%',
-    backgroundColor: CedarColors.gold500,
+    backgroundColor: CedarColors.mint500, // #34A853
     borderRadius: 4,
   },
   progressFooter: {
@@ -338,20 +351,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
-  goldBullet: {
+  mintBullet: {
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: CedarColors.gold500,
+    backgroundColor: CedarColors.mint500,
     marginRight: 6,
   },
   progressFooterText: {
-    color: CedarColors.bone,
+    color: CedarColors.ink900,
     fontSize: 11,
     fontWeight: '600',
   },
   resetText: {
-    color: CedarColors.pine300,
+    color: CedarColors.ink700,
     fontSize: 11,
     fontWeight: '500',
   },
