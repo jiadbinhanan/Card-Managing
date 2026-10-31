@@ -34,7 +34,6 @@ export default function SendMoneyModal() {
   };
 
   const handleReviewPayment = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     Alert.alert(
       'Confirm Payment',
       `Send ₹${amount} to ${recipients.find((r) => r.id === selectedRecipient)?.name}?`,
@@ -71,7 +70,7 @@ export default function SendMoneyModal() {
         <View style={styles.recipientRow}>
           <TouchableOpacity
             style={styles.addRecipientBtn}
-            onPress={() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)}
+            onPress={() => {}}
           >
             <UserPlus size={18} color={CedarColors.forest800} />
             <Text style={styles.addText}>Add</Text>
@@ -84,7 +83,6 @@ export default function SendMoneyModal() {
                 key={rec.id}
                 style={[styles.recipientItem, isSelected && styles.selectedRecipientItem]}
                 onPress={() => {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                   setSelectedRecipient(rec.id);
                 }}
                 activeOpacity={0.8}
@@ -127,7 +125,6 @@ export default function SendMoneyModal() {
               key={val}
               style={[styles.presetPill, amount === val && styles.activePresetPill]}
               onPress={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                 setAmount(val);
               }}
             >

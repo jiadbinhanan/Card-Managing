@@ -6,18 +6,27 @@ import {
   ScrollView,
   RefreshControl,
   TouchableOpacity,
-  Modal,
+  Pressable,
   Image,
   TextInput,
   Alert,
   ActivityIndicator,
   Linking,
+  Dimensions,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
+  FadeInDown,
+} from 'react-native-reanimated';
 import { CedarColors, CedarTypography } from '@credics/core';
 import { QuickActions } from '../../components/QuickActions';
-import { UrgentBillBottomSheet } from '../../components/UrgentBillBottomSheet';
+import { NotificationSidePanel } from '../../components/NotificationSidePanel';
+import { SwipeDownDrawer } from '../../components/SwipeDownDrawer';
 import { HapticButton } from '../../components/HapticButton';
 import { HomeSkeleton } from '../../components/Skeleton';
 import { supabase } from '../../lib/supabase';
@@ -48,7 +57,11 @@ import {
   CalendarDays,
   ShieldCheck,
   ArrowRight,
+  ChevronRight,
+  Clock,
 } from 'lucide-react-native';
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 interface CardData {
   id: string;
@@ -109,29 +122,33 @@ interface RecentTx {
 
 export default function HomeScreen() {
   const router = useRouter();
+
+  // Loading & Refresh State
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [showBalance, setShowBalance] = useState(true);
-  const [showUrgentAlert, setShowUrgentAlert] = useState(false);
-  const [cardModalVisible, setCardModalVisible] = useState(false);
 
-  // User & Cards State
+  // Authenticated User Info
   const [currentUser, setCurrentUser] = useState<any>(null);
-  const [userName, setUserName] = useState<string>('Credics Vault');
-  const [firstName, setFirstName] = useState<string>('');
+  const [userName, setUserName] = useState('User');
+  const [firstName, setFirstName] = useState('');
   const [userAvatar, setUserAvatar] = useState<string | null>(null);
+
+  // Card & Vault State
   const [accessibleCards, setAccessibleCards] = useState<CardData[]>([]);
   const [selectedCardId, setSelectedCardId] = useState<string>('all');
+  const [cardModalVisible, setCardModalVisible] = useState(false);
 
-  // Calculated Core Metrics
-  const [totalLimit, setTotalLimit] = useState(0);
-  const [availableLimit, setAvailableLimit] = useState(0);
-  const [inTransit, setInTransit] = useState(0);
-  const [usersCash, setUsersCash] = useState(0);
-  const [daysToBill, setDaysToBill] = useState(0);
+  // Metrics State
+  const [availableLimit, setAvailableLimit] = useState<number>(0);
+  const [totalLimit, setTotalLimit] = useState<number>(0);
+  const [inTransit, setInTransit] = useState<number>(0);
+  const [usersCash, setUsersCash] = useState<number>(0);
+  const [showBalance, setShowBalance] = useState<boolean>(true);
+
+  // Billing Cycle State
+  const [daysToBill, setDaysToBill] = useState<number>(26);
   const [nextBillDate, setNextBillDate] = useState<string>('');
-
-  // Active Bills Section State
+  const [showNotificationPanel, setShowNotificationPanel] = useState<boolean>(false);
   const [activeBills, setActiveBills] = useState<BillingCycle[]>([]);
   const [isBillModalOpen, setIsBillModalOpen] = useState(false);
   const [billFormCardId, setBillFormCardId] = useState('');
@@ -149,12 +166,16 @@ export default function HomeScreen() {
   const [dueLedger, setDueLedger] = useState<any[]>([]);
   const [pocketLedger, setPocketLedger] = useState<any[]>([]);
   const [isLedgerLoading, setIsLedgerLoading] = useState(false);
+  const [modalDateFilter, setModalDateFilter] = useState<'all' | '30d' | 'this_month'>('all');
 
-  // Transfer State
+  // Cash Transfer State
   const [isTransferOpen, setIsTransferOpen] = useState(false);
-  const [transferTargetUser, setTransferTargetUser] = useState<any>(null);
-  const [transferReceiverCardId, setTransferReceiverCardId] = useState('');
-  const [transferSenderCardId, setTransferSenderCardId] = useState('');
+  const [transferSenderCards, setTransferSenderCards] = useState<any[]>([]);
+  const [transferTargetUsers, setTransferTargetUsers] = useState<any[]>([]);
+  const [selectedSenderCardId, setSelectedSenderCardId] = useState('');
+  const [senderCardBalance, setSenderCardBalance] = useState(0);
+  const [selectedTargetUser, setSelectedTargetUser] = useState<any>(null);
+  const [selectedReceiverCardId, setSelectedReceiverCardId] = useState('');
   const [transferAmount, setTransferAmount] = useState('');
   const [transferRemarks, setTransferRemarks] = useState('');
   const [isTransferring, setIsTransferring] = useState(false);
@@ -173,7 +194,20 @@ export default function HomeScreen() {
   // Recent Transactions
   const [recentTransactions, setRecentTransactions] = useState<RecentTx[]>([]);
 
-  // Ticking cooldown timer
+  // 120Hz Spring micro-bounce for Notification Bell
+  const bellScale = useSharedValue(1);
+  const bellAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: bellScale.value }],
+  }));
+
+  const handleNotificationBellPress = () => {
+    bellScale.value = withSpring(0.82, { damping: 14, stiffness: 450 }, () => {
+      bellScale.value = withSpring(1, { damping: 18, stiffness: 350 });
+    });
+    setShowNotificationPanel(true);
+  };
+
+  // Cooldown countdown
   useEffect(() => {
     const timer = setInterval(() => setNowTimestamp(Date.now()), 1000);
     return () => clearInterval(timer);
@@ -210,10 +244,6 @@ export default function HomeScreen() {
     };
     const month = target.toLocaleString('default', { month: 'short' });
     setNextBillDate(`${targetDay}${nth(targetDay)} ${month}`);
-
-    if (diff <= 1 && diff >= 0) {
-      setShowUrgentAlert(true);
-    }
   };
 
   // Fetch Complete Real Data from Supabase
@@ -348,34 +378,29 @@ export default function HomeScreen() {
           }, 0) || 0;
       setInTransit(inTransitAmt);
 
-      // Active Bills Section (Deduplicate to latest bill per card)
+      // Active Bills
       if (bills) {
-        const latestPerCard = new Map<string, any>();
-        bills.forEach((b: any) => {
-          if (!latestPerCard.has(b.card_id)) latestPerCard.set(b.card_id, b);
-        });
-        setActiveBills(
-          Array.from(latestPerCard.values()).map((b: any) => ({
-            ...b,
-            bill_gen_day: b.cards?.bill_gen_day,
-            bill_due_day: b.cards?.bill_due_day,
-          }))
-        );
+        setActiveBills(bills.slice(0, 4));
       }
 
-      // 4. Cash on Hand & User Stats
-      const { data: profiles } = await supabase.from('profiles').select('id, name, avatar_url');
-      let cohQuery = supabase.from('cash_on_hand').select('*');
-      if (activeCardIds.length > 0) cohQuery = cohQuery.in('card_id', activeCardIds);
-      const { data: coh } = await cohQuery;
+      // 4. User Stats & Cash Breakdown
+      const { data: allProfiles } = await supabase.from('profiles').select('*').order('name');
+      const { data: allCoh } = await supabase.from('cash_on_hand').select('*');
 
-      const totalCoh = coh?.reduce((sum, c) => sum + Number(c.current_balance || 0), 0) || 0;
-      setUsersCash(totalCoh);
+      let usersCashTotal = 0;
+      if (allCoh) {
+        usersCashTotal = allCoh
+          .filter((c) => activeCardIds.includes(c.card_id))
+          .reduce((sum, c) => sum + Number(c.current_balance || 0), 0);
+      }
+      setUsersCash(usersCashTotal);
 
-      if (profiles) {
-        const stats: UserStat[] = profiles.map((p) => {
-          const userCohRows = coh?.filter((c) => c.user_id === p.id) || [];
+      if (allProfiles) {
+        const stats: UserStat[] = [];
+        for (const p of allProfiles) {
+          const userCohRows = allCoh?.filter((c) => c.user_id === p.id && activeCardIds.includes(c.card_id)) || [];
           const cashTotal = userCohRows.reduce((sum, c) => sum + Number(c.current_balance || 0), 0);
+
           const totalPersonalSpends =
             spends
               ?.filter((s) => s.user_id === p.id && ['credit_card', 'from_card_limit', 'lent_recovery'].includes(s.payment_method))
@@ -393,16 +418,23 @@ export default function HomeScreen() {
             balance: Number(userCohRows.find((r) => r.card_id === c.id)?.current_balance || 0),
           }));
 
-          return {
+          // Fetch active pocket advance balance
+          const { data: paData } = await supabase
+            .from('pocket_advances')
+            .select('current_balance')
+            .eq('user_id', p.id);
+          const pocketBal = (paData || []).reduce((sum, r) => sum + Number(r.current_balance || 0), 0);
+
+          stats.push({
             id: p.id,
             name: p.name.split(' ')[0],
             cash: cashTotal,
             due,
-            pocket: 0,
+            pocket: pocketBal,
             avatar_url: p.avatar_url,
             cardBreakdown,
-          };
-        });
+          });
+        }
         setUserStats(stats);
       }
 
@@ -464,31 +496,35 @@ export default function HomeScreen() {
         setSuggestedQrs(operational.slice(0, 3));
       }
 
-      // 6. Form Real Recent Transactions Feed
+      // 6. Form Real Recent Transactions Feed from card_transactions table (Item 5 Parity)
+      const { data: latestCardTxs } = await supabase
+        .from('card_transactions')
+        .select('*, cards(card_name, last_4_digits)')
+        .order('transaction_date', { ascending: false })
+        .limit(6);
+
       const txFeed: RecentTx[] = [];
-      if (txs && txs.length > 0) {
-        txs.slice(0, 4).forEach((t) => {
+      if (latestCardTxs && latestCardTxs.length > 0) {
+        latestCardTxs.forEach((t: any) => {
           const isPayment = t.type === 'bill_payment';
           txFeed.push({
             id: t.id,
-            title: isPayment ? 'Bill Payment Repaid' : t.remarks || 'Rotation Withdrawal',
-            category: isPayment ? 'Repayment' : 'Card Rotation',
+            title: isPayment
+              ? `Bill Payment Repaid (${t.cards?.card_name || 'Card'})`
+              : t.remarks || 'Rotation Withdrawal',
+            category: isPayment
+              ? 'Repayment'
+              : t.cards?.card_name
+              ? `${t.cards.card_name} Rotation`
+              : 'Card Rotation',
             amount: Number(t.amount),
-            date: t.transaction_date ? new Date(t.transaction_date).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' }) : 'Recent',
+            date: t.transaction_date
+              ? new Date(t.transaction_date).toLocaleDateString('en-IN', {
+                  month: 'short',
+                  day: 'numeric',
+                })
+              : 'Recent',
             isCredit: isPayment,
-          });
-        });
-      }
-
-      if (spends && spends.length > 0) {
-        spends.slice(0, 3).forEach((s) => {
-          txFeed.push({
-            id: s.id,
-            title: s.remarks || 'Card Expense',
-            category: s.spend_type || 'Personal Spend',
-            amount: Number(s.amount),
-            date: s.spend_date ? new Date(s.spend_date).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' }) : 'Recent',
-            isCredit: false,
           });
         });
       }
@@ -529,11 +565,11 @@ export default function HomeScreen() {
     return card ? `${card.card_name} (••${card.last_4_digits})` : 'All Vault Cards';
   };
 
-  // Open User Detail Ledger Modal
+  // Open User Detail Ledger Modal (Parity with Web App Analytics)
   const openUserStatModal = async (stat: UserStat) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
     setSelectedUserStat(stat);
     setUserModalTab('summary');
+    setModalDateFilter('all');
     setIsUserModalOpen(true);
     setIsLedgerLoading(true);
 
@@ -541,22 +577,22 @@ export default function HomeScreen() {
       const [{ data: cData }, { data: dData }, { data: pData }] = await Promise.all([
         supabase
           .from('cash_on_hand_ledger')
-          .select('*')
+          .select('*, cards(card_name, last_4_digits)')
           .eq('user_id', stat.id)
           .order('transaction_date', { ascending: false })
-          .limit(20),
+          .limit(40),
         supabase
           .from('spends')
-          .select('*')
+          .select('*, cards(card_name, last_4_digits)')
           .eq('user_id', stat.id)
           .order('spend_date', { ascending: false })
-          .limit(20),
+          .limit(40),
         supabase
           .from('pocket_advances_ledger')
-          .select('*')
+          .select('*, cards(card_name, last_4_digits)')
           .eq('user_id', stat.id)
           .order('transaction_date', { ascending: false })
-          .limit(20),
+          .limit(40),
       ]);
 
       setCashLedger(cData || []);
@@ -569,6 +605,130 @@ export default function HomeScreen() {
     }
   };
 
+  // Open Cash Transfer Modal
+  const openTransferModal = async () => {
+    if (!currentUser) return;
+    setIsTransferOpen(true);
+    setTransferAmount('');
+    setTransferRemarks('');
+
+    try {
+      // Sender's positive cash cards
+      const { data: cohList } = await supabase
+        .from('cash_on_hand')
+        .select('card_id, current_balance, cards(card_name, last_4_digits)')
+        .eq('user_id', currentUser.id)
+        .gt('current_balance', 0)
+        .order('current_balance', { ascending: false });
+
+      const sCards = (cohList || []).map((row: any) => ({
+        cardId: row.card_id,
+        cardName: row.cards?.card_name || 'Card',
+        cardLast4: row.cards?.last_4_digits || '0000',
+        balance: Number(row.current_balance || 0),
+      }));
+
+      setTransferSenderCards(sCards);
+      if (sCards.length > 0) {
+        setSelectedSenderCardId(sCards[0].cardId);
+        setSenderCardBalance(sCards[0].balance);
+      } else {
+        setSelectedSenderCardId('');
+        setSenderCardBalance(0);
+      }
+
+      // Receiver Profiles
+      const { data: profiles } = await supabase.from('profiles').select('id, name').neq('id', currentUser.id);
+      const targets: any[] = [];
+      for (const p of profiles || []) {
+        const { data: receiverCoh } = await supabase
+          .from('cash_on_hand')
+          .select('card_id, cards(card_name, last_4_digits)')
+          .eq('user_id', p.id);
+
+        if (receiverCoh && receiverCoh.length > 0) {
+          targets.push({
+            userId: p.id,
+            userName: p.name,
+            cards: receiverCoh.map((r: any) => ({
+              cardId: r.card_id,
+              cardName: r.cards?.card_name || 'Card',
+              cardLast4: r.cards?.last_4_digits || '0000',
+            })),
+          });
+        }
+      }
+
+      setTransferTargetUsers(targets);
+      if (targets.length > 0) {
+        setSelectedTargetUser(targets[0]);
+        setSelectedReceiverCardId(targets[0].cards[0]?.cardId || '');
+      }
+    } catch (e) {
+      console.error('Failed to init transfer targets:', e);
+    }
+  };
+
+  // Execute Cash Transfer (Parity with Web App executeTransfer)
+  const executeTransfer = async () => {
+    if (!currentUser || !selectedSenderCardId || !selectedReceiverCardId || !selectedTargetUser) {
+      Alert.alert('Required', 'Please choose sender card, recipient, and receiver card.');
+      return;
+    }
+
+    const amt = Number(transferAmount);
+    if (!amt || amt <= 0) {
+      Alert.alert('Invalid Amount', 'Please provide a valid transfer amount.');
+      return;
+    }
+
+    if (amt > senderCardBalance) {
+      Alert.alert('Insufficient Balance', 'Transfer amount exceeds available cash on selected card.');
+      return;
+    }
+
+    setIsTransferring(true);
+    try {
+      const now = new Date().toISOString();
+      const note = transferRemarks.trim() || `Transfer to ${selectedTargetUser.userName}`;
+      const senderName = userName || 'You';
+
+      // Insert debit for sender
+      await supabase.from('cash_on_hand_ledger').insert({
+        user_id: currentUser.id,
+        card_id: selectedSenderCardId,
+        amount: amt,
+        transaction_type: 'debit',
+        transaction_date: now,
+        remarks: `Transfer to ${selectedTargetUser.userName} — ${note}`,
+      });
+
+      // Insert credit for receiver
+      await supabase.from('cash_on_hand_ledger').insert({
+        user_id: selectedTargetUser.userId,
+        card_id: selectedReceiverCardId,
+        amount: amt,
+        transaction_type: 'credit',
+        transaction_date: now,
+        remarks: `Received from ${senderName} — ${note}`,
+      });
+
+      // ENTRY RECORDED: haptic feedback strictly allowed here
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+      setIsTransferOpen(false);
+      Alert.alert('Success', `₹${amt.toLocaleString('en-IN')} transferred to ${selectedTargetUser.userName}`);
+      fetchDashboardData();
+      if (selectedUserStat) {
+        openUserStatModal(selectedUserStat);
+      }
+    } catch (err: any) {
+      Alert.alert('Transfer Error', err?.message || 'Failed to complete cash transfer.');
+    } finally {
+      setIsTransferring(false);
+    }
+  };
+
   // Save Bill Cycle Modal
   const handleSaveBill = async () => {
     if (!billFormCardId || !billFormMonth || !billFormGenAmount) {
@@ -577,7 +737,6 @@ export default function HomeScreen() {
     }
 
     setIsSavingBill(true);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
 
     try {
       const generated = Number(billFormGenAmount);
@@ -592,6 +751,7 @@ export default function HomeScreen() {
         status,
       });
 
+      // ENTRY RECORDED: haptic feedback strictly allowed
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setIsBillModalOpen(false);
       setBillFormGenAmount('');
@@ -606,7 +766,6 @@ export default function HomeScreen() {
 
   // QR Modal: Generate Dynamic Links
   const handleGeneratePaymentAmounts = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
     if (qrPaymentMode === 'once') {
       const high = Math.random() < 0.9;
       setGeneratedAmounts([high ? Math.floor(Math.random() * 100 + 1900) : Math.floor(Math.random() * 50 + 1850)]);
@@ -626,7 +785,6 @@ export default function HomeScreen() {
     }
 
     setIsMarkingUsed(true);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
 
     try {
       const totalAmt = generatedAmounts.length > 0 ? generatedAmounts.reduce((a, b) => a + b, 0) : 1900;
@@ -644,6 +802,7 @@ export default function HomeScreen() {
         remarks: `QR Rotation • ${selectedQr.merchant_name}`,
       });
 
+      // ENTRY RECORDED: haptic feedback allowed
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setIsQrModalOpen(false);
       setSelectedQr(null);
@@ -656,519 +815,585 @@ export default function HomeScreen() {
     }
   };
 
+  // Filtered Ledger Data based on preset
+  const filteredCashLedger = useMemo(() => {
+    if (modalDateFilter === 'all') return cashLedger;
+    const now = new Date();
+    if (modalDateFilter === 'this_month') {
+      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+      return cashLedger.filter((t) => new Date(t.transaction_date) >= startOfMonth);
+    }
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    return cashLedger.filter((t) => new Date(t.transaction_date) >= thirtyDaysAgo);
+  }, [cashLedger, modalDateFilter]);
+
+  const filteredDueLedger = useMemo(() => {
+    if (modalDateFilter === 'all') return dueLedger;
+    const now = new Date();
+    if (modalDateFilter === 'this_month') {
+      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+      return dueLedger.filter((t) => new Date(t.spend_date) >= startOfMonth);
+    }
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    return dueLedger.filter((t) => new Date(t.spend_date) >= thirtyDaysAgo);
+  }, [dueLedger, modalDateFilter]);
+
+  // Cash Ledger Stats (Credit, Debit, Net)
+  const cashStats = useMemo(() => {
+    const cred = filteredCashLedger
+      .filter((t) => t.transaction_type === 'credit')
+      .reduce((s, t) => s + Number(t.amount || 0), 0);
+    const deb = filteredCashLedger
+      .filter((t) => t.transaction_type === 'debit')
+      .reduce((s, t) => s + Number(t.amount || 0), 0);
+    return { credit: cred, debit: deb, net: cred - deb };
+  }, [filteredCashLedger]);
+
+  // Due Ledger Stats (Added, Repaid, Net)
+  const dueStats = useMemo(() => {
+    const spendsAmt = filteredDueLedger
+      .filter((t) => t.payment_method !== 'repayment')
+      .reduce((s, t) => s + Number(t.amount || 0), 0);
+    const repaidAmt = filteredDueLedger
+      .filter((t) => t.payment_method === 'repayment')
+      .reduce((s, t) => s + Number(t.amount || 0), 0);
+    return { added: spendsAmt, repaid: repaidAmt, net: Math.max(0, spendsAmt - repaidAmt) };
+  }, [filteredDueLedger]);
+
   const currentCooldowns = activeCooldowns.filter((c) => c.expiresAt > nowTimestamp);
 
   if (isLoading) {
     return (
-      <SafeAreaView style={styles.safeArea}>
-        <HomeSkeleton />
-      </SafeAreaView>
+      <View style={{ flex: 1, backgroundColor: '#092116' }}>
+        <SafeAreaView style={styles.safeArea}>
+          <HomeSkeleton />
+        </SafeAreaView>
+      </View>
     );
   }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            tintColor={CedarColors.forest800}
-            colors={[CedarColors.forest800]}
-          />
-        }
-      >
-        {/* ================= 1. HEADER ================= */}
-        <View style={styles.header}>
-          <TouchableOpacity
-            style={styles.userInfo}
-            onPress={() => router.push('/settings')}
-            activeOpacity={0.8}
-          >
-            <View style={styles.avatarBorder}>
-              {userAvatar ? (
-                <Image source={{ uri: userAvatar }} style={styles.avatarImg} />
-              ) : (
-                <View style={styles.avatarPlaceholder}>
-                  <Text style={styles.avatarText}>
-                    {userName.charAt(0).toUpperCase()}
-                  </Text>
-                </View>
-              )}
-            </View>
-            <View style={styles.userTextCol}>
-              <View style={styles.liveStatusRow}>
-                <View style={styles.livePulseDot} />
-                <Text style={styles.liveStatusText}>Live Status • Active</Text>
-              </View>
-              <Text style={styles.userNameText}>Hey, {firstName || userName}</Text>
-            </View>
-          </TouchableOpacity>
+    <View style={styles.screenContainer}>
+      {/* 6. Deep Luxury Green Gradient Background */}
+      <LinearGradient
+        colors={['#071C12', '#0E2E20', '#154230', '#DCE8DF', '#CEDCCE']}
+        locations={[0, 0.14, 0.28, 0.64, 1]}
+        style={StyleSheet.absoluteFill}
+      />
 
-          <View style={styles.headerActions}>
-            {/* Vault Card Dropdown Pill */}
+      <SafeAreaView style={styles.safeArea}>
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor="#F6F9F5"
+              colors={['#10B981']}
+            />
+          }
+        >
+          {/* ================= 1. HEADER ================= */}
+          <View style={styles.header}>
             <TouchableOpacity
-              style={styles.cardDropdown}
-              onPress={() => {
-                Haptics.selectionAsync();
-                setCardModalVisible(true);
-              }}
-              activeOpacity={0.8}
+              style={styles.userInfo}
+              onPress={() => router.push('/settings')}
+              activeOpacity={0.85}
             >
-              <CreditCard size={13} color={CedarColors.forest800} />
-              <Text style={styles.cardDropdownText} numberOfLines={1}>
-                {getActiveCardName()}
-              </Text>
-              <ChevronDown size={13} color={CedarColors.forest800} />
+              <View style={styles.avatarBorder}>
+                {userAvatar ? (
+                  <Image source={{ uri: userAvatar }} style={styles.avatarImg} />
+                ) : (
+                  <View style={styles.avatarPlaceholder}>
+                    <Text style={styles.avatarText}>{userName.charAt(0).toUpperCase()}</Text>
+                  </View>
+                )}
+              </View>
+              <View style={styles.userTextCol}>
+                <View style={styles.liveStatusRow}>
+                  <View style={styles.livePulseDot} />
+                  <Text style={styles.liveStatusText}>Live Status • Active</Text>
+                </View>
+                <Text style={styles.userNameText}>Hey, {firstName || userName}</Text>
+              </View>
             </TouchableOpacity>
 
-            {/* Notification Bell */}
-            <HapticButton
-              style={styles.iconCircle}
-              onPress={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
-                setShowUrgentAlert(true);
-              }}
-              feedbackType="rigid"
-            >
-              <Bell size={18} color={CedarColors.ink900} />
-              {daysToBill <= 3 && <View style={styles.notificationDot} />}
-            </HapticButton>
-          </View>
-        </View>
-
-        {/* ================= 2. HERO AVAILABLE LIMIT CARD (Luxury Cedar Gradient) ================= */}
-        <LinearGradient
-          colors={['#071A12', '#0C2B20', '#071A12']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.heroCard}
-        >
-          {/* Card Top: Balance Label & Eye Toggle */}
-          <View style={styles.heroTopRow}>
-            <View style={styles.heroLabelRow}>
-              <View style={styles.heroDot} />
-              <Text style={styles.heroLabel}>Total Available Limit</Text>
+            <View style={styles.headerActions}>
+              {/* Card Selector Dropdown */}
               <TouchableOpacity
-                onPress={() => {
-                  Haptics.selectionAsync();
-                  setShowBalance(!showBalance);
-                }}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                style={styles.cardDropdown}
+                onPress={() => setCardModalVisible(true)}
+                activeOpacity={0.8}
               >
-                {showBalance ? (
-                  <Eye size={16} color="#CAD6C9" style={{ marginLeft: 8 }} />
-                ) : (
-                  <EyeOff size={16} color="#CAD6C9" style={{ marginLeft: 8 }} />
-                )}
-              </TouchableOpacity>
-            </View>
-
-            {/* Bill Countdown Badge */}
-            <View style={styles.billDueBadge}>
-              <CalendarClock size={12} color="#FCD34D" />
-              <Text style={styles.billDueText}>
-                {daysToBill <= 1 ? 'Due Tomorrow' : `Next Bill ${nextBillDate}`}
-              </Text>
-            </View>
-          </View>
-
-          {/* Large Balance Typography */}
-          <View style={styles.heroAmountRow}>
-            <Text style={styles.heroAmount}>
-              {showBalance ? `₹${availableLimit.toLocaleString('en-IN')}` : '••••••••'}
-            </Text>
-            <View style={styles.trendPill}>
-              <TrendingUp size={12} color="#4ADE80" />
-              <Text style={styles.trendText}>Active Vault</Text>
-            </View>
-          </View>
-
-          {/* Horizontal Translucent Divider */}
-          <View style={styles.heroDivider} />
-
-          {/* 3 Web Core Metrics Row */}
-          <View style={styles.metricsGrid}>
-            <View style={styles.metricItem}>
-              <View style={styles.metricLabelRow}>
-                <Wallet size={12} color="#34A853" />
-                <Text style={styles.metricLabel}>Total Limit</Text>
-              </View>
-              <Text style={styles.metricValue}>
-                {showBalance ? `₹${totalLimit.toLocaleString('en-IN')}` : '••••'}
-              </Text>
-            </View>
-
-            <View style={styles.metricItem}>
-              <View style={styles.metricLabelRow}>
-                <Layers size={12} color="#38BDF8" />
-                <Text style={styles.metricLabel}>In Transit</Text>
-              </View>
-              <Text style={[styles.metricValue, { color: '#38BDF8' }]}>
-                {showBalance ? `₹${inTransit.toLocaleString('en-IN')}` : '••••'}
-              </Text>
-            </View>
-
-            <View style={styles.metricItem}>
-              <View style={styles.metricLabelRow}>
-                <Users size={12} color="#4ADE80" />
-                <Text style={styles.metricLabel}>Users Cash</Text>
-              </View>
-              <Text style={[styles.metricValue, { color: '#4ADE80' }]}>
-                {showBalance ? `₹${usersCash.toLocaleString('en-IN')}` : '••••'}
-              </Text>
-            </View>
-          </View>
-
-          {/* 4 Circular Quick Action Buttons */}
-          <QuickActions
-            onAddLend={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
-              router.push('/(tabs)/lents');
-            }}
-            onSendMoney={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
-              router.push('/(tabs)/transactions');
-            }}
-            onTopUp={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
-              router.push('/(tabs)/settlements');
-            }}
-            onScanQR={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
-              router.push('/(tabs)/settlements');
-            }}
-          />
-        </LinearGradient>
-
-        {/* ================= 3. ACTIVE BILLING CYCLES SECTION ================= */}
-        <View style={styles.sectionContainer}>
-          <View style={styles.sectionHeader}>
-            <View style={styles.sectionTitleRow}>
-              <CalendarClock size={16} color={CedarColors.forest800} />
-              <Text style={styles.sectionTitle}>Active Billing Cycles</Text>
-              <View style={styles.pendingBadge}>
-                <Text style={styles.pendingBadgeText}>
-                  {activeBills.filter((b) => b.status !== 'paid').length} Pending
+                <CreditCard size={13} color="#CAD6C9" />
+                <Text style={styles.cardDropdownText} numberOfLines={1}>
+                  {getActiveCardName()}
                 </Text>
-              </View>
-            </View>
-
-            <HapticButton
-              style={styles.addMiniBtn}
-              onPress={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
-                setBillFormCardId(accessibleCards[0]?.id || '');
-                setBillFormMonth(new Date().toISOString().slice(0, 7));
-                setIsBillModalOpen(true);
-              }}
-              feedbackType="rigid"
-            >
-              <Plus size={14} color="#F6F9F5" />
-            </HapticButton>
-          </View>
-
-          {activeBills.length === 0 ? (
-            <View style={styles.emptyCardBox}>
-              <Text style={styles.emptyBoxText}>No active billing statements found.</Text>
-            </View>
-          ) : (
-            activeBills.map((bill) => {
-              const card = accessibleCards.find((c) => c.id === bill.card_id);
-              const due = Number(bill.generated_amount) - Number(bill.paid_amount);
-              const isPaid = bill.status === 'paid' || due <= 0;
-
-              const billMonth = new Date(bill.billing_month);
-              const genDay = bill.bill_gen_day || card?.bill_gen_day || 7;
-              const genDate = new Date(billMonth.getFullYear(), billMonth.getMonth(), genDay);
-
-              const dueDate = new Date(genDate);
-              dueDate.setDate(dueDate.getDate() + 19);
-
-              const now = new Date();
-              const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-              const dueDayStart = new Date(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate());
-              const daysLeft = Math.round((dueDayStart.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-              const fmtDate = (d: Date) => d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-
-              return (
-                <View
-                  key={bill.id}
-                  style={[
-                    styles.billCard,
-                    isPaid ? styles.billCardPaid : styles.billCardPending,
-                  ]}
-                >
-                  <View style={styles.billTopRow}>
-                    <Text style={styles.billCardName}>
-                      {card?.card_name || 'Vault Card'} (••{card?.last_4_digits || '0000'})
-                    </Text>
-                    {isPaid ? (
-                      <View style={styles.paidBadge}>
-                        <Text style={styles.paidBadgeText}>✓ PAID</Text>
-                      </View>
-                    ) : (
-                      <View
-                        style={[
-                          styles.daysLeftBadge,
-                          daysLeft <= 3 && { backgroundColor: 'rgba(239, 68, 68, 0.15)', borderColor: 'rgba(239, 68, 68, 0.3)' },
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.daysLeftText,
-                            daysLeft <= 3 && { color: '#EF4444' },
-                          ]}
-                        >
-                          {daysLeft > 0 ? `${daysLeft}d left` : daysLeft === 0 ? 'Due today!' : `Overdue ${Math.abs(daysLeft)}d`}
-                        </Text>
-                      </View>
-                    )}
-                  </View>
-
-                  {/* 3 Metric Grid */}
-                  <View style={styles.billGrid}>
-                    <View style={styles.billCol}>
-                      <Text style={styles.billColLabel}>Generated</Text>
-                      <Text style={styles.billColValue}>₹{Number(bill.generated_amount).toLocaleString('en-IN')}</Text>
-                    </View>
-                    <View style={[styles.billCol, styles.billColBorder]}>
-                      <Text style={styles.billColLabel}>Paid</Text>
-                      <Text style={[styles.billColValue, { color: '#2E944B' }]}>₹{Number(bill.paid_amount).toLocaleString('en-IN')}</Text>
-                    </View>
-                    <View style={[styles.billCol, styles.billColBorder]}>
-                      <Text style={styles.billColLabel}>Due</Text>
-                      <Text style={[styles.billColValue, { color: due > 0 ? '#EF4444' : '#2E944B' }]}>
-                        ₹{due > 0 ? due.toLocaleString('en-IN') : 0}
-                      </Text>
-                    </View>
-                  </View>
-
-                  <View style={styles.billFooterRow}>
-                    <Text style={styles.billDateText}>Gen: {fmtDate(genDate)}</Text>
-                    <Text style={[styles.billDateText, daysLeft <= 3 && !isPaid && { color: '#EF4444', fontWeight: '700' }]}>
-                      Due: {fmtDate(dueDate)}
-                    </Text>
-                  </View>
-                </View>
-              );
-            })
-          )}
-        </View>
-
-        {/* ================= 4. CASH & REPAYMENT ANALYTICS MODULE ================= */}
-        <View style={styles.sectionContainer}>
-          <View style={styles.sectionHeader}>
-            <View style={styles.sectionTitleRow}>
-              <Banknote size={16} color="#2E944B" />
-              <Text style={styles.sectionTitle}>Cash & Repayment Analytics</Text>
-            </View>
-          </View>
-
-          <View style={styles.userStatsGrid}>
-            {userStats.map((stat) => (
-              <TouchableOpacity
-                key={stat.id}
-                style={styles.userStatCard}
-                onPress={() => openUserStatModal(stat)}
-                activeOpacity={0.88}
-              >
-                <View style={styles.userStatTop}>
-                  <View style={styles.statAvatar}>
-                    <Text style={styles.statAvatarText}>{stat.name.charAt(0)}</Text>
-                  </View>
-                  <Text style={styles.statUserName} numberOfLines={1}>
-                    {stat.name}
-                  </Text>
-                </View>
-
-                <View style={styles.statMetrics}>
-                  <Text style={styles.statLabel}>Holding Cash</Text>
-                  <Text style={[styles.statValue, stat.cash > 0 && { color: '#2E944B' }]}>
-                    ₹{stat.cash.toLocaleString('en-IN')}
-                  </Text>
-
-                  <View style={styles.statDivider} />
-
-                  <Text style={styles.statLabel}>Personal Due</Text>
-                  <Text style={[styles.statValue, stat.due > 0 && { color: '#EF4444' }]}>
-                    ₹{stat.due.toLocaleString('en-IN')}
-                  </Text>
-                </View>
+                <ChevronDown size={13} color="#CAD6C9" />
               </TouchableOpacity>
-            ))}
-          </View>
-        </View>
 
-        {/* ================= 5. SMART SUGGESTIONS & ACTIVE COOLDOWNS ================= */}
-        <View style={styles.sectionContainer}>
-          {/* Active Cooldown Queue if any */}
-          {currentCooldowns.length > 0 && (
-            <View style={styles.cooldownBanner}>
-              <View style={styles.cooldownTop}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                  <Timer size={14} color="#38BDF8" />
-                  <Text style={styles.cooldownTitle}>Active Cooling Rotation</Text>
+              {/* Notification Bell with 120Hz micro-bounce animation */}
+              <Animated.View style={bellAnimStyle}>
+                <TouchableOpacity
+                  style={styles.iconCircle}
+                  onPress={handleNotificationBellPress}
+                  activeOpacity={0.8}
+                >
+                  <Bell size={18} color="#F6F9F5" />
+                  {daysToBill <= 3 && <View style={styles.notificationDot} />}
+                </TouchableOpacity>
+              </Animated.View>
+            </View>
+          </View>
+
+          {/* ================= 2. HERO AVAILABLE LIMIT CARD ================= */}
+          <Animated.View entering={FadeInDown.delay(60).springify().damping(22)}>
+            <LinearGradient
+              colors={['#04120B', '#082116', '#0E2E20']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.heroCard}
+            >
+              <View style={styles.heroTopRow}>
+                <View style={styles.heroLabelRow}>
+                  <View style={styles.heroDot} />
+                  <Text style={styles.heroLabel}>Total Available Limit</Text>
+                  <TouchableOpacity
+                    onPress={() => setShowBalance(!showBalance)}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
+                    {showBalance ? (
+                      <Eye size={16} color="#CAD6C9" style={{ marginLeft: 8 }} />
+                    ) : (
+                      <EyeOff size={16} color="#CAD6C9" style={{ marginLeft: 8 }} />
+                    )}
+                  </TouchableOpacity>
                 </View>
-                <Text style={styles.cooldownCount}>{currentCooldowns.length} QR Cooling</Text>
+
+                {/* Bill Countdown Badge */}
+                <View style={styles.billDueBadge}>
+                  <CalendarClock size={12} color="#FCD34D" />
+                  <Text style={styles.billDueText}>
+                    {daysToBill <= 1 ? 'Due Tomorrow' : `Next Bill ${nextBillDate}`}
+                  </Text>
+                </View>
               </View>
 
-              {currentCooldowns.map((c) => {
-                const timeLeft = Math.max(0, c.expiresAt - nowTimestamp);
-                const hours = Math.floor(timeLeft / (1000 * 60 * 60));
-                const minutes = Math.floor((timeLeft / 1000 / 60) % 60);
-                return (
-                  <View key={c.qrId} style={styles.cooldownRow}>
-                    <Text style={styles.cooldownMerchant} numberOfLines={1}>
-                      {c.merchantName}
-                    </Text>
-                    <Text style={styles.cooldownTimer}>
-                      {hours}h {minutes}m left
-                    </Text>
+              {/* Large Balance Typography */}
+              <View style={styles.heroAmountRow}>
+                <Text style={styles.heroAmount}>
+                  {showBalance ? `₹${availableLimit.toLocaleString('en-IN')}` : '••••••••'}
+                </Text>
+                <View style={styles.trendPill}>
+                  <TrendingUp size={12} color="#4ADE80" />
+                  <Text style={styles.trendText}>Active Vault</Text>
+                </View>
+              </View>
+
+              <View style={styles.heroDivider} />
+
+              {/* 3 Core Metrics Row */}
+              <View style={styles.metricsGrid}>
+                <View style={styles.metricItem}>
+                  <View style={styles.metricLabelRow}>
+                    <Wallet size={12} color="#34A853" />
+                    <Text style={styles.metricLabel}>Total Limit</Text>
                   </View>
-                );
-              })}
-            </View>
-          )}
+                  <Text style={styles.metricValue}>
+                    {showBalance ? `₹${totalLimit.toLocaleString('en-IN')}` : '••••'}
+                  </Text>
+                </View>
 
-          <View style={styles.sectionHeader}>
-            <View style={styles.sectionTitleRow}>
-              <QrCode size={16} color={CedarColors.forest800} />
-              <Text style={styles.sectionTitle}>Smart Suggestions</Text>
-            </View>
-          </View>
+                <View style={styles.metricItem}>
+                  <View style={styles.metricLabelRow}>
+                    <Layers size={12} color="#38BDF8" />
+                    <Text style={styles.metricLabel}>In Transit</Text>
+                  </View>
+                  <Text style={[styles.metricValue, { color: '#38BDF8' }]}>
+                    {showBalance ? `₹${inTransit.toLocaleString('en-IN')}` : '••••'}
+                  </Text>
+                </View>
 
-          <View style={styles.qrSuggestionsList}>
-            {suggestedQrs.map((qr, idx) => {
-              const isBest = idx === 0;
-              return (
-                <TouchableOpacity
-                  key={qr.id}
-                  style={[styles.qrSuggestionItem, isBest && styles.qrSuggestionBest]}
-                  onPress={() => {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
-                    setSelectedQr(qr);
-                    setQrPayingCardId(accessibleCards[0]?.id || '');
-                    setGeneratedAmounts([]);
-                    setIsQrModalOpen(true);
-                  }}
-                  activeOpacity={0.88}
-                >
-                  <View style={styles.qrItemLeft}>
-                    <View style={styles.qrThumbnail}>
-                      <QrCode size={18} color={CedarColors.forest800} />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                        <Text style={styles.qrMerchantName} numberOfLines={1}>
-                          {qr.merchant_name}
+                <View style={styles.metricItem}>
+                  <View style={styles.metricLabelRow}>
+                    <Users size={12} color="#4ADE80" />
+                    <Text style={styles.metricLabel}>Users Cash</Text>
+                  </View>
+                  <Text style={[styles.metricValue, { color: '#4ADE80' }]}>
+                    {showBalance ? `₹${usersCash.toLocaleString('en-IN')}` : '••••'}
+                  </Text>
+                </View>
+              </View>
+
+              {/* Quick Actions without vibration */}
+              <QuickActions
+                onAddLend={() => router.push('/(tabs)/lents')}
+                onSendMoney={() => router.push('/(tabs)/transactions')}
+                onTopUp={() => router.push('/(tabs)/settlements')}
+                onScanQR={() => router.push('/(tabs)/settlements')}
+              />
+            </LinearGradient>
+          </Animated.View>
+
+          {/* ================= 3. ACTIVE BILLING CYCLES SECTION (Dashboard 1.jpg Parity) ================= */}
+          <View style={styles.sectionContainer}>
+            <View style={styles.sectionHeader}>
+              <View style={styles.sectionTitleRow}>
+                <CalendarClock size={16} color={CedarColors.forest800} />
+                <Text style={styles.sectionTitle}>Active Billing Cycles</Text>
+                <View style={styles.pendingBadge}>
+                  <Text style={styles.pendingBadgeText}>
+                    {activeBills.filter((b) => b.status !== 'paid').length} Pending
+                  </Text>
+                </View>
+              </View>
+
+              <HapticButton
+                style={styles.addMiniBtn}
+                onPress={() => {
+                  setBillFormCardId(accessibleCards[0]?.id || '');
+                  setBillFormMonth(new Date().toISOString().slice(0, 7));
+                  setIsBillModalOpen(true);
+                }}
+              >
+                <Plus size={14} color="#F6F9F5" />
+              </HapticButton>
+            </View>
+
+            {activeBills.length === 0 ? (
+              <View style={styles.emptyCardBox}>
+                <Text style={styles.emptyBoxText}>No active billing statements found.</Text>
+              </View>
+            ) : (
+              activeBills.map((bill, index) => {
+                const card = accessibleCards.find((c) => c.id === bill.card_id);
+                const due = Number(bill.generated_amount) - Number(bill.paid_amount);
+                const isPaid = bill.status === 'paid' || due <= 0;
+
+                const billMonth = new Date(bill.billing_month);
+                const genDay = bill.bill_gen_day || card?.bill_gen_day || 7;
+                const genDate = new Date(billMonth.getFullYear(), billMonth.getMonth(), genDay);
+
+                const dueDate = new Date(genDate);
+                dueDate.setDate(dueDate.getDate() + 19);
+
+                const now = new Date();
+                const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                const dueDayStart = new Date(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate());
+                const daysLeft = Math.round((dueDayStart.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                const fmtDate = (d: Date) => d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+
+                return (
+                  <Animated.View
+                    key={bill.id}
+                    entering={FadeInDown.delay(100 + index * 60).springify().damping(22)}
+                  >
+                    <View
+                      style={[
+                        styles.billCard,
+                        isPaid ? styles.billCardPaid : styles.billCardPending,
+                      ]}
+                    >
+                      <View style={styles.billTopRow}>
+                        <Text style={styles.billCardName}>
+                          {card?.card_name || 'Vault Card'} (••{card?.last_4_digits || '0000'})
                         </Text>
-                        {isBest && (
-                          <View style={styles.bestBadge}>
-                            <Text style={styles.bestBadgeText}>Best</Text>
+                        {isPaid ? (
+                          <View style={styles.paidBadge}>
+                            <CheckCircle2 size={11} color="#15803D" strokeWidth={2.5} style={{ marginRight: 3 }} />
+                            <Text style={styles.paidBadgeText}>PAID</Text>
+                          </View>
+                        ) : (
+                          <View
+                            style={[
+                              styles.daysLeftBadge,
+                              daysLeft <= 3 && {
+                                backgroundColor: 'rgba(239, 68, 68, 0.15)',
+                                borderColor: 'rgba(239, 68, 68, 0.3)',
+                              },
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.daysLeftText,
+                                daysLeft <= 3 && { color: '#EF4444' },
+                              ]}
+                            >
+                              {daysLeft > 0 ? `${daysLeft}d left` : daysLeft === 0 ? 'Due today!' : `Overdue ${Math.abs(daysLeft)}d`}
+                            </Text>
                           </View>
                         )}
                       </View>
-                      <Text style={styles.qrSubText}>{qr.platform || 'UPI QR'}</Text>
+
+                      {/* 3 Metric Columns with Soft Subtle Background */}
+                      <View style={styles.billGrid}>
+                        <View style={styles.billCol}>
+                          <Text style={styles.billColLabel}>GENERATED</Text>
+                          <Text style={styles.billColValue}>
+                            ₹{Number(bill.generated_amount).toLocaleString('en-IN')}
+                          </Text>
+                        </View>
+                        <View style={[styles.billCol, styles.billColBorder]}>
+                          <Text style={styles.billColLabel}>PAID</Text>
+                          <Text style={[styles.billColValue, { color: '#15803D' }]}>
+                            ₹{Number(bill.paid_amount).toLocaleString('en-IN')}
+                          </Text>
+                        </View>
+                        <View style={[styles.billCol, styles.billColBorder]}>
+                          <Text style={styles.billColLabel}>DUE</Text>
+                          <Text
+                            style={[
+                              styles.billColValue,
+                              { color: due > 0 ? '#DC2626' : '#15803D' },
+                            ]}
+                          >
+                            ₹{due > 0 ? due.toLocaleString('en-IN') : 0}
+                          </Text>
+                        </View>
+                      </View>
+
+                      <View style={styles.billFooterRow}>
+                        <Text style={styles.billDateText}>Gen: {fmtDate(genDate)}</Text>
+                        <Text
+                          style={[
+                            styles.billDateText,
+                            daysLeft <= 3 && !isPaid && { color: '#DC2626', fontWeight: '800' },
+                          ]}
+                        >
+                          Due: {fmtDate(dueDate)}
+                        </Text>
+                      </View>
+                    </View>
+                  </Animated.View>
+                );
+              })
+            )}
+          </View>
+
+          {/* ================= 4. CASH & REPAYMENT ANALYTICS (Dashboard 2.jpg Parity) ================= */}
+          <View style={styles.sectionContainer}>
+            <View style={styles.sectionHeader}>
+              <View style={styles.sectionTitleRow}>
+                <Banknote size={16} color="#15803D" />
+                <Text style={styles.sectionTitle}>Cash & Repayment Analytics</Text>
+              </View>
+            </View>
+
+            <View style={styles.userStatsGrid}>
+              {userStats.map((stat, i) => {
+                const isFirst = i === 0;
+                return (
+                  <Animated.View
+                    key={stat.id}
+                    entering={FadeInDown.delay(140 + i * 80).springify().damping(20)}
+                    style={{ flex: 1 }}
+                  >
+                    <TouchableOpacity
+                      style={[
+                        styles.userStatCard,
+                        isFirst ? styles.userStatCardMint : styles.userStatCardWarm,
+                      ]}
+                      onPress={() => openUserStatModal(stat)}
+                      activeOpacity={0.88}
+                    >
+                      <View style={styles.userStatTop}>
+                        {/* DP Show (Avatar Image with Letter Fallback) */}
+                        <View style={[styles.statAvatar, isFirst ? styles.statAvatarMintBorder : styles.statAvatarWarmBorder]}>
+                          {stat.avatar_url ? (
+                            <Image source={{ uri: stat.avatar_url }} style={styles.statAvatarImg} />
+                          ) : (
+                            <Text style={styles.statAvatarText}>{stat.name.charAt(0)}</Text>
+                          )}
+                        </View>
+                        <Text style={styles.statUserName} numberOfLines={1}>
+                          {stat.name}
+                        </Text>
+                      </View>
+
+                      <View style={styles.statMetrics}>
+                        <Text style={styles.statLabel}>HOLDING CASH</Text>
+                        <Text style={[styles.statValue, { color: isFirst ? '#15803D' : '#B45309' }]}>
+                          ₹{stat.cash.toLocaleString('en-IN')}
+                        </Text>
+
+                        <View style={styles.statDivider} />
+
+                        <Text style={styles.statLabel}>PERSONAL DUE</Text>
+                        <Text style={[styles.statValue, stat.due > 0 ? { color: '#DC2626' } : { color: CedarColors.ink700 }]}>
+                          ₹{stat.due.toLocaleString('en-IN')}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  </Animated.View>
+                );
+              })}
+            </View>
+          </View>
+
+          {/* ================= 5. SMART SUGGESTIONS (Dashboard 2.jpg Parity) ================= */}
+          <View style={styles.sectionContainer}>
+            {currentCooldowns.length > 0 && (
+              <View style={styles.cooldownBanner}>
+                <View style={styles.cooldownTop}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Timer size={14} color="#38BDF8" />
+                    <Text style={styles.cooldownTitle}>Active Cooling Rotation</Text>
+                  </View>
+                  <Text style={styles.cooldownCount}>{currentCooldowns.length} QR Cooling</Text>
+                </View>
+
+                {currentCooldowns.map((c) => {
+                  const timeLeft = Math.max(0, c.expiresAt - nowTimestamp);
+                  const hours = Math.floor(timeLeft / (1000 * 60 * 60));
+                  const minutes = Math.floor((timeLeft % (1000 * 60 * 60)) / (1000 * 60));
+                  const seconds = Math.floor((timeLeft % (1000 * 60)) / 1000);
+                  return (
+                    <View key={c.qrId} style={styles.cooldownRow}>
+                      <Text style={styles.cooldownMerchant}>{c.merchantName}</Text>
+                      <Text style={styles.cooldownTimer}>
+                        {hours}h {minutes}m {seconds}s
+                      </Text>
+                    </View>
+                  );
+                })}
+              </View>
+            )}
+
+            <View style={styles.sectionHeader}>
+              <View style={styles.sectionTitleRow}>
+                <QrCode size={16} color={CedarColors.forest800} />
+                <Text style={styles.sectionTitle}>Smart Suggestions</Text>
+              </View>
+            </View>
+
+            <View style={styles.qrSuggestionsList}>
+              {suggestedQrs.map((qr, idx) => {
+                const isBest = idx === 0;
+                return (
+                  <TouchableOpacity
+                    key={qr.id}
+                    style={[styles.qrSuggestionItem, isBest && styles.qrSuggestionBest]}
+                    onPress={() => {
+                      setSelectedQr(qr);
+                      setQrPayingCardId(accessibleCards[0]?.id || '');
+                      setGeneratedAmounts([]);
+                      setIsQrModalOpen(true);
+                    }}
+                    activeOpacity={0.88}
+                  >
+                    <View style={styles.qrItemLeft}>
+                      {/* Show QR image from backend (Web App logic parity) */}
+                      <View style={styles.qrThumbnail}>
+                        {qr.qr_image_url ? (
+                          <Image
+                            source={{ uri: qr.qr_image_url }}
+                            style={styles.qrThumbnailImg}
+                            resizeMode="cover"
+                          />
+                        ) : (
+                          <QrCode size={18} color={CedarColors.forest800} />
+                        )}
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                          <Text style={styles.qrMerchantName} numberOfLines={1}>
+                            {qr.merchant_name}
+                          </Text>
+                          {isBest && (
+                            <View style={styles.bestBadge}>
+                              <Text style={styles.bestBadgeText}>Best</Text>
+                            </View>
+                          )}
+                        </View>
+                        <Text style={styles.qrSubText}>{qr.platform || 'UPI QR'}</Text>
+                      </View>
+                    </View>
+
+                    <ArrowRight size={16} color={CedarColors.ink500} />
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+
+          {/* ================= 6. RECENT TRANSACTIONS (Latest Card Transactions) ================= */}
+          <View style={styles.sectionContainer}>
+            <View style={styles.sectionHeader}>
+              <View>
+                <Text style={styles.sectionTitle}>Recent Transactions</Text>
+                <Text style={styles.sectionSubtitle}>Live credit rotations & settlements</Text>
+              </View>
+              <TouchableOpacity onPress={() => router.push('/(tabs)/transactions')}>
+                <Text style={styles.seeAllText}>See all →</Text>
+              </TouchableOpacity>
+            </View>
+
+            {recentTransactions.length === 0 ? (
+              <View style={styles.emptyCardBox}>
+                <Text style={styles.emptyBoxText}>No transactions recorded yet.</Text>
+              </View>
+            ) : (
+              recentTransactions.map((tx, idx) => (
+                <Animated.View
+                  key={tx.id}
+                  entering={FadeInDown.delay(160 + idx * 40).springify().damping(22)}
+                >
+                  <View style={styles.txRow}>
+                    <View style={styles.txLeft}>
+                      <View
+                        style={[
+                          styles.txIconBox,
+                          tx.isCredit ? styles.creditIconBox : styles.debitIconBox,
+                        ]}
+                      >
+                        {tx.isCredit ? (
+                          <ArrowDownLeft size={16} color="#15803D" />
+                        ) : (
+                          <ArrowUpRight size={16} color={CedarColors.ink700} />
+                        )}
+                      </View>
+                      <View style={styles.txTexts}>
+                        <Text style={styles.txName} numberOfLines={1}>
+                          {tx.title}
+                        </Text>
+                        <Text style={styles.txCategory}>{tx.category}</Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.txRight}>
+                      <Text
+                        style={[
+                          styles.txAmount,
+                          tx.isCredit ? styles.creditAmount : styles.debitAmount,
+                        ]}
+                      >
+                        {tx.isCredit ? `+₹${tx.amount.toLocaleString('en-IN')}` : `-₹${tx.amount.toLocaleString('en-IN')}`}
+                      </Text>
+                      <Text style={styles.txDate}>{tx.date}</Text>
                     </View>
                   </View>
-
-                  <ArrowRight size={16} color={CedarColors.ink500} />
-                </TouchableOpacity>
-              );
-            })}
+                </Animated.View>
+              ))
+            )}
           </View>
-        </View>
+        </ScrollView>
 
-        {/* ================= 6. RECENT TRANSACTIONS FEED ================= */}
-        <View style={styles.sectionContainer}>
-          <View style={styles.sectionHeader}>
-            <View>
-              <Text style={styles.sectionTitle}>Recent Transactions</Text>
-              <Text style={styles.sectionSubtitle}>Live credit rotations & personal spends</Text>
-            </View>
-            <TouchableOpacity
-              onPress={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
-                router.push('/(tabs)/transactions');
-              }}
-            >
-              <Text style={styles.seeAllText}>See all →</Text>
-            </TouchableOpacity>
-          </View>
-
-          {recentTransactions.length === 0 ? (
-            <View style={styles.emptyCardBox}>
-              <Text style={styles.emptyBoxText}>No transactions recorded yet.</Text>
-            </View>
-          ) : (
-            recentTransactions.map((tx) => (
-              <View key={tx.id} style={styles.txRow}>
-                <View style={styles.txLeft}>
-                  <View
-                    style={[
-                      styles.txIconBox,
-                      tx.isCredit ? styles.creditIconBox : styles.debitIconBox,
-                    ]}
-                  >
-                    {tx.isCredit ? (
-                      <ArrowDownLeft size={16} color="#2E944B" />
-                    ) : (
-                      <ArrowUpRight size={16} color={CedarColors.ink700} />
-                    )}
-                  </View>
-                  <View style={styles.txTexts}>
-                    <Text style={styles.txName} numberOfLines={1}>
-                      {tx.title}
-                    </Text>
-                    <Text style={styles.txCategory}>{tx.category}</Text>
-                  </View>
-                </View>
-
-                <View style={styles.txRight}>
-                  <Text
-                    style={[
-                      styles.txAmount,
-                      tx.isCredit ? styles.creditAmount : styles.debitAmount,
-                    ]}
-                  >
-                    {tx.isCredit ? `+₹${tx.amount.toLocaleString('en-IN')}` : `-₹${tx.amount.toLocaleString('en-IN')}`}
-                  </Text>
-                  <Text style={styles.txDate}>{tx.date}</Text>
-                </View>
-              </View>
-            ))
-          )}
-        </View>
-      </ScrollView>
-
-      {/* ================= CARD SELECTOR MODAL ================= */}
-      <Modal
-        visible={cardModalVisible}
-        animationType="fade"
-        transparent={true}
-        onRequestClose={() => setCardModalVisible(false)}
-      >
-        <TouchableOpacity
-          style={styles.modalBackdrop}
-          activeOpacity={1}
-          onPress={() => setCardModalVisible(false)}
+        {/* ================= CARD SELECTOR DRAWER (Slide Down to Dismiss) ================= */}
+        <SwipeDownDrawer
+          visible={cardModalVisible}
+          onClose={() => setCardModalVisible(false)}
+          title="Select Credit Vault"
+          subtitle="Filter dashboard metrics by individual card or unified vault"
+          heightPercent={0.65}
         >
-          <View style={styles.cardSelectDialog}>
-            <Text style={styles.dialogTitle}>Select Credit Vault</Text>
-            <Text style={styles.dialogSub}>
-              Filter dashboard metrics by individual card or unified family vault
-            </Text>
-
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 18, gap: 10 }}>
             <TouchableOpacity
               style={[
                 styles.cardOptionRow,
                 selectedCardId === 'all' && styles.cardOptionSelected,
               ]}
               onPress={() => {
-                Haptics.selectionAsync();
                 setSelectedCardId('all');
                 setCardModalVisible(false);
               }}
@@ -1177,9 +1402,7 @@ export default function HomeScreen() {
                 <CreditCard size={18} color={CedarColors.forest800} />
                 <Text style={styles.cardOptionName}>All Vault Cards (Unified)</Text>
               </View>
-              {selectedCardId === 'all' && (
-                <CheckCircle2 size={18} color={CedarColors.forest800} />
-              )}
+              {selectedCardId === 'all' && <CheckCircle2 size={18} color={CedarColors.forest800} />}
             </TouchableOpacity>
 
             {accessibleCards.map((c) => {
@@ -1187,12 +1410,8 @@ export default function HomeScreen() {
               return (
                 <TouchableOpacity
                   key={c.id}
-                  style={[
-                    styles.cardOptionRow,
-                    isSelected && styles.cardOptionSelected,
-                  ]}
+                  style={[styles.cardOptionRow, isSelected && styles.cardOptionSelected]}
                   onPress={() => {
-                    Haptics.selectionAsync();
                     setSelectedCardId(c.id);
                     setCardModalVisible(false);
                   }}
@@ -1202,37 +1421,26 @@ export default function HomeScreen() {
                     <View>
                       <Text style={styles.cardOptionName}>{c.card_name}</Text>
                       <Text style={styles.cardOptionDigits}>
-                        •••• {c.last_4_digits} | Limit: ₹
-                        {Number(c.total_limit).toLocaleString('en-IN')}
+                        •••• {c.last_4_digits} | Limit: ₹{Number(c.total_limit).toLocaleString('en-IN')}
                       </Text>
                     </View>
                   </View>
-                  {isSelected && (
-                    <CheckCircle2 size={18} color={CedarColors.forest800} />
-                  )}
+                  {isSelected && <CheckCircle2 size={18} color={CedarColors.forest800} />}
                 </TouchableOpacity>
               );
             })}
-          </View>
-        </TouchableOpacity>
-      </Modal>
+          </ScrollView>
+        </SwipeDownDrawer>
 
-      {/* ================= BILL ENTRY MODAL ================= */}
-      <Modal
-        visible={isBillModalOpen}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setIsBillModalOpen(false)}
-      >
-        <View style={styles.bottomSheetBackdrop}>
-          <View style={styles.sheetDialog}>
-            <View style={styles.sheetHeader}>
-              <Text style={styles.sheetTitle}>Manage Billing Cycle</Text>
-              <TouchableOpacity onPress={() => setIsBillModalOpen(false)}>
-                <X size={20} color={CedarColors.ink900} />
-              </TouchableOpacity>
-            </View>
-
+        {/* ================= BILL ENTRY DRAWER (Slide Down to Dismiss) ================= */}
+        <SwipeDownDrawer
+          visible={isBillModalOpen}
+          onClose={() => setIsBillModalOpen(false)}
+          title="Manage Billing Cycle"
+          subtitle="Record and update card monthly statement amounts"
+          heightPercent={0.72}
+        >
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 20, gap: 12 }}>
             <Text style={styles.inputLabel}>Select Vault Card</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.selectorScroll}>
               {accessibleCards.filter((c) => c.is_primary).map((c) => {
@@ -1241,10 +1449,7 @@ export default function HomeScreen() {
                   <TouchableOpacity
                     key={c.id}
                     style={[styles.selectorChip, isSel && styles.activeSelectorChip]}
-                    onPress={() => {
-                      Haptics.selectionAsync();
-                      setBillFormCardId(c.id);
-                    }}
+                    onPress={() => setBillFormCardId(c.id)}
                   >
                     <Text style={[styles.selectorChipText, isSel && styles.activeSelectorChipText]}>
                       {c.card_name} (••{c.last_4_digits})
@@ -1286,7 +1491,6 @@ export default function HomeScreen() {
             <HapticButton
               style={styles.sheetSaveBtn}
               onPress={handleSaveBill}
-              feedbackType="rigid"
               disabled={isSavingBill}
             >
               {isSavingBill ? (
@@ -1295,135 +1499,483 @@ export default function HomeScreen() {
                 <Text style={styles.sheetSaveText}>Save Bill Details</Text>
               )}
             </HapticButton>
+          </ScrollView>
+        </SwipeDownDrawer>
+
+        {/* ================= 7. USER DETAIL LEDGER MODAL (Deep Green Gradient & Royal Gold) ================= */}
+        <SwipeDownDrawer
+          visible={isUserModalOpen}
+          onClose={() => setIsUserModalOpen(false)}
+          gradientColors={['#041009', '#081D14', '#0E2E20']}
+          headerAccentColor="#F59E0B"
+          heightPercent={0.88}
+          title={`${selectedUserStat?.name}'s Ledger`}
+          subtitle="Advanced Cash & Spends Breakdown"
+        >
+          {/* 4 Tabs: Summary | Cash In/Out | Personal Due | Pocket Advance */}
+          <View style={styles.goldModalTabRow}>
+            {(['summary', 'cash_ledger', 'due_ledger', 'pocket_advance'] as const).map((tab) => {
+              const isTab = userModalTab === tab;
+              const label =
+                tab === 'summary'
+                  ? 'Summary'
+                  : tab === 'cash_ledger'
+                  ? 'Cash In/Out'
+                  : tab === 'due_ledger'
+                  ? 'Personal Due'
+                  : 'Pocket Advance';
+
+              return (
+                <TouchableOpacity
+                  key={tab}
+                  style={[styles.goldTabBtn, isTab && styles.activeGoldTabBtn]}
+                  onPress={() => setUserModalTab(tab)}
+                >
+                  <Text style={[styles.goldTabText, isTab && styles.activeGoldTabText]}>
+                    {label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
-        </View>
-      </Modal>
 
-      {/* ================= USER DETAIL LEDGER MODAL ================= */}
-      <Modal
-        visible={isUserModalOpen}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setIsUserModalOpen(false)}
-      >
-        <View style={styles.bottomSheetBackdrop}>
-          <View style={[styles.sheetDialog, { height: '80%' }]}>
-            <View style={styles.sheetHeader}>
-              <View>
-                <Text style={styles.sheetTitle}>{selectedUserStat?.name}'s Ledger</Text>
-                <Text style={styles.sheetSub}>Advanced Cash & Spends Breakdown</Text>
-              </View>
-              <TouchableOpacity onPress={() => setIsUserModalOpen(false)}>
-                <X size={20} color={CedarColors.ink900} />
-              </TouchableOpacity>
-            </View>
-
-            {/* Modal Tabs */}
-            <View style={styles.modalTabRow}>
-              {(['summary', 'cash_ledger', 'due_ledger'] as const).map((tab) => {
-                const isTab = userModalTab === tab;
-                const label = tab === 'summary' ? 'Summary' : tab === 'cash_ledger' ? 'Cash In/Out' : 'Personal Due';
+          {/* Date Range Preset Filter for Ledgers */}
+          {userModalTab !== 'summary' && (
+            <View style={styles.presetFilterRow}>
+              {(['all', 'this_month', '30d'] as const).map((p) => {
+                const isSelected = modalDateFilter === p;
+                const pLabel = p === 'all' ? 'All History' : p === 'this_month' ? 'This Month' : 'Last 30 Days';
                 return (
                   <TouchableOpacity
-                    key={tab}
-                    style={[styles.modalTabBtn, isTab && styles.activeModalTabBtn]}
+                    key={p}
+                    style={[styles.presetChip, isSelected && styles.activePresetChip]}
+                    onPress={() => setModalDateFilter(p)}
+                  >
+                    <Text style={[styles.presetChipText, isSelected && styles.activePresetChipText]}>
+                      {pLabel}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
+
+          {/* Tab Contents */}
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.drawerScrollBody}>
+            {/* ── TAB 1: SUMMARY (with Cash Transfer System) ── */}
+            {userModalTab === 'summary' && selectedUserStat && (
+              <View style={{ gap: 14 }}>
+                {/* Cash on Hand Card */}
+                <View style={styles.summaryGoldCard}>
+                  <View style={styles.summaryCardTop}>
+                    <Text style={styles.goldLabel}>TOTAL CASH IN HAND</Text>
+                    <Banknote size={18} color="#34D399" />
+                  </View>
+                  <Text style={styles.goldAmountEmerald}>
+                    ₹{selectedUserStat.cash.toLocaleString('en-IN')}
+                  </Text>
+                  <Text style={styles.goldSubText}>Unified family card vault balance</Text>
+
+                  {/* Transfer Cash Button */}
+                  <TouchableOpacity
+                    style={styles.transferLaunchBtn}
+                    onPress={openTransferModal}
+                    activeOpacity={0.88}
+                  >
+                    <Send size={15} color="#071A12" strokeWidth={2.4} />
+                    <Text style={styles.transferLaunchBtnText}>Transfer Cash</Text>
+                  </TouchableOpacity>
+
+                  {/* Per-card breakdown pills */}
+                  {selectedUserStat.cardBreakdown.length > 0 && (
+                    <View style={styles.breakdownContainer}>
+                      <Text style={styles.breakdownTitle}>Per-Card Breakdown:</Text>
+                      <View style={styles.breakdownChipsWrap}>
+                        {selectedUserStat.cardBreakdown.map((b) => (
+                          <View key={b.cardId} style={styles.breakdownChip}>
+                            <CreditCard size={11} color="#34D399" />
+                            <Text style={styles.breakdownChipCard}>
+                              {b.cardName} (••{b.cardLast4}):
+                            </Text>
+                            <Text style={styles.breakdownChipAmt}>
+                              ₹{b.balance.toLocaleString('en-IN')}
+                            </Text>
+                          </View>
+                        ))}
+                      </View>
+                    </View>
+                  )}
+                </View>
+
+                {/* Personal Due Card */}
+                <View style={styles.summaryDueCard}>
+                  <View style={styles.summaryCardTop}>
+                    <Text style={styles.dueCardLabel}>TOTAL PERSONAL DUE</Text>
+                    <Receipt size={18} color="#FB7185" />
+                  </View>
+                  <Text style={styles.goldAmountRose}>
+                    ₹{selectedUserStat.due.toLocaleString('en-IN')}
+                  </Text>
+                  <Text style={styles.dueCardSubText}>Total remaining debt to clear</Text>
+                </View>
+
+                {/* Pocket Advance Card */}
+                <View style={styles.summaryPocketCard}>
+                  <View style={styles.summaryCardTop}>
+                    <Text style={styles.pocketCardLabel}>ACTIVE POCKET ADVANCE</Text>
+                    <Coins size={18} color="#FBBF24" />
+                  </View>
+                  <Text style={styles.goldAmountAmber}>
+                    ₹{selectedUserStat.pocket.toLocaleString('en-IN')}
+                  </Text>
+                  <Text style={styles.pocketCardSubText}>Spent from personal funds on card bills</Text>
+                </View>
+              </View>
+            )}
+
+            {/* ── TAB 2: CASH IN / OUT ── */}
+            {userModalTab === 'cash_ledger' && (
+              <View style={{ gap: 12 }}>
+                {/* 3 Metric Summary Row (In, Out, Net) */}
+                <View style={styles.metricStatsRow}>
+                  <View style={styles.metricStatBoxIn}>
+                    <Text style={styles.metricStatTitleIn}>IN (+)</Text>
+                    <Text style={styles.metricStatValIn}>₹{cashStats.credit.toLocaleString('en-IN')}</Text>
+                  </View>
+                  <View style={styles.metricStatBoxOut}>
+                    <Text style={styles.metricStatTitleOut}>OUT (-)</Text>
+                    <Text style={styles.metricStatValOut}>₹{cashStats.debit.toLocaleString('en-IN')}</Text>
+                  </View>
+                  <View style={styles.metricStatBoxNet}>
+                    <Text style={styles.metricStatTitleNet}>NET</Text>
+                    <Text style={styles.metricStatValNet}>
+                      {cashStats.net >= 0 ? '+' : '-'}₹{Math.abs(cashStats.net).toLocaleString('en-IN')}
+                    </Text>
+                  </View>
+                </View>
+
+                {isLedgerLoading ? (
+                  <ActivityIndicator size="small" color="#F59E0B" style={{ marginVertical: 30 }} />
+                ) : filteredCashLedger.length === 0 ? (
+                  <View style={styles.emptyGoldBox}>
+                    <Banknote size={28} color="#7E9185" />
+                    <Text style={styles.emptyGoldText}>No cash ledger records found in this range.</Text>
+                  </View>
+                ) : (
+                  filteredCashLedger.map((item) => (
+                    <View key={item.id} style={styles.goldLedgerRow}>
+                      <View style={styles.goldRowLeft}>
+                        <View
+                          style={[
+                            styles.goldIconPill,
+                            item.transaction_type === 'credit'
+                              ? styles.goldIconPillCredit
+                              : styles.goldIconPillDebit,
+                          ]}
+                        >
+                          {item.transaction_type === 'credit' ? (
+                            <ArrowDownLeft size={16} color="#34D399" />
+                          ) : (
+                            <Banknote size={16} color="#FB7185" />
+                          )}
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.goldRowTitle}>{item.remarks || 'Cash Transaction'}</Text>
+                          <Text style={styles.goldRowSub}>
+                            {new Date(item.transaction_date).toLocaleDateString('en-GB', {
+                              day: 'numeric',
+                              month: 'short',
+                              year: 'numeric',
+                            })}
+                            {item.cards?.card_name && ` • ${item.cards.card_name}`}
+                          </Text>
+                        </View>
+                      </View>
+                      <Text
+                        style={[
+                          styles.goldRowAmt,
+                          item.transaction_type === 'credit' ? { color: '#34D399' } : { color: '#FB7185' },
+                        ]}
+                      >
+                        {item.transaction_type === 'credit' ? '+' : '-'}₹{Number(item.amount).toLocaleString('en-IN')}
+                      </Text>
+                    </View>
+                  ))
+                )}
+              </View>
+            )}
+
+            {/* ── TAB 3: PERSONAL DUE ── */}
+            {userModalTab === 'due_ledger' && (
+              <View style={{ gap: 12 }}>
+                {/* 3 Metric Summary Row (Added, Repaid, Net) */}
+                <View style={styles.metricStatsRow}>
+                  <View style={styles.metricStatBoxOut}>
+                    <Text style={styles.metricStatTitleOut}>ADDED (+)</Text>
+                    <Text style={styles.metricStatValOut}>₹{dueStats.added.toLocaleString('en-IN')}</Text>
+                  </View>
+                  <View style={styles.metricStatBoxIn}>
+                    <Text style={styles.metricStatTitleIn}>REPAID (-)</Text>
+                    <Text style={styles.metricStatValIn}>₹{dueStats.repaid.toLocaleString('en-IN')}</Text>
+                  </View>
+                  <View style={styles.metricStatBoxNet}>
+                    <Text style={styles.metricStatTitleNet}>NET DUE</Text>
+                    <Text style={styles.metricStatValNet}>₹{dueStats.net.toLocaleString('en-IN')}</Text>
+                  </View>
+                </View>
+
+                {isLedgerLoading ? (
+                  <ActivityIndicator size="small" color="#F59E0B" style={{ marginVertical: 30 }} />
+                ) : filteredDueLedger.length === 0 ? (
+                  <View style={styles.emptyGoldBox}>
+                    <Receipt size={28} color="#7E9185" />
+                    <Text style={styles.emptyGoldText}>No personal due records found in this range.</Text>
+                  </View>
+                ) : (
+                  filteredDueLedger.map((item) => {
+                    const isRepayment = item.payment_method === 'repayment' || Number(item.amount) < 0;
+                    return (
+                      <View key={item.id} style={styles.goldLedgerRow}>
+                        <View style={styles.goldRowLeft}>
+                          <View
+                            style={[
+                              styles.goldIconPill,
+                              isRepayment ? styles.goldIconPillCredit : styles.goldIconPillDebit,
+                            ]}
+                          >
+                            {isRepayment ? (
+                              <ArrowDownLeft size={16} color="#34D399" />
+                            ) : (
+                              <Receipt size={16} color="#FB7185" />
+                            )}
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.goldRowTitle}>{item.remarks || (isRepayment ? 'Repayment' : 'Personal Spend')}</Text>
+                            <Text style={styles.goldRowSub}>
+                              {new Date(item.spend_date).toLocaleDateString('en-GB', {
+                                day: 'numeric',
+                                month: 'short',
+                                year: 'numeric',
+                              })}
+                              {item.cards?.card_name && ` • ${item.cards.card_name}`}
+                            </Text>
+                          </View>
+                        </View>
+                        <Text
+                          style={[
+                            styles.goldRowAmt,
+                            isRepayment ? { color: '#34D399' } : { color: '#FB7185' },
+                          ]}
+                        >
+                          {isRepayment ? '-' : '+'}₹{Math.abs(Number(item.amount)).toLocaleString('en-IN')}
+                        </Text>
+                      </View>
+                    );
+                  })
+                )}
+              </View>
+            )}
+
+            {/* ── TAB 4: POCKET ADVANCE ── */}
+            {userModalTab === 'pocket_advance' && (
+              <View style={{ gap: 12 }}>
+                {/* Pocket Summary Card */}
+                <View style={styles.pocketLedgerSummaryBanner}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <View style={styles.pocketBannerIcon}>
+                      <Coins size={20} color="#F59E0B" />
+                    </View>
+                    <View>
+                      <Text style={styles.pocketBannerTitle}>Active Pocket Advance</Text>
+                      <Text style={styles.pocketBannerSub}>Advanced for card bill payments</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.pocketBannerAmt}>
+                    ₹{(selectedUserStat?.pocket || 0).toLocaleString('en-IN')}
+                  </Text>
+                </View>
+
+                {isLedgerLoading ? (
+                  <ActivityIndicator size="small" color="#F59E0B" style={{ marginVertical: 30 }} />
+                ) : pocketLedger.length === 0 ? (
+                  <View style={styles.emptyGoldBox}>
+                    <Coins size={28} color="#7E9185" />
+                    <Text style={styles.emptyGoldText}>No pocket advance history found.</Text>
+                  </View>
+                ) : (
+                  pocketLedger.map((pa) => {
+                    const isAdv = pa.entry_type === 'advance';
+                    return (
+                      <View key={pa.id} style={styles.goldLedgerRow}>
+                        <View style={styles.goldRowLeft}>
+                          <View
+                            style={[
+                              styles.goldIconPill,
+                              isAdv ? styles.goldIconPillAmber : styles.goldIconPillCredit,
+                            ]}
+                          >
+                            <Coins size={16} color={isAdv ? '#F59E0B' : '#34D399'} />
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.goldRowTitle}>
+                              {isAdv ? 'পকেট থেকে বিল পে (+)' : 'পকেটে ফেরত (-)'}
+                            </Text>
+                            <Text style={styles.goldRowSub}>
+                              {pa.cards?.card_name || 'Card'} (••{pa.cards?.last_4_digits || '0000'}) •{' '}
+                              {new Date(pa.transaction_date).toLocaleDateString('en-GB')}
+                            </Text>
+                          </View>
+                        </View>
+                        <Text
+                          style={[
+                            styles.goldRowAmt,
+                            isAdv ? { color: '#F59E0B' } : { color: '#34D399' },
+                          ]}
+                        >
+                          {isAdv ? '+' : '-'}₹{Number(pa.amount).toLocaleString('en-IN')}
+                        </Text>
+                      </View>
+                    );
+                  })
+                )}
+              </View>
+            )}
+          </ScrollView>
+        </SwipeDownDrawer>
+
+        {/* ================= CASH TRANSFER DRAWER (Slide Down to Dismiss) ================= */}
+        <SwipeDownDrawer
+          visible={isTransferOpen}
+          onClose={() => setIsTransferOpen(false)}
+          gradientColors={['#041009', '#081D14', '#0E2E20']}
+          headerAccentColor="#F59E0B"
+          title="Transfer Cash"
+          subtitle="Send cash balance between users & vault cards"
+          heightPercent={0.78}
+        >
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 20, gap: 14 }}>
+            {/* 1. Sender Card */}
+            <Text style={styles.goldInputLabel}>আপনার কোন কার্ড থেকে পাঠাবেন?</Text>
+            {transferSenderCards.length === 0 ? (
+              <View style={styles.noCardWarnBox}>
+                <Text style={styles.noCardWarnText}>আপনার কোনো কার্ডে ক্যাশ ব্যালেন্স নেই।</Text>
+              </View>
+            ) : (
+              <View style={styles.chipSelectorWrap}>
+                {transferSenderCards.map((c) => {
+                  const isSel = selectedSenderCardId === c.cardId;
+                  return (
+                    <TouchableOpacity
+                      key={c.cardId}
+                      style={[styles.senderCardChip, isSel && styles.activeSenderCardChip]}
+                      onPress={() => {
+                        setSelectedSenderCardId(c.cardId);
+                        setSenderCardBalance(c.balance);
+                      }}
+                    >
+                      <Text style={[styles.senderCardChipText, isSel && styles.activeSenderCardChipText]}>
+                        {c.cardName} (••{c.cardLast4})
+                      </Text>
+                      <Text style={[styles.senderCardBalText, isSel && styles.activeSenderCardBalText]}>
+                        ₹{c.balance.toLocaleString('en-IN')}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
+
+            {/* 2. Recipient User */}
+            <Text style={styles.goldInputLabel}>কাকে পাঠাবেন?</Text>
+            <View style={{ flexDirection: 'row', gap: 10 }}>
+              {transferTargetUsers.map((t) => {
+                const isSel = selectedTargetUser?.userId === t.userId;
+                return (
+                  <TouchableOpacity
+                    key={t.userId}
+                    style={[styles.targetUserBtn, isSel && styles.activeTargetUserBtn]}
                     onPress={() => {
-                      Haptics.selectionAsync();
-                      setUserModalTab(tab);
+                      setSelectedTargetUser(t);
+                      setSelectedReceiverCardId(t.cards[0]?.cardId || '');
                     }}
                   >
-                    <Text style={[styles.modalTabText, isTab && styles.activeModalTabText]}>
-                      {label}
+                    <Text style={[styles.targetUserBtnText, isSel && styles.activeTargetUserBtnText]}>
+                      {t.userName}
                     </Text>
                   </TouchableOpacity>
                 );
               })}
             </View>
 
-            {/* Tab Contents */}
-            <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1, marginTop: 10 }}>
-              {userModalTab === 'summary' && selectedUserStat && (
-                <View style={{ gap: 12 }}>
-                  <View style={styles.summaryBox}>
-                    <Text style={styles.summaryBoxLabel}>Total Cash in Hand</Text>
-                    <Text style={styles.summaryBoxAmount}>₹{selectedUserStat.cash.toLocaleString('en-IN')}</Text>
-                    <Text style={styles.summaryBoxSub}>Unified card family aggregated balance</Text>
-                  </View>
-
-                  <Text style={styles.inputLabel}>Per-Card Cash Breakdown</Text>
-                  {selectedUserStat.cardBreakdown.map((b) => (
-                    <View key={b.cardId} style={styles.cardBreakdownRow}>
-                      <Text style={styles.breakdownCardName}>{b.cardName} (••{b.cardLast4})</Text>
-                      <Text style={styles.breakdownCardAmount}>₹{b.balance.toLocaleString('en-IN')}</Text>
-                    </View>
-                  ))}
+            {/* 3. Recipient Card Dropdown */}
+            {selectedTargetUser && (
+              <>
+                <Text style={styles.goldInputLabel}>গ্রহীতার কোন কার্ডে জমা হবে?</Text>
+                <View style={styles.chipSelectorWrap}>
+                  {selectedTargetUser.cards.map((rc: any) => {
+                    const isSel = selectedReceiverCardId === rc.cardId;
+                    return (
+                      <TouchableOpacity
+                        key={rc.cardId}
+                        style={[styles.receiverCardChip, isSel && styles.activeReceiverCardChip]}
+                        onPress={() => setSelectedReceiverCardId(rc.cardId)}
+                      >
+                        <Text style={[styles.receiverCardChipText, isSel && styles.activeReceiverCardChipText]}>
+                          {rc.cardName} (••{rc.cardLast4})
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
                 </View>
+              </>
+            )}
+
+            {/* 4. Amount */}
+            <Text style={styles.goldInputLabel}>পরিমাণ (₹)</Text>
+            <TextInput
+              style={styles.goldAmountInput}
+              placeholder="0"
+              placeholderTextColor="#7E9185"
+              keyboardType="numeric"
+              value={transferAmount}
+              onChangeText={setTransferAmount}
+            />
+
+            {/* 5. Remarks */}
+            <Text style={styles.goldInputLabel}>মন্তব্য (Optional)</Text>
+            <TextInput
+              style={styles.goldTextInput}
+              placeholder="e.g. For bill payment settlement"
+              placeholderTextColor="#7E9185"
+              value={transferRemarks}
+              onChangeText={setTransferRemarks}
+            />
+
+            {/* Submit Transfer Button */}
+            <TouchableOpacity
+              style={styles.confirmTransferBtn}
+              onPress={executeTransfer}
+              disabled={isTransferring}
+              activeOpacity={0.88}
+            >
+              {isTransferring ? (
+                <ActivityIndicator size="small" color="#071A12" />
+              ) : (
+                <Text style={styles.confirmTransferBtnText}>Confirm Cash Transfer</Text>
               )}
+            </TouchableOpacity>
+          </ScrollView>
+        </SwipeDownDrawer>
 
-              {userModalTab === 'cash_ledger' && (
-                isLedgerLoading ? (
-                  <ActivityIndicator size="small" color={CedarColors.forest800} style={{ marginVertical: 20 }} />
-                ) : cashLedger.length === 0 ? (
-                  <Text style={styles.emptyBoxText}>No cash ledger entries found.</Text>
-                ) : (
-                  cashLedger.map((item) => (
-                    <View key={item.id} style={styles.ledgerItemRow}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.ledgerRemarks}>{item.remarks || 'Cash Transaction'}</Text>
-                        <Text style={styles.ledgerDateText}>{item.transaction_date}</Text>
-                      </View>
-                      <Text style={[styles.ledgerAmtText, item.transaction_type === 'credit' ? { color: '#2E944B' } : { color: '#EF4444' }]}>
-                        {item.transaction_type === 'credit' ? '+' : '-'}₹{Number(item.amount).toLocaleString('en-IN')}
-                      </Text>
-                    </View>
-                  ))
-                )
-              )}
-
-              {userModalTab === 'due_ledger' && (
-                isLedgerLoading ? (
-                  <ActivityIndicator size="small" color={CedarColors.forest800} style={{ marginVertical: 20 }} />
-                ) : dueLedger.length === 0 ? (
-                  <Text style={styles.emptyBoxText}>No personal due records.</Text>
-                ) : (
-                  dueLedger.map((item) => (
-                    <View key={item.id} style={styles.ledgerItemRow}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.ledgerRemarks}>{item.remarks || 'Personal Expense'}</Text>
-                        <Text style={styles.ledgerDateText}>{item.spend_date}</Text>
-                      </View>
-                      <Text style={[styles.ledgerAmtText, { color: '#EF4444' }]}>
-                        -₹{Number(item.amount).toLocaleString('en-IN')}
-                      </Text>
-                    </View>
-                  ))
-                )
-              )}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
-
-      {/* ================= QR PAYMENT STRATEGY MODAL ================= */}
-      <Modal
-        visible={isQrModalOpen}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setIsQrModalOpen(false)}
-      >
-        <View style={styles.bottomSheetBackdrop}>
-          <View style={styles.sheetDialog}>
-            <View style={styles.sheetHeader}>
-              <View>
-                <Text style={styles.sheetTitle}>{selectedQr?.merchant_name}</Text>
-                <Text style={styles.sheetSub}>{selectedQr?.upi_id || 'UPI Merchant QR'}</Text>
-              </View>
-              <TouchableOpacity onPress={() => setIsQrModalOpen(false)}>
-                <X size={20} color={CedarColors.ink900} />
-              </TouchableOpacity>
-            </View>
-
-            {/* Paying Card Selector */}
+        {/* ================= QR PAYMENT MODAL (Slide Down to Dismiss) ================= */}
+        <SwipeDownDrawer
+          visible={isQrModalOpen}
+          onClose={() => setIsQrModalOpen(false)}
+          title={selectedQr?.merchant_name || 'UPI QR Payment'}
+          subtitle={selectedQr?.upi_id || 'Pay from vault card'}
+          heightPercent={0.76}
+        >
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 20, gap: 12 }}>
             <Text style={styles.inputLabel}>Paying From Vault Card</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.selectorScroll}>
               {accessibleCards.map((c) => {
@@ -1432,10 +1984,7 @@ export default function HomeScreen() {
                   <TouchableOpacity
                     key={c.id}
                     style={[styles.selectorChip, isSel && styles.activeSelectorChip]}
-                    onPress={() => {
-                      Haptics.selectionAsync();
-                      setQrPayingCardId(c.id);
-                    }}
+                    onPress={() => setQrPayingCardId(c.id)}
                   >
                     <Text style={[styles.selectorChipText, isSel && styles.activeSelectorChipText]}>
                       {c.card_name}
@@ -1445,12 +1994,10 @@ export default function HomeScreen() {
               })}
             </ScrollView>
 
-            {/* Single vs Multiple Swipe Strategy */}
             <View style={styles.strategyRow}>
               <TouchableOpacity
                 style={[styles.strategyBtn, qrPaymentMode === 'once' && styles.activeStrategyBtn]}
                 onPress={() => {
-                  Haptics.selectionAsync();
                   setQrPaymentMode('once');
                   setGeneratedAmounts([]);
                 }}
@@ -1462,7 +2009,6 @@ export default function HomeScreen() {
               <TouchableOpacity
                 style={[styles.strategyBtn, qrPaymentMode === 'multiple' && styles.activeStrategyBtn]}
                 onPress={() => {
-                  Haptics.selectionAsync();
                   setQrPaymentMode('multiple');
                   setGeneratedAmounts([]);
                 }}
@@ -1473,16 +2019,18 @@ export default function HomeScreen() {
               </TouchableOpacity>
             </View>
 
-            <HapticButton
+            <TouchableOpacity
               style={styles.generateLinkBtn}
               onPress={handleGeneratePaymentAmounts}
-              feedbackType="rigid"
+              activeOpacity={0.88}
             >
               <Text style={styles.generateLinkText}>Generate Dynamic Payment Links</Text>
-            </HapticButton>
+            </TouchableOpacity>
 
             {generatedAmounts.map((amt, idx) => {
-              const link = `upi://pay?pa=${selectedQr?.upi_id || ''}&pn=${encodeURIComponent(selectedQr?.merchant_name || '')}&am=${amt}&cu=INR`;
+              const link = `upi://pay?pa=${selectedQr?.upi_id || ''}&pn=${encodeURIComponent(
+                selectedQr?.merchant_name || ''
+              )}&am=${amt}&cu=INR`;
               return (
                 <TouchableOpacity
                   key={idx}
@@ -1490,43 +2038,61 @@ export default function HomeScreen() {
                   onPress={() => Linking.openURL(link)}
                 >
                   <Text style={styles.payLinkText}>Pay ₹{amt}</Text>
-                  <ArrowRight size={16} color="#2E944B" />
+                  <ArrowRight size={16} color="#15803D" />
                 </TouchableOpacity>
               );
             })}
 
-            <HapticButton
+            <TouchableOpacity
               style={styles.sheetSaveBtn}
               onPress={handleMarkQrAsUsed}
-              feedbackType="rigid"
               disabled={isMarkingUsed}
+              activeOpacity={0.88}
             >
               {isMarkingUsed ? (
                 <ActivityIndicator size="small" color="#F6F9F5" />
               ) : (
                 <Text style={styles.sheetSaveText}>Mark Used & Save Rotation</Text>
               )}
-            </HapticButton>
-          </View>
-        </View>
-      </Modal>
+            </TouchableOpacity>
+          </ScrollView>
+        </SwipeDownDrawer>
 
-      {/* Urgent Bill Due Bottom Sheet Alert */}
-      <UrgentBillBottomSheet
-        visible={showUrgentAlert}
-        onClose={() => setShowUrgentAlert(false)}
-        dueDate={nextBillDate || 'Tomorrow'}
-        amountDue={availableLimit > 0 ? 45000 : 0}
-        daysLeft={daysToBill}
-      />
-    </SafeAreaView>
+        {/* ================= 3. NOTIFICATION SIDE PANEL (Sliding in from Right Side) ================= */}
+        <NotificationSidePanel
+          visible={showNotificationPanel}
+          onClose={() => setShowNotificationPanel(false)}
+          urgentBill={
+            daysToBill <= 3
+              ? {
+                  cardName: getActiveCardName(),
+                  last4Digits: accessibleCards[0]?.last_4_digits || '0000',
+                  dueAmount: availableLimit > 0 ? 45000 : 0,
+                  dueDate: nextBillDate || 'Soon',
+                  daysLeft: daysToBill,
+                  onPayNow: () => {
+                    setShowNotificationPanel(false);
+                    router.push('/(tabs)/settlements');
+                  },
+                  onRotateLimit: () => {
+                    setShowNotificationPanel(false);
+                    router.push('/(tabs)/settlements');
+                  },
+                }
+              : null
+          }
+        />
+      </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  screenContainer: {
+    flex: 1,
+  },
   safeArea: {
     flex: 1,
-    backgroundColor: CedarColors.canvas,
   },
   scrollContent: {
     paddingBottom: 110,
@@ -1536,31 +2102,35 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 20,
-    paddingTop: 10,
-    paddingBottom: 12,
+    paddingTop: 12,
+    paddingBottom: 16,
   },
   userInfo: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 12,
   },
   avatarBorder: {
     width: 44,
     height: 44,
     borderRadius: 22,
     borderWidth: 2,
-    borderColor: CedarColors.forest800,
+    borderColor: '#34D399',
     overflow: 'hidden',
+    backgroundColor: '#071A12',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   avatarImg: {
     width: '100%',
     height: '100%',
   },
   avatarPlaceholder: {
-    flex: 1,
-    backgroundColor: CedarColors.forest800,
+    width: '100%',
+    height: '100%',
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: '#071A12',
   },
   avatarText: {
     color: '#F6F9F5',
@@ -1569,65 +2139,65 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   userTextCol: {
-    justifyContent: 'center',
+    gap: 2,
   },
   liveStatusRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: 6,
   },
   livePulseDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#34A853',
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: '#34D399',
   },
   liveStatusText: {
     fontSize: 10,
     fontFamily: CedarTypography.bodySemiBold,
-    color: '#2E944B',
-    fontWeight: '700',
-    textTransform: 'uppercase',
+    fontWeight: '800',
+    color: '#34D399',
+    letterSpacing: 0.5,
   },
   userNameText: {
-    fontSize: 16,
-    fontFamily: CedarTypography.bodySemiBold,
+    fontSize: 17,
+    fontFamily: CedarTypography.display,
     fontWeight: '800',
-    color: CedarColors.ink900,
+    color: '#F6F9F5',
   },
   headerActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 10,
   },
   cardDropdown: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    backgroundColor: CedarColors.card,
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    paddingHorizontal: 12,
     paddingVertical: 7,
-    paddingHorizontal: 11,
     borderRadius: 20,
+    gap: 6,
     borderWidth: 1,
-    borderColor: CedarColors.border,
-    maxWidth: 155,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+    maxWidth: 140,
   },
   cardDropdownText: {
     fontSize: 11,
     fontFamily: CedarTypography.bodySemiBold,
-    color: CedarColors.forest800,
     fontWeight: '700',
-    maxWidth: 90,
+    color: '#F6F9F5',
+    flexShrink: 1,
   },
   iconCircle: {
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: CedarColors.card,
-    borderWidth: 1,
-    borderColor: CedarColors.border,
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
     justifyContent: 'center',
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
   },
   notificationDot: {
     position: 'absolute',
@@ -1636,18 +2206,21 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#D97706',
+    backgroundColor: '#EF4444',
+    borderWidth: 1.5,
+    borderColor: '#071A12',
   },
   heroCard: {
-    marginHorizontal: 20,
+    marginHorizontal: 16,
     borderRadius: 28,
     padding: 20,
-    marginTop: 4,
-    shadowColor: '#071A12',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+    shadowColor: '#000',
     shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.25,
-    shadowRadius: 18,
-    elevation: 10,
+    shadowOpacity: 0.28,
+    shadowRadius: 20,
+    elevation: 12,
   },
   heroTopRow: {
     flexDirection: 'row',
@@ -1662,68 +2235,65 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: '#34A853',
+    backgroundColor: '#34D399',
     marginRight: 6,
   },
   heroLabel: {
-    fontSize: 12,
-    fontFamily: CedarTypography.body,
     color: '#CAD6C9',
+    fontSize: 12,
+    fontFamily: CedarTypography.bodySemiBold,
+    fontWeight: '700',
   },
   billDueBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
-    backgroundColor: 'rgba(7, 26, 18, 0.45)',
+    backgroundColor: 'rgba(252, 211, 77, 0.15)',
+    paddingHorizontal: 8,
     paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: 'rgba(252, 211, 77, 0.25)',
+    borderRadius: 12,
+    gap: 4,
   },
   billDueText: {
+    color: '#FCD34D',
     fontSize: 10,
     fontFamily: CedarTypography.bodySemiBold,
-    color: '#FCD34D',
     fontWeight: '700',
   },
   heroAmountRow: {
     flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: 10,
-    marginTop: 10,
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 12,
   },
   heroAmount: {
+    color: '#F6F9F5',
     fontSize: 32,
     fontFamily: CedarTypography.display,
-    fontWeight: '800',
-    color: '#F6F9F5',
-    letterSpacing: -0.5,
+    fontWeight: '900',
   },
   trendPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    backgroundColor: 'rgba(52, 168, 83, 0.16)',
-    paddingVertical: 3,
+    backgroundColor: 'rgba(74, 222, 128, 0.15)',
     paddingHorizontal: 8,
-    borderRadius: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    gap: 4,
   },
   trendText: {
+    color: '#4ADE80',
     fontSize: 10,
     fontFamily: CedarTypography.bodySemiBold,
-    color: '#4ADE80',
     fontWeight: '700',
   },
   heroDivider: {
     height: 1,
     backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    marginVertical: 14,
+    marginVertical: 16,
   },
   metricsGrid: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 16,
   },
   metricItem: {
     flex: 1,
@@ -1746,8 +2316,8 @@ const styles = StyleSheet.create({
     color: '#F6F9F5',
   },
   sectionContainer: {
-    marginTop: 20,
-    paddingHorizontal: 20,
+    marginTop: 22,
+    paddingHorizontal: 16,
   },
   sectionHeader: {
     flexDirection: 'row',
@@ -1793,42 +2363,48 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   emptyCardBox: {
-    backgroundColor: CedarColors.card,
-    borderRadius: 18,
-    padding: 16,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 18,
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: CedarColors.border,
+    borderWidth: 1.2,
+    borderColor: '#D8E5DA',
   },
   emptyBoxText: {
     fontSize: 12,
     fontFamily: CedarTypography.body,
     color: CedarColors.ink500,
   },
+  // 5. Active Billing Cycles Card with Luxury Shadow
   billCard: {
-    borderRadius: 20,
-    padding: 14,
-    borderWidth: 1,
-    marginBottom: 10,
+    borderRadius: 22,
+    padding: 16,
+    borderWidth: 1.2,
+    marginBottom: 12,
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#071A12',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    elevation: 6,
   },
   billCardPending: {
-    backgroundColor: CedarColors.card,
-    borderColor: CedarColors.border,
+    borderColor: '#D4E2D6',
   },
   billCardPaid: {
-    backgroundColor: 'rgba(46, 148, 75, 0.05)',
-    borderColor: 'rgba(46, 148, 75, 0.2)',
+    borderColor: '#A8D5B5',
+    backgroundColor: '#F7FCF8',
   },
   billTopRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 10,
+    marginBottom: 12,
   },
   billCardName: {
-    fontSize: 12,
+    fontSize: 13,
     fontFamily: CedarTypography.bodySemiBold,
-    fontWeight: '700',
+    fontWeight: '800',
     color: CedarColors.ink900,
   },
   paidBadge: {
@@ -1841,15 +2417,13 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontFamily: CedarTypography.bodySemiBold,
     fontWeight: '800',
-    color: '#2E944B',
+    color: '#15803D',
   },
   daysLeftBadge: {
     backgroundColor: 'rgba(217, 119, 6, 0.15)',
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(217, 119, 6, 0.25)',
   },
   daysLeftText: {
     fontSize: 10,
@@ -1859,10 +2433,11 @@ const styles = StyleSheet.create({
   },
   billGrid: {
     flexDirection: 'row',
-    backgroundColor: CedarColors.cardAlt,
-    borderRadius: 12,
-    paddingVertical: 8,
-    marginBottom: 8,
+    backgroundColor: '#F3FAF4',
+    borderRadius: 16,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    marginBottom: 12,
   },
   billCol: {
     flex: 1,
@@ -1870,13 +2445,14 @@ const styles = StyleSheet.create({
   },
   billColBorder: {
     borderLeftWidth: 1,
-    borderLeftColor: CedarColors.border,
+    borderLeftColor: '#DFEAE1',
   },
   billColLabel: {
     fontSize: 9,
-    fontFamily: CedarTypography.body,
+    fontFamily: CedarTypography.bodySemiBold,
     color: CedarColors.ink500,
-    textTransform: 'uppercase',
+    fontWeight: '700',
+    letterSpacing: 0.4,
   },
   billColValue: {
     fontSize: 13,
@@ -1888,82 +2464,105 @@ const styles = StyleSheet.create({
   billFooterRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingHorizontal: 4,
+    alignItems: 'center',
   },
   billDateText: {
-    fontSize: 10,
+    fontSize: 11,
     fontFamily: CedarTypography.body,
     color: CedarColors.ink500,
   },
+  // 5. Cash & Repayment Analytics User Cards in 2 Gentle Light Colors
   userStatsGrid: {
     flexDirection: 'row',
     gap: 12,
   },
   userStatCard: {
-    flex: 1,
-    backgroundColor: CedarColors.card,
-    borderRadius: 20,
-    padding: 14,
+    borderRadius: 22,
+    padding: 16,
     borderWidth: 1.2,
-    borderColor: CedarColors.border,
     shadowColor: '#071A12',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.05,
+    shadowOpacity: 0.08,
     shadowRadius: 10,
-    elevation: 3,
+    elevation: 4,
+  },
+  userStatCardMint: {
+    backgroundColor: '#EAF5EE', // Gentle mint pastel
+    borderColor: '#BFE3CA',
+  },
+  userStatCardWarm: {
+    backgroundColor: '#FAF4E8', // Gentle warm cream pastel
+    borderColor: '#F0DCBE',
   },
   userStatTop: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    marginBottom: 10,
+    gap: 10,
+    marginBottom: 12,
   },
   statAvatar: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    backgroundColor: CedarColors.forest800,
-    justifyContent: 'center',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    borderWidth: 1.5,
+  },
+  statAvatarMintBorder: {
+    borderColor: '#2E944B',
+    backgroundColor: '#D6EFE0',
+  },
+  statAvatarWarmBorder: {
+    borderColor: '#D97706',
+    backgroundColor: '#FCE7C8',
+  },
+  statAvatarImg: {
+    width: '100%',
+    height: '100%',
   },
   statAvatarText: {
-    fontSize: 12,
-    color: '#F6F9F5',
-    fontWeight: '700',
+    fontSize: 14,
+    fontFamily: CedarTypography.display,
+    fontWeight: '800',
+    color: CedarColors.ink900,
   },
   statUserName: {
-    fontSize: 13,
+    fontSize: 14,
     fontFamily: CedarTypography.bodySemiBold,
-    fontWeight: '700',
+    fontWeight: '800',
     color: CedarColors.ink900,
     flex: 1,
   },
   statMetrics: {
-    gap: 2,
+    gap: 4,
   },
   statLabel: {
     fontSize: 9,
-    fontFamily: CedarTypography.body,
+    fontFamily: CedarTypography.bodySemiBold,
+    fontWeight: '700',
     color: CedarColors.ink500,
-    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
   statValue: {
-    fontSize: 15,
+    fontSize: 16,
     fontFamily: CedarTypography.display,
-    fontWeight: '800',
+    fontWeight: '900',
     color: CedarColors.ink900,
-    marginBottom: 4,
   },
   statDivider: {
     height: 1,
-    backgroundColor: CedarColors.border,
+    backgroundColor: 'rgba(0, 0, 0, 0.06)',
     marginVertical: 4,
   },
+  // Smart Suggestions
   cooldownBanner: {
-    backgroundColor: CedarColors.forest900,
-    borderRadius: 20,
+    backgroundColor: 'rgba(7, 26, 18, 0.85)',
+    borderRadius: 18,
     padding: 14,
     marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#38BDF8',
   },
   cooldownTop: {
     flexDirection: 'row',
@@ -1972,54 +2571,54 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   cooldownTitle: {
+    color: '#38BDF8',
     fontSize: 12,
     fontFamily: CedarTypography.bodySemiBold,
     fontWeight: '700',
-    color: '#38BDF8',
   },
   cooldownCount: {
+    color: '#CAD6C9',
     fontSize: 10,
     fontFamily: CedarTypography.body,
-    color: '#CAD6C9',
   },
   cooldownRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.06)',
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 10,
-    marginTop: 4,
+    paddingVertical: 2,
   },
   cooldownMerchant: {
-    fontSize: 11,
-    fontFamily: CedarTypography.bodySemiBold,
     color: '#F6F9F5',
-    flex: 1,
+    fontSize: 12,
+    fontFamily: CedarTypography.body,
   },
   cooldownTimer: {
-    fontSize: 10,
+    color: '#38BDF8',
+    fontSize: 11,
     fontFamily: CedarTypography.display,
-    color: '#FCD34D',
     fontWeight: '700',
   },
   qrSuggestionsList: {
-    gap: 8,
+    gap: 10,
   },
   qrSuggestionItem: {
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: CedarColors.card,
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
     borderRadius: 18,
     padding: 12,
-    borderWidth: 1,
-    borderColor: CedarColors.border,
+    borderWidth: 1.2,
+    borderColor: '#D8E5DA',
+    shadowColor: '#071A12',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 3,
   },
   qrSuggestionBest: {
-    borderColor: CedarColors.forest800,
-    backgroundColor: 'rgba(10, 38, 28, 0.04)',
+    borderColor: '#A8D5B5',
+    backgroundColor: '#F5FCF7',
   },
   qrItemLeft: {
     flexDirection: 'row',
@@ -2031,69 +2630,81 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 10,
-    backgroundColor: CedarColors.cardAlt,
-    justifyContent: 'center',
+    backgroundColor: '#EAF3EC',
     alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  qrThumbnailImg: {
+    width: '100%',
+    height: '100%',
   },
   qrMerchantName: {
     fontSize: 13,
     fontFamily: CedarTypography.bodySemiBold,
-    fontWeight: '700',
+    fontWeight: '800',
     color: CedarColors.ink900,
   },
+  qrSubText: {
+    fontSize: 11,
+    fontFamily: CedarTypography.body,
+    color: CedarColors.ink500,
+    marginTop: 1,
+  },
   bestBadge: {
-    backgroundColor: CedarColors.forest800,
+    backgroundColor: '#071A12',
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 6,
   },
   bestBadgeText: {
-    fontSize: 9,
-    fontFamily: CedarTypography.bodySemiBold,
     color: '#F6F9F5',
+    fontSize: 9,
+    fontFamily: CedarTypography.bodyBold,
     fontWeight: '800',
   },
-  qrSubText: {
-    fontSize: 10,
-    fontFamily: CedarTypography.body,
-    color: CedarColors.ink500,
-    marginTop: 1,
-  },
+  // Recent Transactions
   seeAllText: {
-    fontSize: 12,
+    fontSize: 11,
     fontFamily: CedarTypography.bodySemiBold,
     color: CedarColors.forest800,
     fontWeight: '700',
   },
   txRow: {
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: CedarColors.card,
-    padding: 12,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: CedarColors.border,
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
     marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#DFEBE1',
+    shadowColor: '#071A12',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 2,
   },
   txLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 12,
     flex: 1,
   },
   txIconBox: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    justifyContent: 'center',
+    width: 36,
+    height: 36,
+    borderRadius: 12,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   creditIconBox: {
-    backgroundColor: 'rgba(46, 148, 75, 0.12)',
+    backgroundColor: '#E6F7EB',
   },
   debitIconBox: {
-    backgroundColor: 'rgba(10, 38, 28, 0.06)',
+    backgroundColor: '#F3F4F6',
   },
   txTexts: {
     flex: 1,
@@ -2108,18 +2719,18 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontFamily: CedarTypography.body,
     color: CedarColors.ink500,
-    marginTop: 1,
+    marginTop: 2,
   },
   txRight: {
     alignItems: 'flex-end',
   },
   txAmount: {
-    fontSize: 13,
+    fontSize: 14,
     fontFamily: CedarTypography.display,
     fontWeight: '800',
   },
   creditAmount: {
-    color: '#2E944B',
+    color: '#15803D',
   },
   debitAmount: {
     color: CedarColors.ink900,
@@ -2128,118 +2739,62 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontFamily: CedarTypography.body,
     color: CedarColors.ink500,
-    marginTop: 1,
-  },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(7, 26, 18, 0.65)',
-    justifyContent: 'center',
-    paddingHorizontal: 20,
-  },
-  cardSelectDialog: {
-    backgroundColor: CedarColors.card,
-    borderRadius: 24,
-    padding: 20,
-    borderWidth: 1.2,
-    borderColor: CedarColors.border,
-  },
-  dialogTitle: {
-    fontSize: 18,
-    fontFamily: CedarTypography.display,
-    fontWeight: '800',
-    color: CedarColors.ink900,
-  },
-  dialogSub: {
-    fontSize: 11,
-    fontFamily: CedarTypography.body,
-    color: CedarColors.ink500,
     marginTop: 2,
-    marginBottom: 16,
   },
+  // Card selector modal
   cardOptionRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    borderRadius: 14,
-    marginBottom: 6,
-    backgroundColor: CedarColors.cardAlt,
+    padding: 14,
+    borderRadius: 16,
+    backgroundColor: '#F4F7F4',
+    borderWidth: 1.2,
+    borderColor: '#DCE7DE',
   },
   cardOptionSelected: {
-    backgroundColor: 'rgba(10, 38, 28, 0.08)',
-    borderWidth: 1,
     borderColor: CedarColors.forest800,
+    backgroundColor: '#EBF4ED',
   },
   cardOptionLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 12,
     flex: 1,
   },
   cardOptionName: {
     fontSize: 13,
     fontFamily: CedarTypography.bodySemiBold,
-    fontWeight: '700',
-    color: CedarColors.ink900,
-  },
-  cardOptionDigits: {
-    fontSize: 10,
-    fontFamily: CedarTypography.body,
-    color: CedarColors.ink500,
-    marginTop: 2,
-  },
-  bottomSheetBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(7, 26, 18, 0.65)',
-    justifyContent: 'flex-end',
-  },
-  sheetDialog: {
-    backgroundColor: CedarColors.card,
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    padding: 20,
-    borderTopWidth: 1.5,
-    borderTopColor: CedarColors.border,
-  },
-  sheetHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  sheetTitle: {
-    fontSize: 18,
-    fontFamily: CedarTypography.display,
     fontWeight: '800',
     color: CedarColors.ink900,
   },
-  sheetSub: {
+  cardOptionDigits: {
     fontSize: 11,
     fontFamily: CedarTypography.body,
     color: CedarColors.ink500,
     marginTop: 2,
   },
+  // Inputs in Drawers
   inputLabel: {
     fontSize: 11,
     fontFamily: CedarTypography.bodySemiBold,
     fontWeight: '700',
     color: CedarColors.ink700,
     textTransform: 'uppercase',
-    marginBottom: 6,
-    marginTop: 10,
+    letterSpacing: 0.5,
   },
   selectorScroll: {
-    marginBottom: 8,
+    flexDirection: 'row',
+    marginVertical: 4,
   },
   selectorChip: {
-    paddingHorizontal: 12,
+    paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 12,
-    backgroundColor: CedarColors.cardAlt,
-    borderWidth: 1,
-    borderColor: CedarColors.border,
+    backgroundColor: '#EFF5F0',
     marginRight: 8,
+    borderWidth: 1,
+    borderColor: '#D8E5DA',
   },
   activeSelectorChip: {
     backgroundColor: CedarColors.forest800,
@@ -2252,140 +2807,45 @@ const styles = StyleSheet.create({
   },
   activeSelectorChipText: {
     color: '#F6F9F5',
-    fontWeight: '700',
   },
   sheetInput: {
-    height: 46,
-    backgroundColor: CedarColors.cardAlt,
-    borderRadius: 12,
+    backgroundColor: '#F3FAF4',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
     borderWidth: 1,
-    borderColor: CedarColors.border,
-    paddingHorizontal: 12,
-    fontSize: 13,
+    borderColor: '#DCE8DE',
+    fontSize: 14,
     fontFamily: CedarTypography.body,
     color: CedarColors.ink900,
-    marginBottom: 6,
   },
   sheetSaveBtn: {
     backgroundColor: CedarColors.forest800,
-    height: 48,
     borderRadius: 16,
-    justifyContent: 'center',
+    paddingVertical: 14,
     alignItems: 'center',
-    marginTop: 14,
+    justifyContent: 'center',
+    marginTop: 8,
   },
   sheetSaveText: {
     color: '#F6F9F5',
-    fontSize: 14,
-    fontFamily: CedarTypography.bodySemiBold,
-    fontWeight: '700',
-  },
-  modalTabRow: {
-    flexDirection: 'row',
-    backgroundColor: CedarColors.cardAlt,
-    borderRadius: 12,
-    padding: 3,
-    marginBottom: 10,
-  },
-  modalTabBtn: {
-    flex: 1,
-    paddingVertical: 8,
-    alignItems: 'center',
-    borderRadius: 10,
-  },
-  activeModalTabBtn: {
-    backgroundColor: CedarColors.forest800,
-  },
-  modalTabText: {
-    fontSize: 11,
-    fontFamily: CedarTypography.bodySemiBold,
-    color: CedarColors.ink700,
-  },
-  activeModalTabText: {
-    color: '#F6F9F5',
-    fontWeight: '700',
-  },
-  summaryBox: {
-    backgroundColor: CedarColors.cardAlt,
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: CedarColors.border,
-  },
-  summaryBoxLabel: {
-    fontSize: 10,
-    fontFamily: CedarTypography.bodySemiBold,
-    color: CedarColors.ink500,
-    textTransform: 'uppercase',
-  },
-  summaryBoxAmount: {
-    fontSize: 24,
-    fontFamily: CedarTypography.display,
-    fontWeight: '800',
-    color: '#2E944B',
-    marginTop: 4,
-  },
-  summaryBoxSub: {
-    fontSize: 10,
-    fontFamily: CedarTypography.body,
-    color: CedarColors.ink500,
-    marginTop: 4,
-  },
-  cardBreakdownRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: CedarColors.border,
-  },
-  breakdownCardName: {
-    fontSize: 12,
-    fontFamily: CedarTypography.bodySemiBold,
-    color: CedarColors.ink900,
-  },
-  breakdownCardAmount: {
     fontSize: 13,
-    fontFamily: CedarTypography.display,
-    fontWeight: '700',
-    color: '#2E944B',
-  },
-  ledgerItemRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: CedarColors.border,
-  },
-  ledgerRemarks: {
-    fontSize: 12,
     fontFamily: CedarTypography.bodySemiBold,
-    color: CedarColors.ink900,
-  },
-  ledgerDateText: {
-    fontSize: 10,
-    fontFamily: CedarTypography.body,
-    color: CedarColors.ink500,
-    marginTop: 2,
-  },
-  ledgerAmtText: {
-    fontSize: 13,
-    fontFamily: CedarTypography.display,
     fontWeight: '800',
   },
   strategyRow: {
     flexDirection: 'row',
-    gap: 8,
-    marginVertical: 10,
+    gap: 10,
+    marginVertical: 6,
   },
   strategyBtn: {
     flex: 1,
     paddingVertical: 10,
     borderRadius: 12,
-    backgroundColor: CedarColors.cardAlt,
+    backgroundColor: '#EFF5F0',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: CedarColors.border,
+    borderColor: '#DCE8DE',
   },
   activeStrategyBtn: {
     backgroundColor: CedarColors.forest800,
@@ -2398,39 +2858,540 @@ const styles = StyleSheet.create({
   },
   activeStrategyText: {
     color: '#F6F9F5',
-    fontWeight: '700',
   },
   generateLinkBtn: {
-    backgroundColor: 'rgba(46, 148, 75, 0.12)',
+    backgroundColor: '#EFF5F0',
     borderWidth: 1,
-    borderColor: 'rgba(46, 148, 75, 0.3)',
+    borderColor: '#DCE8DE',
     borderRadius: 14,
-    height: 44,
-    justifyContent: 'center',
+    paddingVertical: 12,
     alignItems: 'center',
-    marginBottom: 10,
+    marginVertical: 4,
   },
   generateLinkText: {
     fontSize: 12,
     fontFamily: CedarTypography.bodySemiBold,
+    color: CedarColors.forest800,
     fontWeight: '700',
-    color: '#2E944B',
   },
   payLinkRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: CedarColors.cardAlt,
+    backgroundColor: '#EAF5EE',
     padding: 12,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: CedarColors.border,
-    marginBottom: 8,
+    borderColor: '#C6E2D0',
   },
   payLinkText: {
     fontSize: 13,
+    fontFamily: CedarTypography.bodyBold,
+    color: '#15803D',
+    fontWeight: '800',
+  },
+  // 7. Gold & Deep Green User Ledger Modal Styles
+  goldModalTabRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    gap: 6,
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  goldTabBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: 12,
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+  },
+  activeGoldTabBtn: {
+    backgroundColor: 'rgba(245, 158, 11, 0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.45)',
+  },
+  goldTabText: {
+    fontSize: 10,
+    fontFamily: CedarTypography.bodySemiBold,
+    fontWeight: '700',
+    color: '#CAD6C9',
+  },
+  activeGoldTabText: {
+    color: '#FEF08A',
+    fontWeight: '900',
+  },
+  presetFilterRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    gap: 8,
+  },
+  presetChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  activePresetChip: {
+    backgroundColor: 'rgba(245, 158, 11, 0.2)',
+    borderColor: '#F59E0B',
+  },
+  presetChipText: {
+    fontSize: 10,
+    fontFamily: CedarTypography.body,
+    color: '#CAD6C9',
+  },
+  activePresetChipText: {
+    color: '#FEF08A',
+    fontWeight: '700',
+  },
+  drawerScrollBody: {
+    padding: 16,
+    paddingBottom: 36,
+  },
+  summaryGoldCard: {
+    backgroundColor: 'rgba(16, 185, 129, 0.08)',
+    borderRadius: 22,
+    padding: 18,
+    borderWidth: 1.5,
+    borderColor: 'rgba(16, 185, 129, 0.3)',
+  },
+  summaryCardTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  goldLabel: {
+    fontSize: 10,
+    fontFamily: CedarTypography.bodySemiBold,
+    fontWeight: '800',
+    color: '#34D399',
+    letterSpacing: 0.8,
+  },
+  goldAmountEmerald: {
+    fontSize: 30,
+    fontFamily: CedarTypography.display,
+    fontWeight: '900',
+    color: '#34D399',
+    marginTop: 6,
+  },
+  goldSubText: {
+    fontSize: 11,
+    fontFamily: CedarTypography.body,
+    color: '#CAD6C9',
+    marginTop: 2,
+  },
+  transferLaunchBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#FEF08A',
+    paddingVertical: 10,
+    borderRadius: 14,
+    marginTop: 14,
+  },
+  transferLaunchBtnText: {
+    color: '#071A12',
+    fontSize: 12,
+    fontFamily: CedarTypography.bodyBold,
+    fontWeight: '900',
+  },
+  breakdownContainer: {
+    marginTop: 14,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  breakdownTitle: {
+    fontSize: 10,
+    fontFamily: CedarTypography.bodySemiBold,
+    color: '#CAD6C9',
+    marginBottom: 8,
+  },
+  breakdownChipsWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  breakdownChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+  },
+  breakdownChipCard: {
+    fontSize: 10,
+    fontFamily: CedarTypography.body,
+    color: '#CAD6C9',
+  },
+  breakdownChipAmt: {
+    fontSize: 10,
     fontFamily: CedarTypography.display,
     fontWeight: '800',
-    color: '#2E944B',
+    color: '#34D399',
+  },
+  summaryDueCard: {
+    backgroundColor: 'rgba(244, 63, 94, 0.08)',
+    borderRadius: 22,
+    padding: 18,
+    borderWidth: 1.5,
+    borderColor: 'rgba(244, 63, 94, 0.3)',
+  },
+  dueCardLabel: {
+    fontSize: 10,
+    fontFamily: CedarTypography.bodySemiBold,
+    fontWeight: '800',
+    color: '#FB7185',
+    letterSpacing: 0.8,
+  },
+  goldAmountRose: {
+    fontSize: 30,
+    fontFamily: CedarTypography.display,
+    fontWeight: '900',
+    color: '#FB7185',
+    marginTop: 6,
+  },
+  dueCardSubText: {
+    fontSize: 11,
+    fontFamily: CedarTypography.body,
+    color: '#CAD6C9',
+    marginTop: 2,
+  },
+  summaryPocketCard: {
+    backgroundColor: 'rgba(245, 158, 11, 0.08)',
+    borderRadius: 22,
+    padding: 18,
+    borderWidth: 1.5,
+    borderColor: 'rgba(245, 158, 11, 0.3)',
+  },
+  pocketCardLabel: {
+    fontSize: 10,
+    fontFamily: CedarTypography.bodySemiBold,
+    fontWeight: '800',
+    color: '#FBBF24',
+    letterSpacing: 0.8,
+  },
+  goldAmountAmber: {
+    fontSize: 30,
+    fontFamily: CedarTypography.display,
+    fontWeight: '900',
+    color: '#FBBF24',
+    marginTop: 6,
+  },
+  pocketCardSubText: {
+    fontSize: 11,
+    fontFamily: CedarTypography.body,
+    color: '#CAD6C9',
+    marginTop: 2,
+  },
+  // Ledger tab stats & rows
+  metricStatsRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  metricStatBoxIn: {
+    flex: 1,
+    backgroundColor: 'rgba(16, 185, 129, 0.12)',
+    borderRadius: 14,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.25)',
+  },
+  metricStatTitleIn: {
+    fontSize: 9,
+    fontFamily: CedarTypography.bodySemiBold,
+    fontWeight: '800',
+    color: '#34D399',
+  },
+  metricStatValIn: {
+    fontSize: 14,
+    fontFamily: CedarTypography.display,
+    fontWeight: '900',
+    color: '#34D399',
+    marginTop: 2,
+  },
+  metricStatBoxOut: {
+    flex: 1,
+    backgroundColor: 'rgba(244, 63, 94, 0.12)',
+    borderRadius: 14,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(244, 63, 94, 0.25)',
+  },
+  metricStatTitleOut: {
+    fontSize: 9,
+    fontFamily: CedarTypography.bodySemiBold,
+    fontWeight: '800',
+    color: '#FB7185',
+  },
+  metricStatValOut: {
+    fontSize: 14,
+    fontFamily: CedarTypography.display,
+    fontWeight: '900',
+    color: '#FB7185',
+    marginTop: 2,
+  },
+  metricStatBoxNet: {
+    flex: 1,
+    backgroundColor: 'rgba(245, 158, 11, 0.12)',
+    borderRadius: 14,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.25)',
+  },
+  metricStatTitleNet: {
+    fontSize: 9,
+    fontFamily: CedarTypography.bodySemiBold,
+    fontWeight: '800',
+    color: '#FBBF24',
+  },
+  metricStatValNet: {
+    fontSize: 14,
+    fontFamily: CedarTypography.display,
+    fontWeight: '900',
+    color: '#FBBF24',
+    marginTop: 2,
+  },
+  emptyGoldBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 36,
+    gap: 8,
+  },
+  emptyGoldText: {
+    fontSize: 12,
+    fontFamily: CedarTypography.body,
+    color: '#CAD6C9',
+  },
+  goldLedgerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    borderRadius: 16,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  goldRowLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  goldIconPill: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  goldIconPillCredit: {
+    backgroundColor: 'rgba(16, 185, 129, 0.18)',
+  },
+  goldIconPillDebit: {
+    backgroundColor: 'rgba(244, 63, 94, 0.18)',
+  },
+  goldIconPillAmber: {
+    backgroundColor: 'rgba(245, 158, 11, 0.18)',
+  },
+  goldRowTitle: {
+    fontSize: 12,
+    fontFamily: CedarTypography.bodySemiBold,
+    fontWeight: '800',
+    color: '#F6F9F5',
+  },
+  goldRowSub: {
+    fontSize: 10,
+    fontFamily: CedarTypography.body,
+    color: '#CAD6C9',
+    marginTop: 2,
+  },
+  goldRowAmt: {
+    fontSize: 14,
+    fontFamily: CedarTypography.display,
+    fontWeight: '900',
+  },
+  pocketLedgerSummaryBanner: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: 'rgba(245, 158, 11, 0.12)',
+    borderRadius: 18,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.3)',
+  },
+  pocketBannerIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: 'rgba(245, 158, 11, 0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pocketBannerTitle: {
+    fontSize: 12,
+    fontFamily: CedarTypography.bodySemiBold,
+    fontWeight: '800',
+    color: '#FEF08A',
+  },
+  pocketBannerSub: {
+    fontSize: 10,
+    fontFamily: CedarTypography.body,
+    color: '#CAD6C9',
+  },
+  pocketBannerAmt: {
+    fontSize: 18,
+    fontFamily: CedarTypography.display,
+    fontWeight: '900',
+    color: '#FEF08A',
+  },
+  // Transfer Cash drawer styles
+  goldInputLabel: {
+    fontSize: 11,
+    fontFamily: CedarTypography.bodySemiBold,
+    fontWeight: '800',
+    color: '#CAD6C9',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  noCardWarnBox: {
+    backgroundColor: 'rgba(244, 63, 94, 0.15)',
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(244, 63, 94, 0.3)',
+  },
+  noCardWarnText: {
+    color: '#FB7185',
+    fontSize: 11,
+    fontFamily: CedarTypography.bodySemiBold,
+  },
+  chipSelectorWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  senderCardChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+  },
+  activeSenderCardChip: {
+    backgroundColor: 'rgba(16, 185, 129, 0.2)',
+    borderColor: '#34D399',
+  },
+  senderCardChipText: {
+    fontSize: 11,
+    fontFamily: CedarTypography.bodySemiBold,
+    color: '#CAD6C9',
+  },
+  activeSenderCardChipText: {
+    color: '#F6F9F5',
+    fontWeight: '800',
+  },
+  senderCardBalText: {
+    fontSize: 10,
+    fontFamily: CedarTypography.display,
+    color: '#34D399',
+    marginTop: 2,
+  },
+  activeSenderCardBalText: {
+    color: '#34D399',
+    fontWeight: '800',
+  },
+  targetUserBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+  },
+  activeTargetUserBtn: {
+    backgroundColor: 'rgba(245, 158, 11, 0.2)',
+    borderColor: '#F59E0B',
+  },
+  targetUserBtnText: {
+    fontSize: 12,
+    fontFamily: CedarTypography.bodySemiBold,
+    color: '#CAD6C9',
+  },
+  activeTargetUserBtnText: {
+    color: '#FEF08A',
+    fontWeight: '800',
+  },
+  receiverCardChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+  },
+  activeReceiverCardChip: {
+    backgroundColor: 'rgba(245, 158, 11, 0.2)',
+    borderColor: '#F59E0B',
+  },
+  receiverCardChipText: {
+    fontSize: 11,
+    fontFamily: CedarTypography.bodySemiBold,
+    color: '#CAD6C9',
+  },
+  activeReceiverCardChipText: {
+    color: '#FEF08A',
+    fontWeight: '800',
+  },
+  goldAmountInput: {
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.15)',
+    fontSize: 22,
+    fontFamily: CedarTypography.display,
+    fontWeight: '900',
+    color: '#FEF08A',
+  },
+  goldTextInput: {
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+    fontSize: 13,
+    fontFamily: CedarTypography.body,
+    color: '#F6F9F5',
+  },
+  confirmTransferBtn: {
+    backgroundColor: '#FEF08A',
+    borderRadius: 16,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 6,
+  },
+  confirmTransferBtnText: {
+    color: '#071A12',
+    fontSize: 14,
+    fontFamily: CedarTypography.bodyBold,
+    fontWeight: '900',
   },
 });

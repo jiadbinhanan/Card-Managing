@@ -346,7 +346,6 @@ export default function SettlementsScreen() {
 
   // Open Settle Modal
   const openSettleModal = (tx: Transaction) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
     setSettleTx(tx);
     setCashReceiverId(currentUser?.id || (profiles.length > 0 ? profiles[0].id : ''));
     const defaultCard =
@@ -368,7 +367,6 @@ export default function SettlementsScreen() {
     }
 
     setIsSettling(true);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
 
     const today = new Date().toISOString().slice(0, 10);
     const currentDue =
@@ -461,7 +459,6 @@ export default function SettlementsScreen() {
     }
 
     setIsSavingWithdrawal(true);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
 
     try {
       const today = new Date().toISOString().slice(0, 10);
@@ -508,7 +505,6 @@ export default function SettlementsScreen() {
 
   // Open QR Payment Modal
   const openQrPaymentModal = (qr: QRData) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
     setSelectedQrForPayment(qr);
     setPaymentMode('once');
     setSplitCount(2);
@@ -542,7 +538,6 @@ export default function SettlementsScreen() {
     }
 
     setIsMarkingRotation(true);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
 
     try {
       const numAmt = Number(qrPayAmount);
@@ -621,7 +616,6 @@ export default function SettlementsScreen() {
           <HapticButton
             style={styles.withdrawBtn}
             onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
               setIsNewWithdrawalOpen(true);
             }}
             feedbackType="rigid"
@@ -674,7 +668,6 @@ export default function SettlementsScreen() {
               key={tab}
               style={[styles.tabChip, isActive && styles.activeTabChip]}
               onPress={() => {
-                Haptics.selectionAsync();
                 setActiveTab(tab);
               }}
               activeOpacity={0.8}
@@ -919,7 +912,6 @@ export default function SettlementsScreen() {
                     settlementType === 'full' && styles.settleTypeBtnActive,
                   ]}
                   onPress={() => {
-                    Haptics.selectionAsync();
                     setSettlementType('full');
                   }}
                 >
@@ -945,7 +937,6 @@ export default function SettlementsScreen() {
                     settlementType === 'partial' && styles.settleTypeBtnActive,
                   ]}
                   onPress={() => {
-                    Haptics.selectionAsync();
                     setSettlementType('partial');
                   }}
                 >
@@ -985,7 +976,6 @@ export default function SettlementsScreen() {
                         key={p.id}
                         style={[styles.userPill, isSelected && styles.userPillActive]}
                         onPress={() => {
-                          Haptics.selectionAsync();
                           setCashReceiverId(p.id);
                         }}
                       >
@@ -1009,7 +999,6 @@ export default function SettlementsScreen() {
                         key={c.id}
                         style={[styles.cardPill, isSelected && styles.cardPillActive]}
                         onPress={() => {
-                          Haptics.selectionAsync();
                           setSettleTargetCardId(c.id);
                         }}
                       >
@@ -1093,7 +1082,6 @@ export default function SettlementsScreen() {
                         key={c.id}
                         style={[styles.cardPill, isSelected && styles.cardPillActive]}
                         onPress={() => {
-                          Haptics.selectionAsync();
                           setManualCardId(c.id);
                         }}
                       >
@@ -1116,7 +1104,6 @@ export default function SettlementsScreen() {
                         key={q.id}
                         style={[styles.userPill, isSelected && styles.userPillActive]}
                         onPress={() => {
-                          Haptics.selectionAsync();
                           setManualQrId(q.id);
                         }}
                       >
@@ -1183,7 +1170,6 @@ export default function SettlementsScreen() {
                   <TouchableOpacity
                     style={[styles.settleTypeBtn, paymentMode === 'once' && styles.settleTypeBtnActive]}
                     onPress={() => {
-                      Haptics.selectionAsync();
                       setPaymentMode('once');
                       setGeneratedAmounts([Number(qrPayAmount) || 0]);
                     }}
@@ -1204,7 +1190,6 @@ export default function SettlementsScreen() {
                       paymentMode === 'multiple' && styles.settleTypeBtnActive,
                     ]}
                     onPress={() => {
-                      Haptics.selectionAsync();
                       setPaymentMode('multiple');
                       setGeneratedAmounts(generateSplits(Number(qrPayAmount) || 0, splitCount));
                     }}
@@ -1245,7 +1230,6 @@ export default function SettlementsScreen() {
                             { flex: 1, alignItems: 'center' },
                           ]}
                           onPress={() => {
-                            Haptics.selectionAsync();
                             handleSplitCountChange(cnt);
                           }}
                         >
@@ -1286,7 +1270,6 @@ export default function SettlementsScreen() {
                           key={c.id}
                           style={[styles.cardPill, isSelected && styles.cardPillActive]}
                           onPress={() => {
-                            Haptics.selectionAsync();
                             setSelectedPaymentCardId(c.id);
                           }}
                         >
@@ -1340,7 +1323,6 @@ export default function SettlementsScreen() {
             <TouchableOpacity
               style={[styles.menuOption, selectedVaultCardId === 'all' && styles.menuOptionActive]}
               onPress={() => {
-                Haptics.selectionAsync();
                 setSelectedVaultCardId('all');
                 setIsCardDropdownOpen(false);
               }}
@@ -1363,7 +1345,6 @@ export default function SettlementsScreen() {
                   key={card.id}
                   style={[styles.menuOption, isSelected && styles.menuOptionActive]}
                   onPress={() => {
-                    Haptics.selectionAsync();
                     setSelectedVaultCardId(card.id);
                     setIsCardDropdownOpen(false);
                   }}

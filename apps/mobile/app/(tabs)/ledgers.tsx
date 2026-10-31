@@ -187,7 +187,6 @@ export default function LedgersScreen() {
         <HapticButton
           style={styles.addBtn}
           onPress={() => {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
             setIsTransferModalOpen(true);
           }}
           feedbackType="rigid"
@@ -240,7 +239,6 @@ export default function LedgersScreen() {
               key={tab}
               style={[styles.tabChip, isActive && styles.activeTabChip]}
               onPress={() => {
-                Haptics.selectionAsync();
                 setActiveTab(tab);
               }}
               activeOpacity={0.8}

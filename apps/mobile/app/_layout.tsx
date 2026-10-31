@@ -12,8 +12,11 @@ export default function RootLayout() {
   const router = useRouter();
 
   useEffect(() => {
-    // 1. Initial Session Check
+    let isMounted = true;
+
+    // 1. Initial Session Check from AsyncStorage
     supabase.auth.getSession().then(({ data }: any) => {
+      if (!isMounted) return;
       setSessionChecked(true);
       if (!data?.session) {
         router.replace('/login');
@@ -24,19 +27,21 @@ export default function RootLayout() {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event: any, session: any) => {
-      const inAuthGroup = segments[0] === 'login';
+      if (!isMounted) return;
+      const inLoginScreen = segments[0] === 'login';
 
-      if (!session && !inAuthGroup) {
+      if (!session && !inLoginScreen) {
         router.replace('/login');
-      } else if (session && inAuthGroup) {
+      } else if (session && inLoginScreen) {
         router.replace('/(tabs)');
       }
     });
 
     return () => {
+      isMounted = false;
       subscription.unsubscribe();
     };
-  }, [segments]);
+  }, []);
 
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: CedarColors.canvas }}>

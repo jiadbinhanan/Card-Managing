@@ -501,7 +501,6 @@ export default function TransactionsScreen() {
 
   // Open Record Modal
   const openRecordModal = (type: 'rotate' | 'spend' | 'bill') => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
     setRecordType(type);
     setAmount('');
     setRemarks('');
@@ -591,7 +590,6 @@ export default function TransactionsScreen() {
     }
 
     setIsSubmitting(true);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
 
     try {
       const finalDate = txDate || new Date().toISOString().slice(0, 10);
@@ -791,7 +789,6 @@ export default function TransactionsScreen() {
               key={tab}
               style={[styles.tabChip, isActive && styles.activeTabChip]}
               onPress={() => {
-                Haptics.selectionAsync();
                 setActiveTab(tab);
               }}
               activeOpacity={0.8}
@@ -835,7 +832,6 @@ export default function TransactionsScreen() {
               key={dType}
               style={[styles.filterChip, isDateActive && styles.activeFilterChip]}
               onPress={() => {
-                Haptics.selectionAsync();
                 setFilterDateType(dType);
               }}
               activeOpacity={0.8}
@@ -894,7 +890,6 @@ export default function TransactionsScreen() {
                       key={item.id}
                       style={[styles.txCard, isExpanded && styles.txCardExpanded]}
                       onPress={() => {
-                        Haptics.selectionAsync();
                         setExpandedId(isExpanded ? null : item.id);
                       }}
                       activeOpacity={0.85}
@@ -1008,7 +1003,6 @@ export default function TransactionsScreen() {
             <TouchableOpacity
               style={[styles.menuOption, selectedVaultCardId === 'all' && styles.menuOptionActive]}
               onPress={() => {
-                Haptics.selectionAsync();
                 setSelectedVaultCardId('all');
                 setIsCardDropdownOpen(false);
               }}
@@ -1031,7 +1025,6 @@ export default function TransactionsScreen() {
                   key={card.id}
                   style={[styles.menuOption, isSelected && styles.menuOptionActive]}
                   onPress={() => {
-                    Haptics.selectionAsync();
                     setSelectedVaultCardId(card.id);
                     setIsCardDropdownOpen(false);
                   }}
@@ -1068,7 +1061,6 @@ export default function TransactionsScreen() {
             <TouchableOpacity
               style={[styles.menuOption, filterUser === 'all' && styles.menuOptionActive]}
               onPress={() => {
-                Haptics.selectionAsync();
                 setFilterUser('all');
                 setIsUserFilterModalOpen(false);
               }}
@@ -1086,7 +1078,6 @@ export default function TransactionsScreen() {
                   key={prof.id}
                   style={[styles.menuOption, isSelected && styles.menuOptionActive]}
                   onPress={() => {
-                    Haptics.selectionAsync();
                     setFilterUser(prof.id);
                     setIsUserFilterModalOpen(false);
                   }}
@@ -1131,7 +1122,6 @@ export default function TransactionsScreen() {
                       key={t}
                       style={[styles.entryTypeBtn, isSelected && styles.entryTypeBtnActive]}
                       onPress={() => {
-                        Haptics.selectionAsync();
                         setRecordType(t);
                       }}
                     >
@@ -1172,7 +1162,6 @@ export default function TransactionsScreen() {
                         key={p.id}
                         style={[styles.userPill, isSelected && styles.userPillActive]}
                         onPress={() => {
-                          Haptics.selectionAsync();
                           setSelectedActorUserId(p.id);
                         }}
                       >
@@ -1210,7 +1199,6 @@ export default function TransactionsScreen() {
                             key={c.id}
                             style={[styles.cardPill, isSelected && styles.cardPillActive]}
                             onPress={() => {
-                              Haptics.selectionAsync();
                               setEntryCardId(c.id);
                             }}
                           >
@@ -1233,7 +1221,6 @@ export default function TransactionsScreen() {
                             key={q.id}
                             style={[styles.qrPill, isSelected && styles.qrPillActive]}
                             onPress={() => {
-                              Haptics.selectionAsync();
                               setSelectedQrId(q.id);
                             }}
                           >
@@ -1261,7 +1248,6 @@ export default function TransactionsScreen() {
                             key={c.id}
                             style={[styles.cardPill, isSelected && styles.cardPillActive]}
                             onPress={() => {
-                              Haptics.selectionAsync();
                               setEntryCardId(c.id);
                             }}
                           >
@@ -1283,7 +1269,6 @@ export default function TransactionsScreen() {
                           spendMethod === 'credit_card' && styles.toggleBtnActive,
                         ]}
                         onPress={() => {
-                          Haptics.selectionAsync();
                           setSpendMethod('credit_card');
                         }}
                       >
@@ -1304,7 +1289,6 @@ export default function TransactionsScreen() {
                           spendMethod === 'cash_on_hand' && styles.toggleBtnActive,
                         ]}
                         onPress={() => {
-                          Haptics.selectionAsync();
                           setSpendMethod('cash_on_hand');
                         }}
                       >
@@ -1339,7 +1323,6 @@ export default function TransactionsScreen() {
                               key={c.id}
                               style={[styles.cardPill, isSelected && styles.cardPillActive]}
                               onPress={() => {
-                                Haptics.selectionAsync();
                                 setBillCardId(c.id);
                               }}
                             >
@@ -1361,7 +1344,6 @@ export default function TransactionsScreen() {
                       <TouchableOpacity
                         style={[styles.toggleBtn, billMethod === 'cash_on_hand' && styles.toggleBtnActive]}
                         onPress={() => {
-                          Haptics.selectionAsync();
                           setBillMethod('cash_on_hand');
                         }}
                       >
@@ -1379,7 +1361,6 @@ export default function TransactionsScreen() {
                       <TouchableOpacity
                         style={[styles.toggleBtn, billMethod === 'own_pocket' && styles.toggleBtnActive]}
                         onPress={() => {
-                          Haptics.selectionAsync();
                           setBillMethod('own_pocket');
                         }}
                       >
@@ -1407,7 +1388,6 @@ export default function TransactionsScreen() {
                     <Switch
                       value={isDebtRepayment}
                       onValueChange={(val) => {
-                        Haptics.selectionAsync();
                         setIsDebtRepayment(val);
                       }}
                       trackColor={{ false: '#DCE4DA', true: '#2D7A5D' }}
@@ -1431,7 +1411,6 @@ export default function TransactionsScreen() {
                     <TouchableOpacity
                       style={styles.addSourceBtn}
                       onPress={() => {
-                        Haptics.selectionAsync();
                         addCashSourceRow();
                       }}
                     >
@@ -1452,7 +1431,6 @@ export default function TransactionsScreen() {
                           {cashSources.length > 1 && (
                             <TouchableOpacity
                               onPress={() => {
-                                Haptics.selectionAsync();
                                 removeCashSourceRow(idx);
                               }}
                             >
@@ -1472,7 +1450,6 @@ export default function TransactionsScreen() {
                                   key={c.id}
                                   style={[styles.sourceCardPill, isPicked && styles.sourceCardPillActive]}
                                   onPress={() => {
-                                    Haptics.selectionAsync();
                                     updateCashSourceRow(idx, { cardId: c.id });
                                   }}
                                 >

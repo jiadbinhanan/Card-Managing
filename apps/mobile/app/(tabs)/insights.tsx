@@ -185,7 +185,6 @@ export default function InsightsScreen() {
             style={styles.calendarBtn}
             feedbackType="rigid"
             onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
             }}
           >
             <Calendar size={18} color={CedarColors.ink900} />
@@ -201,7 +200,6 @@ export default function InsightsScreen() {
                 key={seg}
                 style={[styles.segmentBtn, isActive && styles.activeSegmentBtn]}
                 onPress={() => {
-                  Haptics.selectionAsync();
                   setActiveSegment(seg);
                 }}
                 activeOpacity={0.8}
@@ -220,7 +218,7 @@ export default function InsightsScreen() {
             <Text style={styles.chartTitle}>Vault & Card Spending</Text>
             <TouchableOpacity
               style={styles.chartMonthBtn}
-              onPress={() => Haptics.selectionAsync()}
+              onPress={() => {}}
             >
               <Text style={styles.chartMonthText}>{selectedMonth}</Text>
             </TouchableOpacity>
@@ -233,7 +231,7 @@ export default function InsightsScreen() {
         <TouchableOpacity
           style={styles.healthBanner}
           activeOpacity={0.85}
-          onPress={() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid)}
+          onPress={() => {}}
         >
           <View style={styles.healthIconCircle}>
             <CheckCircle2 size={18} color="#2E944B" strokeWidth={2.4} />

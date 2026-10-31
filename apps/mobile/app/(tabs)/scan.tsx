@@ -29,7 +29,6 @@ export default function ScanScreen() {
         <HapticButton
           style={[styles.iconCircle, torchOn ? { backgroundColor: CedarColors.forest800 } : undefined]}
           onPress={() => {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
             setTorchOn(!torchOn);
           }}
           feedbackType="medium"
@@ -58,7 +57,7 @@ export default function ScanScreen() {
       <View style={styles.bottomActions}>
         <TouchableOpacity
           style={styles.actionPill}
-          onPress={() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)}
+          onPress={() => {}}
         >
           <ImageIcon size={18} color={CedarColors.ink900} />
           <Text style={styles.actionText}>Upload QR</Text>
@@ -66,7 +65,7 @@ export default function ScanScreen() {
 
         <TouchableOpacity
           style={[styles.actionPill, styles.myQrPill]}
-          onPress={() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)}
+          onPress={() => {}}
         >
           <QrCode size={18} color="#FFFFFF" />
           <Text style={styles.myQrText}>My Receive QR</Text>

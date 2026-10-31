@@ -31,7 +31,7 @@ export function QuickActions({
         <HapticButton
           style={[styles.circleBtn, styles.mintBtn]}
           onPress={onAddLend}
-          feedbackType="rigid"
+          feedbackType="none"
         >
           <Plus size={20} color="#F6F9F5" strokeWidth={2.5} />
         </HapticButton>
@@ -43,7 +43,7 @@ export function QuickActions({
         <HapticButton
           style={[styles.circleBtn, styles.frostedBtn]}
           onPress={handleSend}
-          feedbackType="rigid"
+          feedbackType="none"
         >
           <ArrowUpRight size={20} color="#F6F9F5" strokeWidth={2.2} />
         </HapticButton>
@@ -55,7 +55,7 @@ export function QuickActions({
         <HapticButton
           style={[styles.circleBtn, styles.frostedBtn]}
           onPress={handleReceive}
-          feedbackType="rigid"
+          feedbackType="none"
         >
           <ArrowDownLeft size={20} color="#F6F9F5" strokeWidth={2.2} />
         </HapticButton>
@@ -67,7 +67,7 @@ export function QuickActions({
         <HapticButton
           style={[styles.circleBtn, styles.frostedBtn]}
           onPress={onScanQR}
-          feedbackType="rigid"
+          feedbackType="none"
         >
           <QrCode size={20} color="#F6F9F5" strokeWidth={2.2} />
         </HapticButton>

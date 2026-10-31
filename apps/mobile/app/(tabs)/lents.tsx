@@ -279,7 +279,6 @@ export default function LentsScreen() {
 
   // Load Deep Borrower Ledger
   const openBorrowerPanel = async (borrower: BorrowerSummary) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
     setSelectedBorrower(borrower);
     setIsBorrowerPanelOpen(true);
     setIsLedgerLoading(true);
@@ -335,7 +334,6 @@ export default function LentsScreen() {
     }
 
     setIsSavingGive(true);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
 
     try {
       const numAmt = Number(giveAmount);
@@ -404,7 +402,6 @@ export default function LentsScreen() {
     }
 
     setIsSavingCollect(true);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
 
     try {
       const numAmt = Number(collectAmount);
@@ -465,7 +462,6 @@ export default function LentsScreen() {
     }
 
     setIsSavingBorrower(true);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
 
     try {
       await supabase.from('borrowers').insert({
@@ -532,7 +528,6 @@ export default function LentsScreen() {
           <HapticButton
             style={styles.addBorrowerBtn}
             onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
               setIsAddBorrowerOpen(true);
             }}
             feedbackType="rigid"
@@ -591,7 +586,6 @@ export default function LentsScreen() {
               key={tab}
               style={[styles.tabChip, isActive && styles.activeTabChip]}
               onPress={() => {
-                Haptics.selectionAsync();
                 setActiveTab(tab);
               }}
               activeOpacity={0.8}
@@ -717,7 +711,6 @@ export default function LentsScreen() {
                   <HapticButton
                     style={styles.panelGiveBtn}
                     onPress={() => {
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
                       setGiveDate(new Date().toISOString().slice(0, 10));
                       setGiveAmount('');
                       setGiveRemarks('');
@@ -732,7 +725,6 @@ export default function LentsScreen() {
                   <HapticButton
                     style={styles.panelCollectBtn}
                     onPress={() => {
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
                       setCollectDate(new Date().toISOString().slice(0, 10));
                       setCollectAmount('');
                       setCollectRemarks('');
@@ -848,7 +840,6 @@ export default function LentsScreen() {
                       giveSource === 'cash_on_hand' && styles.sourceToggleBtnActive,
                     ]}
                     onPress={() => {
-                      Haptics.selectionAsync();
                       setGiveSource('cash_on_hand');
                     }}
                   >
@@ -869,7 +860,6 @@ export default function LentsScreen() {
                       giveSource === 'credit_card' && styles.sourceToggleBtnActive,
                     ]}
                     onPress={() => {
-                      Haptics.selectionAsync();
                       setGiveSource('credit_card');
                     }}
                   >
@@ -890,7 +880,6 @@ export default function LentsScreen() {
                       giveSource === 'pocket' && styles.sourceToggleBtnActive,
                     ]}
                     onPress={() => {
-                      Haptics.selectionAsync();
                       setGiveSource('pocket');
                     }}
                   >
@@ -919,7 +908,6 @@ export default function LentsScreen() {
                           key={c.id}
                           style={[styles.cardPill, isSelected && styles.cardPillActive]}
                           onPress={() => {
-                            Haptics.selectionAsync();
                             setGiveCardId(c.id);
                           }}
                         >
@@ -1017,7 +1005,6 @@ export default function LentsScreen() {
                           key={c.id}
                           style={[styles.cardPill, isSelected && styles.cardPillActive]}
                           onPress={() => {
-                            Haptics.selectionAsync();
                             setCollectTargetCardId(c.id);
                           }}
                         >
@@ -1153,7 +1140,6 @@ export default function LentsScreen() {
             <TouchableOpacity
               style={[styles.menuOption, selectedVaultCardId === 'all' && styles.menuOptionActive]}
               onPress={() => {
-                Haptics.selectionAsync();
                 setSelectedVaultCardId('all');
                 setIsCardDropdownOpen(false);
               }}
@@ -1176,7 +1162,6 @@ export default function LentsScreen() {
                   key={card.id}
                   style={[styles.menuOption, isSelected && styles.menuOptionActive]}
                   onPress={() => {
-                    Haptics.selectionAsync();
                     setSelectedVaultCardId(card.id);
                     setIsCardDropdownOpen(false);
                   }}

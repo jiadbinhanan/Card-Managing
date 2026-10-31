@@ -41,7 +41,7 @@ const SPRING_CONFIG = {
   mass: 0.8,
 };
 
-const DRAWER_HEIGHT = 136;
+const DRAWER_HEIGHT = 180;
 
 export function FloatingBottomNav({ state, descriptors, navigation }: BottomTabBarProps) {
   const [isExpanded, setIsExpanded] = useState(false);
@@ -98,8 +98,8 @@ export function FloatingBottomNav({ state, descriptors, navigation }: BottomTabB
   const drawerAnimStyle = useAnimatedStyle(() => {
     const opacity = interpolate(
       translateY.value,
-      [0, -DRAWER_HEIGHT * 0.3, -DRAWER_HEIGHT],
-      [0, 0.6, 1],
+      [0, -DRAWER_HEIGHT * 0.25, -DRAWER_HEIGHT],
+      [0, 0.7, 1],
       Extrapolation.CLAMP
     );
     const height = interpolate(
@@ -118,7 +118,7 @@ export function FloatingBottomNav({ state, descriptors, navigation }: BottomTabB
     const width = interpolate(
       translateY.value,
       [0, -DRAWER_HEIGHT],
-      [36, 48],
+      [36, 52],
       Extrapolation.CLAMP
     );
     return { width };
@@ -175,7 +175,6 @@ export function FloatingBottomNav({ state, descriptors, navigation }: BottomTabB
         <Pressable
           style={StyleSheet.absoluteFill}
           onPress={() => {
-            Haptics.selectionAsync();
             closeDrawer();
           }}
         />
@@ -188,7 +187,6 @@ export function FloatingBottomNav({ state, descriptors, navigation }: BottomTabB
             {/* Top Drag Handle Indicator */}
             <Pressable
               onPress={() => {
-                Haptics.selectionAsync();
                 if (isExpanded) closeDrawer();
                 else openDrawer();
               }}
@@ -352,20 +350,20 @@ const styles = StyleSheet.create({
   capsule: {
     width: '100%',
     maxWidth: 420,
-    backgroundColor: CedarColors.card, // Soft ambient off-white
-    borderRadius: 32,
-    borderWidth: 1.2,
-    borderColor: CedarColors.border,
+    backgroundColor: '#F7FAF7', // Soft luxury elevated surface
+    borderRadius: 36,
+    borderWidth: 1.5,
+    borderColor: '#D4E2D5',
     paddingTop: 8,
     paddingBottom: Platform.OS === 'android' ? 10 : 8,
     paddingHorizontal: 10,
     // Luxury soft shadow
     shadowColor: '#071A12',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.12,
-    shadowRadius: 20,
-    elevation: 14,
-    overflow: 'hidden',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.16,
+    shadowRadius: 26,
+    elevation: 16,
+    overflow: 'visible',
   },
   handleContainer: {
     alignItems: 'center',
@@ -375,58 +373,59 @@ const styles = StyleSheet.create({
   handlePill: {
     height: 4,
     borderRadius: 2,
-    backgroundColor: CedarColors.ink500,
-    opacity: 0.45,
+    backgroundColor: CedarColors.forest800,
+    opacity: 0.35,
   },
   drawerContent: {
     overflow: 'hidden',
-    paddingHorizontal: 2,
-    marginBottom: 4,
+    paddingHorizontal: 4,
+    marginBottom: 8,
   },
   drawerGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'space-between',
-    gap: 6,
-    paddingVertical: 2,
+    gap: 8,
+    paddingVertical: 4,
   },
   drawerCard: {
     width: '48.5%',
-    borderRadius: 14,
-    paddingVertical: 7,
-    paddingHorizontal: 9,
-    borderWidth: 1,
-    borderColor: CedarColors.border,
+    borderRadius: 18,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderWidth: 1.2,
+    borderColor: '#DCE7DD',
     alignItems: 'flex-start',
+    minHeight: 74,
   },
   drawerCardPressed: {
     transform: [{ scale: 0.97 }],
   },
   drawerIconBadge: {
-    width: 28,
-    height: 28,
-    borderRadius: 9,
+    width: 30,
+    height: 30,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 4,
+    marginBottom: 6,
   },
   drawerCardTitle: {
-    fontSize: 11,
+    fontSize: 12,
     fontFamily: CedarTypography.bodySemiBold,
     color: CedarColors.ink900,
-    fontWeight: '700',
+    fontWeight: '800',
   },
   drawerCardSub: {
-    fontSize: 9,
+    fontSize: 10,
     fontFamily: CedarTypography.body,
     color: CedarColors.ink500,
-    marginTop: 0.5,
+    marginTop: 1,
   },
   navRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-around',
-    height: 52,
+    height: 54,
   },
   tabButton: {
     flex: 1,
@@ -458,7 +457,7 @@ const styles = StyleSheet.create({
   },
   activeTabLabel: {
     fontFamily: CedarTypography.bodySemiBold,
-    fontWeight: '700',
+    fontWeight: '800',
     color: CedarColors.forest800,
   },
   inactiveTabLabel: {
@@ -469,22 +468,22 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    top: -14, // Elevated pop-up
+    top: -18, // Concept elevated notched pop-up
   },
   fabButton: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: CedarColors.forest800, // Deeper forest green
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: '#071A12', // Deep luxury forest
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 3.5,
-    borderColor: CedarColors.canvas, // Ring matching background canvas
+    borderWidth: 4,
+    borderColor: '#D9E6DC', // Contour ring matching ambient gradient
     shadowColor: '#071A12',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.35,
-    shadowRadius: 10,
-    elevation: 12,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.38,
+    shadowRadius: 14,
+    elevation: 16,
   },
   fabPressed: {
     transform: [{ scale: 0.92 }],

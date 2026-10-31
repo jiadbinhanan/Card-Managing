@@ -77,8 +77,7 @@ export default function LoginScreen() {
 
     setIsLoading(true);
     setError(null);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
-
+    
     try {
       const { data, error: authError } = await supabase.auth.signInWithPassword({
         email: email.trim(),
@@ -88,8 +87,7 @@ export default function LoginScreen() {
       if (authError) {
         setError(authError.message);
       } else if (data.session) {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        router.replace('/(tabs)');
+                router.replace('/(tabs)');
       }
     } catch (err: any) {
       setError(err?.message || 'লগইন ব্যর্থ হয়েছে। পুনরায় চেষ্টা করুন।');
@@ -107,8 +105,7 @@ export default function LoginScreen() {
 
     setIsLoading(true);
     setError(null);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
-
+    
     try {
       const { error: otpError } = await supabase.auth.signInWithOtp({
         email: email.trim(),
@@ -117,8 +114,7 @@ export default function LoginScreen() {
       if (otpError) {
         setError(otpError.message);
       } else {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        setOtpSent(true);
+                setOtpSent(true);
         setCountdown(60);
       }
     } catch (err: any) {
@@ -130,27 +126,38 @@ export default function LoginScreen() {
 
   // 3. Verify OTP Login
   const handleVerifyOtpLogin = async () => {
-    const trimmedOtp = otp.trim();
-    if (trimmedOtp.length < 6) {
-      setError('অনুগ্রহ করে ৬ অথবা ৮ ডিজিটের ওটিপি কোডটি লিখুন।');
+    const cleanOtp = otp.trim().replace(/\D/g, '');
+    if (cleanOtp.length !== 8 && cleanOtp.length !== 6) {
+      setError('অনুগ্রহ করে আপনার ইমেইলে প্রাপ্ত ৮ অথবা ৬ ডিজিটের ওটিপি কোডটি লিখুন।');
       return;
     }
 
     setIsLoading(true);
     setError(null);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
 
     try {
-      const { data, error: verifyError } = await supabase.auth.verifyOtp({
+      let { data, error: verifyError } = await supabase.auth.verifyOtp({
         email: email.trim(),
-        token: trimmedOtp,
+        token: cleanOtp,
         type: 'email',
       });
 
+      // Resilience fallback for magiclink OTP type
+      if (verifyError && (verifyError.message?.toLowerCase().includes('type') || verifyError.message?.toLowerCase().includes('invalid'))) {
+        const fallback = await supabase.auth.verifyOtp({
+          email: email.trim(),
+          token: cleanOtp,
+          type: 'magiclink' as any,
+        });
+        if (!fallback.error && (fallback.data?.session || fallback.data?.user)) {
+          data = fallback.data;
+          verifyError = null;
+        }
+      }
+
       if (verifyError) {
-        setError(verifyError.message);
-      } else if (data.session) {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        setError(verifyError.message || 'ওটিপি কোডটি সঠিক নয় বা মেয়াদ শেষ হয়েছে।');
+      } else {
         router.replace('/(tabs)');
       }
     } catch (err: any) {
@@ -169,15 +176,13 @@ export default function LoginScreen() {
 
     setIsLoading(true);
     setError(null);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
-
+    
     try {
       const { error: resetError } = await supabase.auth.resetPasswordForEmail(email.trim());
       if (resetError) {
         setError(resetError.message);
       } else {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        setView('forgot-otp');
+                setView('forgot-otp');
         setCountdown(60);
       }
     } catch (err: any) {
@@ -189,27 +194,25 @@ export default function LoginScreen() {
 
   // 5. Verify Reset OTP
   const handleVerifyResetOtp = async () => {
-    const trimmedOtp = otp.trim();
-    if (trimmedOtp.length < 6) {
-      setError('অনুগ্রহ করে ৬ অথবা ৮ ডিজিটের ওটিপি কোডটি লিখুন।');
+    const cleanOtp = otp.trim().replace(/\D/g, '');
+    if (cleanOtp.length !== 8 && cleanOtp.length !== 6) {
+      setError('অনুগ্রহ করে আপনার ইমেইলে প্রাপ্ত ৮ অথবা ৬ ডিজিটের ওটিপি কোডটি লিখুন।');
       return;
     }
 
     setIsLoading(true);
     setError(null);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
 
     try {
       const { error: verifyError } = await supabase.auth.verifyOtp({
         email: email.trim(),
-        token: trimmedOtp,
+        token: cleanOtp,
         type: 'recovery',
       });
 
       if (verifyError) {
-        setError(verifyError.message);
+        setError(verifyError.message || 'ওটিপি ভ্যালিডেশন ব্যর্থ হয়েছে।');
       } else {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         setView('update-password');
       }
     } catch (err: any) {
@@ -228,8 +231,7 @@ export default function LoginScreen() {
 
     setIsLoading(true);
     setError(null);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
-
+    
     try {
       const { error: updateError } = await supabase.auth.updateUser({
         password: newPassword,
@@ -238,8 +240,7 @@ export default function LoginScreen() {
       if (updateError) {
         setError(updateError.message);
       } else {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        router.replace('/(tabs)');
+                router.replace('/(tabs)');
       }
     } catch (err: any) {
       setError(err?.message || 'পাসওয়ার্ড আপডেট করতে সমস্যা হয়েছে।');
@@ -249,8 +250,7 @@ export default function LoginScreen() {
   };
 
   const changeView = (newView: ViewState) => {
-    Haptics.selectionAsync();
-    setError(null);
+        setError(null);
     setOtp('');
     setView(newView);
   };
@@ -285,8 +285,7 @@ export default function LoginScreen() {
                   <TouchableOpacity
                     style={[styles.tabButton, activeTab === 'password' && styles.activeTabButton]}
                     onPress={() => {
-                      Haptics.selectionAsync();
-                      setActiveTab('password');
+                                            setActiveTab('password');
                       setError(null);
                     }}
                     activeOpacity={0.8}
@@ -304,8 +303,7 @@ export default function LoginScreen() {
                   <TouchableOpacity
                     style={[styles.tabButton, activeTab === 'otp' && styles.activeTabButton]}
                     onPress={() => {
-                      Haptics.selectionAsync();
-                      setActiveTab('otp');
+                                            setActiveTab('otp');
                       setError(null);
                     }}
                     activeOpacity={0.8}
@@ -326,8 +324,7 @@ export default function LoginScreen() {
                 <TouchableOpacity
                   style={styles.emailSelector}
                   onPress={() => {
-                    Haptics.selectionAsync();
-                    setIsEmailPickerOpen(!isEmailPickerOpen);
+                                        setIsEmailPickerOpen(!isEmailPickerOpen);
                   }}
                   activeOpacity={0.85}
                 >
@@ -349,8 +346,7 @@ export default function LoginScreen() {
                         email === 'jiadbinhanan@gmail.com' && styles.dropdownItemSelected,
                       ]}
                       onPress={() => {
-                        Haptics.selectionAsync();
-                        setEmail('jiadbinhanan@gmail.com');
+                                                setEmail('jiadbinhanan@gmail.com');
                         setIsEmailPickerOpen(false);
                       }}
                     >
@@ -366,8 +362,7 @@ export default function LoginScreen() {
                         email === 'iasik7591@gmail.com' && styles.dropdownItemSelected,
                       ]}
                       onPress={() => {
-                        Haptics.selectionAsync();
-                        setEmail('iasik7591@gmail.com');
+                                                setEmail('iasik7591@gmail.com');
                         setIsEmailPickerOpen(false);
                       }}
                     >
@@ -496,15 +491,15 @@ export default function LoginScreen() {
                           </Text>
                         </View>
 
-                        <Text style={styles.inputLabel}>ওটিপি কোড লিখুন</Text>
+                        <Text style={styles.inputLabel}>ওটিপি কোড লিখুন (৮ বা ৬ ডিজিট)</Text>
                         <TextInput
                           style={[styles.textInputFull, styles.otpInput]}
-                          placeholder="123456"
+                          placeholder="12345678"
                           placeholderTextColor={CedarColors.ink500}
                           keyboardType="numeric"
                           maxLength={8}
                           value={otp}
-                          onChangeText={setOtp}
+                          onChangeText={(t) => setOtp(t.replace(/\D/g, '').slice(0, 8))}
                         />
 
                         {error && (
@@ -516,7 +511,7 @@ export default function LoginScreen() {
                         <TouchableOpacity
                           style={styles.submitBtn}
                           onPress={handleVerifyOtpLogin}
-                          disabled={isLoading || otp.length < 6}
+                          disabled={isLoading || otp.replace(/\D/g, '').length < 6}
                           activeOpacity={0.88}
                         >
                           <LinearGradient
@@ -536,8 +531,7 @@ export default function LoginScreen() {
                         <View style={styles.otpActionsRow}>
                           <TouchableOpacity
                             onPress={() => {
-                              Haptics.selectionAsync();
-                              setOtpSent(false);
+                                                            setOtpSent(false);
                               setOtp('');
                               setError(null);
                             }}
@@ -649,8 +643,9 @@ export default function LoginScreen() {
                   placeholder="••••••••"
                   placeholderTextColor={CedarColors.ink500}
                   keyboardType="numeric"
+                  maxLength={8}
                   value={otp}
-                  onChangeText={setOtp}
+                  onChangeText={(t) => setOtp(t.replace(/\D/g, '').slice(0, 8))}
                 />
 
                 {error && (
@@ -662,7 +657,7 @@ export default function LoginScreen() {
                 <TouchableOpacity
                   style={styles.submitBtn}
                   onPress={handleVerifyResetOtp}
-                  disabled={isLoading || otp.length < 6}
+                  disabled={isLoading || otp.replace(/\D/g, '').length < 6}
                   activeOpacity={0.88}
                 >
                   <LinearGradient

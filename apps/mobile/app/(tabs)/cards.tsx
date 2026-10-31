@@ -142,7 +142,6 @@ export default function CardsScreen() {
           <HapticButton
             style={styles.addCardBtn}
             onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
               router.push('/(tabs)/transactions');
             }}
             feedbackType="rigid"
@@ -162,7 +161,6 @@ export default function CardsScreen() {
                   key={c.id}
                   style={[styles.cardPill, isSel && styles.activeCardPill]}
                   onPress={() => {
-                    Haptics.selectionAsync();
                     setActiveCardIndex(index);
                   }}
                   activeOpacity={0.8}
@@ -186,10 +184,10 @@ export default function CardsScreen() {
             availableLimit={availableLimit}
             holderName="CREDICS VAULT"
             validThru={`Day ${currentCard.bill_due_day || 26}`}
-            onFreeze={() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid)}
-            onLimits={() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid)}
-            onPin={() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid)}
-            onDetails={() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid)}
+            onFreeze={() => {}}
+            onLimits={() => {}}
+            onPin={() => {}}
+            onDetails={() => {}}
           />
         ) : (
           <View style={styles.noCardBox}>
@@ -205,7 +203,6 @@ export default function CardsScreen() {
             <Text style={styles.recentTitle}>Recent on this card</Text>
             <TouchableOpacity
               onPress={() => {
-                Haptics.selectionAsync();
                 router.push('/(tabs)/transactions');
               }}
             >

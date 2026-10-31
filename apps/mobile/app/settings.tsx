@@ -149,7 +149,6 @@ export default function SettingsScreen() {
     }
 
     setIsSavingProfile(true);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
 
     try {
       await supabase
@@ -170,7 +169,6 @@ export default function SettingsScreen() {
 
   // Open Add Card Modal
   const openAddCardModal = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
     setEditingCard(null);
     setCardName('');
     setHolderName(currentUser?.name || '');
@@ -189,7 +187,6 @@ export default function SettingsScreen() {
 
   // Open Edit Card Modal
   const openEditCardModal = async (card: CardData) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
     setEditingCard(card);
     setCardName(card.card_name);
     setHolderName(card.holder_name || '');
@@ -229,7 +226,6 @@ export default function SettingsScreen() {
     }
 
     setIsSavingCard(true);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
 
     try {
       const rawNumber = cardNumber.replace(/\D/g, '');
@@ -311,7 +307,6 @@ export default function SettingsScreen() {
   // Toggle user access in modal
   const toggleUserAccess = (userId: string) => {
     if (userId === currentUser?.id) return; // Cannot remove self
-    Haptics.selectionAsync();
     if (ownerUserIds.includes(userId)) {
       setOwnerUserIds(ownerUserIds.filter((id) => id !== userId));
     } else {
@@ -327,7 +322,6 @@ export default function SettingsScreen() {
         text: 'Log Out',
         style: 'destructive',
         onPress: async () => {
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
           await supabase.auth.signOut();
           router.replace('/login');
         },
@@ -390,7 +384,6 @@ export default function SettingsScreen() {
               <TouchableOpacity
                 style={styles.editProfileBtn}
                 onPress={() => {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
                   setIsEditProfileOpen(true);
                 }}
               >
@@ -452,7 +445,6 @@ export default function SettingsScreen() {
                     <TouchableOpacity
                       style={styles.cardActionBtn}
                       onPress={() => {
-                        Haptics.selectionAsync();
                         setViewingCard(c);
                         setIsCvvVisible(false);
                       }}
@@ -489,7 +481,6 @@ export default function SettingsScreen() {
               <Switch
                 value={whatsappAlerts}
                 onValueChange={(val) => {
-                  Haptics.selectionAsync();
                   setWhatsappAlerts(val);
                 }}
                 trackColor={{ false: '#DCE4DA', true: '#2D7A5D' }}
@@ -638,7 +629,6 @@ export default function SettingsScreen() {
                 <TouchableOpacity
                   style={styles.toggleCvvRow}
                   onPress={() => {
-                    Haptics.selectionAsync();
                     setIsCvvVisible(!isCvvVisible);
                   }}
                 >
@@ -672,7 +662,6 @@ export default function SettingsScreen() {
                 <TouchableOpacity
                   style={[styles.primarySwitchBtn, isPrimary && styles.primarySwitchBtnActive]}
                   onPress={() => {
-                    Haptics.selectionAsync();
                     setIsPrimary(true);
                   }}
                 >
@@ -689,7 +678,6 @@ export default function SettingsScreen() {
                 <TouchableOpacity
                   style={[styles.primarySwitchBtn, !isPrimary && styles.primarySwitchBtnActive]}
                   onPress={() => {
-                    Haptics.selectionAsync();
                     setIsPrimary(false);
                   }}
                 >
@@ -717,7 +705,6 @@ export default function SettingsScreen() {
                             key={c.id}
                             style={[styles.pickerPill, isSelected && styles.pickerPillActive]}
                             onPress={() => {
-                              Haptics.selectionAsync();
                               setParentCardId(c.id);
                             }}
                           >

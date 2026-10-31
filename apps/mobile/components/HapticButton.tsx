@@ -7,7 +7,7 @@ import Animated, {
   withSpring,
 } from 'react-native-reanimated';
 
-export type HapticFeedbackType = 'rigid' | 'selection' | 'light' | 'medium' | 'heavy' | 'success' | 'warning';
+export type HapticFeedbackType = 'none' | 'rigid' | 'selection' | 'light' | 'medium' | 'heavy' | 'success' | 'warning';
 
 interface HapticButtonProps {
   onPress?: () => void;
@@ -20,14 +20,14 @@ interface HapticButtonProps {
 }
 
 /**
- * 120Hz Ultra-Smooth Haptic Button with Crisp "Khat-Khat" Tactile Feedback
+ * 120Hz Ultra-Smooth Button with Spring Physics (Haptics strictly reserved for recording entries)
  */
 export function HapticButton({
   onPress,
   onLongPress,
   children,
   style,
-  feedbackType = 'rigid',
+  feedbackType = 'none',
   activeScale = 0.95,
   disabled = false,
 }: HapticButtonProps) {
@@ -38,6 +38,7 @@ export function HapticButton({
   }));
 
   const triggerHaptic = () => {
+    if (feedbackType === 'none') return;
     switch (feedbackType) {
       case 'rigid':
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);

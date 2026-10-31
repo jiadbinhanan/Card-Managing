@@ -45,7 +45,6 @@ export function UrgentBillBottomSheet({
 
   useEffect(() => {
     if (visible) {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
       translateY.value = withSpring(0, {
         damping: 24,
         stiffness: 350,
@@ -67,7 +66,6 @@ export function UrgentBillBottomSheet({
   });
 
   const handleDismiss = () => {
-    Haptics.selectionAsync();
     translateY.value = withSpring(SHEET_HEIGHT, { damping: 30, stiffness: 450, mass: 0.6 }, (finished) => {
       if (finished) {
         runOnJS(onClose)();
