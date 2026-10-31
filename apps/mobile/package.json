@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@credics/core": "workspace:*",
-    "@react-native-async-storage/async-storage": "^3.1.1",
+    "@react-native-async-storage/async-storage": "1.23.1",
     "@supabase/supabase-js": "^2.103.2",
     "expo": "~52.0.30",
     "expo-constants": "~17.0.5",
