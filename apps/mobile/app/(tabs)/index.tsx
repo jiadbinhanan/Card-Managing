@@ -14,9 +14,11 @@ import {
   Linking,
   Dimensions,
   Platform,
+  StatusBar,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
+import Svg, { Path } from 'react-native-svg';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -32,6 +34,7 @@ import { NotificationSidePanel } from '../../components/NotificationSidePanel';
 import { SwipeDownDrawer, DrawerScrollView } from '../../components/SwipeDownDrawer';
 import { HapticButton } from '../../components/HapticButton';
 import { HomeSkeleton } from '../../components/Skeleton';
+import { HeroCardLimitChart, CardLimitStat } from '../../components/HeroCardLimitChart';
 import { supabase } from '../../lib/supabase';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
@@ -125,6 +128,7 @@ interface RecentTx {
 
 export default function HomeScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
 
   // Loading & Refresh State
   const [isLoading, setIsLoading] = useState(true);
@@ -140,6 +144,7 @@ export default function HomeScreen() {
   const [accessibleCards, setAccessibleCards] = useState<CardData[]>([]);
   const [selectedCardId, setSelectedCardId] = useState<string>('all');
   const [cardModalVisible, setCardModalVisible] = useState(false);
+  const [cardLimitStats, setCardLimitStats] = useState<CardLimitStat[]>([]);
 
   // Metrics State
   const [availableLimit, setAvailableLimit] = useState<number>(0);
@@ -391,9 +396,57 @@ export default function HomeScreen() {
           }, 0) || 0;
       setInTransit(inTransitAmt);
 
-      // Active Bills
+      // Card Limit & Utilization Stats for Hero Chart
+      const statsList: CardLimitStat[] = myCards.map((c) => {
+        const cardLimit = Number(c.total_limit || 0);
+        const cWithdrawals =
+          txs
+            ?.filter(
+              (t) =>
+                t.card_id === c.id &&
+                t.type === 'withdrawal' &&
+                (t.qr_id ||
+                  t.settled_to_user ||
+                  (t.remarks || '').toLowerCase().includes('rotation') ||
+                  t.status === 'pending_settlement' ||
+                  t.status === 'partially_settled')
+            )
+            .reduce((sum, t) => sum + Number(t.amount || 0), 0) || 0;
+        const cBillPayments =
+          txs?.filter((t) => t.card_id === c.id && t.type === 'bill_payment').reduce((sum, t) => sum + Number(t.amount || 0), 0) ||
+          0;
+        const cSpends =
+          spends
+            ?.filter((s) => s.card_id === c.id && s.payment_method === 'credit_card')
+            .reduce((sum, s) => sum + Number(s.amount || 0), 0) || 0;
+        const used = Math.max(0, cWithdrawals + cSpends - cBillPayments);
+        const avail = Math.max(0, cardLimit - used);
+        const ratio = cardLimit > 0 ? used / cardLimit : 0;
+        return {
+          id: c.id,
+          name: c.card_name,
+          last4: c.last_4_digits,
+          totalLimit: cardLimit,
+          usedLimit: used,
+          availableLimit: avail,
+          utilizationRatio: ratio,
+        };
+      });
+      setCardLimitStats(statsList);
+
+      // Active Bills (Web App Parity: Deduplicate to latest bill per card)
       if (bills) {
-        setActiveBills(bills.slice(0, 4));
+        const latestPerCard = new Map<string, any>();
+        bills.forEach((b: any) => {
+          if (!latestPerCard.has(b.card_id)) latestPerCard.set(b.card_id, b);
+        });
+        setActiveBills(
+          Array.from(latestPerCard.values()).map((b: any) => ({
+            ...b,
+            bill_gen_day: b.cards?.bill_gen_day,
+            bill_due_day: b.cards?.bill_due_day,
+          }))
+        );
       }
 
       // 4. User Stats & Cash Breakdown
@@ -887,328 +940,368 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.screenContainer}>
-      {/* 6. Deep Multi-Stop Rich Luxury Green Gradient Background */}
-      <LinearGradient
-        colors={['#061910', '#0B291B', '#113A27', '#1A4F35', '#7A9E89', '#96B8A4']}
-        locations={[0, 0.16, 0.35, 0.60, 0.82, 1]}
-        style={StyleSheet.absoluteFill}
-      />
+      <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
 
-      <SafeAreaView style={styles.safeArea}>
+      <View style={styles.safeArea}>
         <ScrollView
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
+          contentInsetAdjustmentBehavior="never"
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
               onRefresh={onRefresh}
               tintColor="#F6F9F5"
               colors={['#10B981']}
+              progressViewOffset={insets.top + 20}
             />
           }
         >
-          {/* ================= 1. HEADER ================= */}
-          <View style={styles.header}>
-            <TouchableOpacity
-              style={styles.userInfo}
-              onPress={() => router.push('/settings')}
-              activeOpacity={0.85}
-            >
-              <View style={styles.avatarBorder}>
-                {userAvatar ? (
-                  <Image source={{ uri: userAvatar }} style={styles.avatarImg} />
-                ) : (
-                  <View style={styles.avatarPlaceholder}>
-                    <Text style={styles.avatarText}>{userName.charAt(0).toUpperCase()}</Text>
-                  </View>
-                )}
-              </View>
-              <View style={styles.userTextCol}>
-                <View style={styles.liveStatusRow}>
-                  <View style={styles.livePulseDot} />
-                  <Text style={styles.liveStatusText}>Live Status • Active</Text>
-                </View>
-                <Text style={styles.userNameText}>Hey, {firstName || userName}</Text>
-              </View>
-            </TouchableOpacity>
-
-            <View style={styles.headerActions}>
-              {/* Card Selector Dropdown */}
-              <TouchableOpacity
-                style={styles.cardDropdown}
-                onPress={() => setCardModalVisible(true)}
-                activeOpacity={0.8}
-              >
-                <CreditCard size={13} color="#CAD6C9" />
-                <Text style={styles.cardDropdownText} numberOfLines={1}>
-                  {getActiveCardName()}
-                </Text>
-                <ChevronDown size={13} color="#CAD6C9" />
-              </TouchableOpacity>
-
-              {/* Notification Bell with 120Hz micro-bounce animation */}
-              <Animated.View style={bellAnimStyle}>
-                <TouchableOpacity
-                  style={styles.iconCircle}
-                  onPress={handleNotificationBellPress}
-                  activeOpacity={0.8}
-                >
-                  <Bell size={18} color="#F6F9F5" />
-                  {daysToBill <= 3 && <View style={styles.notificationDot} />}
-                </TouchableOpacity>
-              </Animated.View>
-            </View>
-          </View>
-
-          {/* ================= 2. HERO AVAILABLE LIMIT CARD ================= */}
-          <Animated.View entering={FadeInDown.delay(60).springify().damping(22)}>
+          {/* ================= 1 & 2. HERO LUXURY SECTION WITH SVG ORGANIC WAVE ================= */}
+          <View style={styles.heroSectionWrapper}>
             <LinearGradient
-              colors={['#04120B', '#082116', '#0E2E20']}
+              colors={['#03180F', '#072C1C', '#0B3F28', '#062618']}
               start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.heroCard}
+              end={{ x: 0.85, y: 1 }}
+              style={[styles.heroBackgroundGradient, { paddingTop: insets.top + 8 }]}
             >
-              <View style={styles.heroTopRow}>
-                <View style={styles.heroLabelRow}>
-                  <View style={styles.heroDot} />
-                  <Text style={styles.heroLabel}>Total Available Limit</Text>
-                  <TouchableOpacity
-                    onPress={() => setShowBalance(!showBalance)}
-                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                  >
-                    {showBalance ? (
-                      <Eye size={16} color="#CAD6C9" style={{ marginLeft: 8 }} />
-                    ) : (
-                      <EyeOff size={16} color="#CAD6C9" style={{ marginLeft: 8 }} />
-                    )}
-                  </TouchableOpacity>
-                </View>
-
-                {/* Bill Countdown Badge */}
-                <View style={styles.billDueBadge}>
-                  <CalendarClock size={12} color="#FCD34D" />
-                  <Text style={styles.billDueText}>
-                    {daysToBill <= 1 ? 'Due Tomorrow' : `Next Bill ${nextBillDate}`}
-                  </Text>
-                </View>
-              </View>
-
-              {/* Large Balance Typography with Text Animation */}
-              <View style={styles.heroAmountRow}>
-                <Animated.Text
-                  entering={FadeInDown.duration(400).springify()}
-                  style={styles.heroAmount}
+              {/* Header: User Profile Avatar, Live Status, Dropdown & Notification Bell */}
+              <View style={styles.header}>
+                <TouchableOpacity
+                  style={styles.userInfo}
+                  onPress={() => router.push('/settings')}
+                  activeOpacity={0.85}
                 >
-                  {showBalance ? `₹${availableLimit.toLocaleString('en-IN')}` : '••••••••'}
-                </Animated.Text>
-                <View style={styles.trendPill}>
-                  <TrendingUp size={12} color="#4ADE80" />
-                  <Text style={styles.trendText}>Active Vault</Text>
-                </View>
-              </View>
-
-              <View style={styles.heroDivider} />
-
-              {/* 3 Core Metrics Row */}
-              <View style={styles.metricsGrid}>
-                <View style={styles.metricItem}>
-                  <View style={styles.metricLabelRow}>
-                    <Wallet size={12} color="#34A853" />
-                    <Text style={styles.metricLabel}>Total Limit</Text>
+                  <View style={styles.avatarBorder}>
+                    {userAvatar ? (
+                      <Image source={{ uri: userAvatar }} style={styles.avatarImg} />
+                    ) : (
+                      <View style={styles.avatarPlaceholder}>
+                        <Text style={styles.avatarText}>{userName.charAt(0).toUpperCase()}</Text>
+                      </View>
+                    )}
                   </View>
-                  <Animated.Text
-                    entering={FadeInUp.delay(100).duration(300)}
-                    style={styles.metricValue}
-                  >
-                    {showBalance ? `₹${totalLimit.toLocaleString('en-IN')}` : '••••'}
-                  </Animated.Text>
-                </View>
-
-                <View style={styles.metricItem}>
-                  <View style={styles.metricLabelRow}>
-                    <Layers size={12} color="#38BDF8" />
-                    <Text style={styles.metricLabel}>In Transit</Text>
+                  <View style={styles.userTextCol}>
+                    <View style={styles.liveStatusRow}>
+                      <View style={styles.livePulseDot} />
+                      <Text style={styles.liveStatusText}>LIVE STATUS • ACTIVE</Text>
+                    </View>
+                    <Text style={styles.userNameText}>Hey, {firstName || userName}</Text>
                   </View>
-                  <Animated.Text
-                    entering={FadeInUp.delay(160).duration(300)}
-                    style={[styles.metricValue, { color: '#38BDF8' }]}
+                </TouchableOpacity>
+
+                <View style={styles.headerActions}>
+                  {/* Card Selector Dropdown */}
+                  <TouchableOpacity
+                    style={styles.cardDropdown}
+                    onPress={() => setCardModalVisible(true)}
+                    activeOpacity={0.8}
                   >
-                    {showBalance ? `₹${inTransit.toLocaleString('en-IN')}` : '••••'}
-                  </Animated.Text>
-                </View>
+                    <CreditCard size={13} color="#CAD6C9" />
+                    <Text style={styles.cardDropdownText} numberOfLines={1}>
+                      {getActiveCardName()}
+                    </Text>
+                    <ChevronDown size={13} color="#CAD6C9" />
+                  </TouchableOpacity>
 
-                <View style={styles.metricItem}>
-                  <View style={styles.metricLabelRow}>
-                    <Users size={12} color="#4ADE80" />
-                    <Text style={styles.metricLabel}>Users Cash</Text>
-                  </View>
-                  <Animated.Text
-                    entering={FadeInUp.delay(220).duration(300)}
-                    style={[styles.metricValue, { color: '#4ADE80' }]}
-                  >
-                    {showBalance ? `₹${usersCash.toLocaleString('en-IN')}` : '••••'}
-                  </Animated.Text>
-                </View>
-              </View>
-
-              {/* Quick Actions without vibration */}
-              <QuickActions
-                onAddLend={() => router.push('/(tabs)/lents')}
-                onSendMoney={() => router.push('/(tabs)/transactions')}
-                onTopUp={() => router.push('/(tabs)/settlements')}
-                onScanQR={() => router.push('/(tabs)/settlements')}
-              />
-            </LinearGradient>
-          </Animated.View>
-
-          {/* ================= 3. ACTIVE BILLING CYCLES SECTION (Dashboard 1.jpg Parity) ================= */}
-          <View style={styles.sectionContainer}>
-            <View style={styles.sectionHeader}>
-              <View style={styles.sectionTitleRow}>
-                <CalendarClock size={16} color={CedarColors.forest800} />
-                <Text style={styles.sectionTitle}>Active Billing Cycles</Text>
-                <View style={styles.pendingBadge}>
-                  <Text style={styles.pendingBadgeText}>
-                    {activeBills.filter((b) => b.status !== 'paid').length} Pending
-                  </Text>
-                </View>
-              </View>
-
-              <HapticButton
-                style={styles.addMiniBtn}
-                onPress={() => {
-                  setBillFormCardId(accessibleCards[0]?.id || '');
-                  setBillFormMonth(new Date().toISOString().slice(0, 7));
-                  setIsBillModalOpen(true);
-                }}
-              >
-                <Plus size={14} color="#F6F9F5" />
-              </HapticButton>
-            </View>
-
-            {activeBills.length === 0 ? (
-              <View style={styles.emptyCardBox}>
-                <Text style={styles.emptyBoxText}>No active billing statements found.</Text>
-              </View>
-            ) : (
-              activeBills.map((bill, index) => {
-                const card = accessibleCards.find((c) => c.id === bill.card_id);
-                const due = Number(bill.generated_amount) - Number(bill.paid_amount);
-                const isPaid = bill.status === 'paid' || due <= 0;
-
-                const billMonth = new Date(bill.billing_month);
-                const genDay = bill.bill_gen_day || card?.bill_gen_day || 7;
-                const genDate = new Date(billMonth.getFullYear(), billMonth.getMonth(), genDay);
-
-                const dueDate = new Date(genDate);
-                dueDate.setDate(dueDate.getDate() + 19);
-
-                const now = new Date();
-                const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-                const dueDayStart = new Date(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate());
-                const daysLeft = Math.round((dueDayStart.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-                const fmtDate = (d: Date) => d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-
-                return (
-                  <Animated.View
-                    key={bill.id}
-                    entering={FadeInDown.delay(100 + index * 60).springify().damping(22)}
-                  >
+                  {/* Notification Bell with 120Hz micro-bounce animation */}
+                  <Animated.View style={bellAnimStyle}>
                     <TouchableOpacity
-                      activeOpacity={0.92}
-                      onPress={() => {
-                        setBillFormCardId(bill.card_id);
-                        setBillFormMonth(bill.billing_month.slice(0, 7));
-                        setBillFormGenAmount(String(bill.generated_amount));
-                        setBillFormPaidAmount(String(bill.paid_amount));
-                        setIsBillModalOpen(true);
-                      }}
-                      style={[
-                        styles.billCard,
-                        isPaid ? styles.billCardPaid : styles.billCardPending,
-                      ]}
+                      style={styles.iconCircle}
+                      onPress={handleNotificationBellPress}
+                      activeOpacity={0.8}
                     >
-                      <View style={styles.billTopRow}>
-                        <Text style={styles.billCardName}>
-                          {card?.card_name || 'Vault Card'} (••{card?.last_4_digits || '0000'})
-                        </Text>
-                        {isPaid ? (
-                          <View style={styles.paidBadge}>
-                            <CheckCircle2 size={11} color="#15803D" strokeWidth={2.5} style={{ marginRight: 3 }} />
-                            <Text style={styles.paidBadgeText}>PAID</Text>
-                          </View>
-                        ) : (
-                          <View
-                            style={[
-                              styles.daysLeftBadge,
-                              daysLeft <= 3 && {
-                                backgroundColor: 'rgba(239, 68, 68, 0.15)',
-                                borderColor: 'rgba(239, 68, 68, 0.3)',
-                              },
-                            ]}
-                          >
-                            <Text
-                              style={[
-                                styles.daysLeftText,
-                                daysLeft <= 3 && { color: '#EF4444' },
-                              ]}
-                            >
-                              {daysLeft > 0 ? `${daysLeft}d left` : daysLeft === 0 ? 'Due today!' : `Overdue ${Math.abs(daysLeft)}d`}
-                            </Text>
-                          </View>
-                        )}
-                      </View>
-
-                      {/* 3 Metric Columns with Soft Subtle Background */}
-                      <View style={styles.billGrid}>
-                        <View style={styles.billCol}>
-                          <Text style={styles.billColLabel}>GENERATED</Text>
-                          <Animated.Text
-                            entering={FadeInDown.delay(120).duration(260)}
-                            style={styles.billColValue}
-                          >
-                            ₹{Number(bill.generated_amount).toLocaleString('en-IN')}
-                          </Animated.Text>
-                        </View>
-                        <View style={[styles.billCol, styles.billColBorder]}>
-                          <Text style={styles.billColLabel}>PAID</Text>
-                          <Animated.Text
-                            entering={FadeInDown.delay(160).duration(260)}
-                            style={[styles.billColValue, { color: '#15803D' }]}
-                          >
-                            ₹{Number(bill.paid_amount).toLocaleString('en-IN')}
-                          </Animated.Text>
-                        </View>
-                        <View style={[styles.billCol, styles.billColBorder]}>
-                          <Text style={styles.billColLabel}>DUE</Text>
-                          <Animated.Text
-                            entering={FadeInDown.delay(200).duration(260)}
-                            style={[
-                              styles.billColValue,
-                              { color: due > 0 ? '#DC2626' : '#15803D' },
-                            ]}
-                          >
-                            ₹{due > 0 ? due.toLocaleString('en-IN') : 0}
-                          </Animated.Text>
-                        </View>
-                      </View>
-
-                      <View style={styles.billFooterRow}>
-                        <Text style={styles.billDateText}>Gen: {fmtDate(genDate)}</Text>
-                        <Text
-                          style={[
-                            styles.billDateText,
-                            daysLeft <= 3 && !isPaid && { color: '#DC2626', fontWeight: '800' },
-                          ]}
-                        >
-                          Due: {fmtDate(dueDate)}
-                        </Text>
-                      </View>
+                      <Bell size={18} color="#F6F9F5" />
+                      {daysToBill <= 3 && <View style={styles.notificationDot} />}
                     </TouchableOpacity>
                   </Animated.View>
-                );
-              })
-            )}
+                </View>
+              </View>
+
+              {/* Total Available Limit Hero Body */}
+              <View style={styles.heroMainBody}>
+                <View style={styles.heroTopRow}>
+                  <View style={styles.heroLabelRow}>
+                    <View style={styles.heroDot} />
+                    <Text style={styles.heroLabel}>Total Available Limit</Text>
+                    <TouchableOpacity
+                      onPress={() => setShowBalance(!showBalance)}
+                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    >
+                      {showBalance ? (
+                        <Eye size={16} color="#CAD6C9" style={{ marginLeft: 8 }} />
+                      ) : (
+                        <EyeOff size={16} color="#CAD6C9" style={{ marginLeft: 8 }} />
+                      )}
+                    </TouchableOpacity>
+                  </View>
+
+                  {/* Dynamic Micro-Chart: Column Chart (All Cards) or Circular Donut (Single Card) */}
+                  <HeroCardLimitChart
+                    isAllCards={selectedCardId === 'all'}
+                    cards={cardLimitStats}
+                    singleCard={cardLimitStats.find((c) => c.id === selectedCardId)}
+                  />
+                </View>
+
+                {/* Large Balance Typography with Text Animation */}
+                <View style={styles.heroAmountRow}>
+                  <Animated.Text
+                    entering={FadeInDown.duration(400).springify()}
+                    style={styles.heroAmount}
+                  >
+                    {showBalance ? `₹${availableLimit.toLocaleString('en-IN')}` : '••••••••'}
+                  </Animated.Text>
+                  <View style={styles.trendPill}>
+                    <TrendingUp size={12} color="#4ADE80" />
+                    <Text style={styles.trendText}>Active Vault</Text>
+                  </View>
+                </View>
+
+                <View style={styles.heroDivider} />
+
+                {/* 3 Core Metrics Row */}
+                <View style={styles.metricsGrid}>
+                  <View style={styles.metricItem}>
+                    <View style={styles.metricLabelRow}>
+                      <Wallet size={12} color="#34A853" />
+                      <Text style={styles.metricLabel}>Total Limit</Text>
+                    </View>
+                    <Animated.Text
+                      entering={FadeInUp.delay(100).duration(300)}
+                      style={styles.metricValue}
+                    >
+                      {showBalance ? `₹${totalLimit.toLocaleString('en-IN')}` : '••••'}
+                    </Animated.Text>
+                  </View>
+
+                  <View style={styles.metricItem}>
+                    <View style={styles.metricLabelRow}>
+                      <Layers size={12} color="#38BDF8" />
+                      <Text style={styles.metricLabel}>In Transit</Text>
+                    </View>
+                    <Animated.Text
+                      entering={FadeInUp.delay(160).duration(300)}
+                      style={[styles.metricValue, { color: '#38BDF8' }]}
+                    >
+                      {showBalance ? `₹${inTransit.toLocaleString('en-IN')}` : '••••'}
+                    </Animated.Text>
+                  </View>
+
+                  <View style={styles.metricItem}>
+                    <View style={styles.metricLabelRow}>
+                      <Users size={12} color="#4ADE80" />
+                      <Text style={styles.metricLabel}>Users Cash</Text>
+                    </View>
+                    <Animated.Text
+                      entering={FadeInUp.delay(220).duration(300)}
+                      style={[styles.metricValue, { color: '#4ADE80' }]}
+                    >
+                      {showBalance ? `₹${usersCash.toLocaleString('en-IN')}` : '••••'}
+                    </Animated.Text>
+                  </View>
+                </View>
+
+                {/* 4 Quick Actions inside Hero section */}
+                <QuickActions
+                  onAddLend={() => router.push('/(tabs)/lents')}
+                  onSendMoney={() => router.push('/(tabs)/transactions')}
+                  onTopUp={() => router.push('/(tabs)/settlements')}
+                  onScanQR={() => router.push('/(tabs)/settlements')}
+                />
+              </View>
+
+              {/* Organic SVG Wave Curve transitioning to light green canvas */}
+              <View style={styles.svgWaveWrapper}>
+                <Svg
+                  width={SCREEN_WIDTH}
+                  height={32}
+                  viewBox={`0 0 ${SCREEN_WIDTH} 32`}
+                  preserveAspectRatio="none"
+                >
+                  <Path
+                    d={`M 0,0 C ${SCREEN_WIDTH * 0.28},24 ${SCREEN_WIDTH * 0.65},32 ${SCREEN_WIDTH},6 L ${SCREEN_WIDTH},32 L 0,32 Z`}
+                    fill="#EFF3EE"
+                  />
+                </Svg>
+              </View>
+            </LinearGradient>
+          </View>
+
+          {/* ================= 3. ACTIVE BILLING CYCLES SECTION (Single Master Card - Web Parity) ================= */}
+          <View style={styles.sectionContainer}>
+            <View style={styles.billingCyclesMasterCard}>
+              {/* Master Card Header */}
+              <View style={styles.billingCyclesHeader}>
+                <View style={styles.billingTitleLeft}>
+                  <View style={styles.calendarIconSquare}>
+                    <CalendarClock size={16} color="#15803D" strokeWidth={2.4} />
+                  </View>
+                  <View>
+                    <Text style={styles.billingSectionTitle}>Active Billing Cycles</Text>
+                    <Text style={styles.billingSectionSub}>
+                      {activeBills.filter((b) => {
+                        const due = Number(b.generated_amount) - Number(b.paid_amount);
+                        return b.status !== 'paid' && due > 0;
+                      }).length} Pending Statements
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.billingHeaderRight}>
+                  <View style={styles.pendingBadge}>
+                    <Text style={styles.pendingBadgeText}>
+                      {activeBills.filter((b) => {
+                        const due = Number(b.generated_amount) - Number(b.paid_amount);
+                        return b.status !== 'paid' && due > 0;
+                      }).length} Pending
+                    </Text>
+                  </View>
+                  <HapticButton
+                    style={styles.addMiniBtn}
+                    onPress={() => {
+                      setBillFormCardId(accessibleCards[0]?.id || '');
+                      setBillFormMonth(new Date().toISOString().slice(0, 7));
+                      setIsBillModalOpen(true);
+                    }}
+                  >
+                    <Plus size={14} color="#F6F9F5" />
+                  </HapticButton>
+                </View>
+              </View>
+
+              <View style={styles.billingDivider} />
+
+              {/* Billing Items Inside Master Card */}
+              {activeBills.length === 0 ? (
+                <View style={styles.emptyCardBox}>
+                  <Text style={styles.emptyBoxText}>No active billing statements found.</Text>
+                </View>
+              ) : (
+                <View style={styles.billingItemsContainer}>
+                  {activeBills.map((bill, index) => {
+                    const card = accessibleCards.find((c) => c.id === bill.card_id);
+                    const due = Number(bill.generated_amount) - Number(bill.paid_amount);
+                    const isPaid = bill.status === 'paid' || due <= 0;
+
+                    const billMonth = new Date(bill.billing_month);
+                    const genDay = bill.bill_gen_day || card?.bill_gen_day || 7;
+                    const genDate = new Date(billMonth.getFullYear(), billMonth.getMonth(), genDay);
+
+                    const dueDate = new Date(genDate);
+                    dueDate.setDate(dueDate.getDate() + 19);
+
+                    const now = new Date();
+                    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                    const dueDayStart = new Date(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate());
+                    const daysLeft = Math.round((dueDayStart.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                    const fmtDate = (d: Date) => d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+
+                    return (
+                      <Animated.View
+                        key={bill.id}
+                        entering={FadeInDown.delay(60 + index * 50).springify().damping(22)}
+                      >
+                        <TouchableOpacity
+                          activeOpacity={0.92}
+                          onPress={() => {
+                            setBillFormCardId(bill.card_id);
+                            setBillFormMonth(bill.billing_month.slice(0, 7));
+                            setBillFormGenAmount(String(bill.generated_amount));
+                            setBillFormPaidAmount(String(bill.paid_amount));
+                            setIsBillModalOpen(true);
+                          }}
+                          style={[
+                            styles.billInnerCard,
+                            isPaid ? styles.billInnerCardPaid : styles.billInnerCardPending,
+                          ]}
+                        >
+                          <View style={styles.billTopRow}>
+                            <View style={styles.cardIdentRow}>
+                              <CreditCard size={14} color={isPaid ? '#15803D' : CedarColors.forest800} />
+                              <Text style={styles.billCardName}>
+                                {card?.card_name || 'Vault Card'} (••{card?.last_4_digits || '0000'})
+                              </Text>
+                            </View>
+                            {isPaid ? (
+                              <View style={styles.paidBadge}>
+                                <CheckCircle2 size={11} color="#15803D" strokeWidth={2.5} style={{ marginRight: 3 }} />
+                                <Text style={styles.paidBadgeText}>✓ PAID</Text>
+                              </View>
+                            ) : (
+                              <View
+                                style={[
+                                  styles.daysLeftBadge,
+                                  daysLeft <= 3 && {
+                                    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+                                    borderColor: 'rgba(239, 68, 68, 0.3)',
+                                  },
+                                ]}
+                              >
+                                <Text
+                                  style={[
+                                    styles.daysLeftText,
+                                    daysLeft <= 3 && { color: '#EF4444' },
+                                  ]}
+                                >
+                                  {daysLeft > 0 ? `${daysLeft}d left` : daysLeft === 0 ? 'Due today!' : `Overdue ${Math.abs(daysLeft)}d`}
+                                </Text>
+                              </View>
+                            )}
+                          </View>
+
+                          {/* 3 Metric Columns with Soft Subtle Background */}
+                          <View style={styles.billGrid}>
+                            <View style={styles.billCol}>
+                              <Text style={styles.billColLabel}>GENERATED</Text>
+                              <Animated.Text
+                                entering={FadeInDown.delay(120).duration(260)}
+                                style={styles.billColValue}
+                              >
+                                ₹{Number(bill.generated_amount).toLocaleString('en-IN')}
+                              </Animated.Text>
+                            </View>
+                            <View style={[styles.billCol, styles.billColBorder]}>
+                              <Text style={styles.billColLabel}>PAID</Text>
+                              <Animated.Text
+                                entering={FadeInDown.delay(160).duration(260)}
+                                style={[styles.billColValue, { color: '#15803D' }]}
+                              >
+                                ₹{Number(bill.paid_amount).toLocaleString('en-IN')}
+                              </Animated.Text>
+                            </View>
+                            <View style={[styles.billCol, styles.billColBorder]}>
+                              <Text style={styles.billColLabel}>DUE</Text>
+                              <Animated.Text
+                                entering={FadeInDown.delay(200).duration(260)}
+                                style={[
+                                  styles.billColValue,
+                                  { color: due > 0 ? '#DC2626' : '#15803D' },
+                                ]}
+                              >
+                                ₹{due > 0 ? due.toLocaleString('en-IN') : 0}
+                              </Animated.Text>
+                            </View>
+                          </View>
+
+                          <View style={styles.billFooterRow}>
+                            <Text style={styles.billDateText}>Gen: {fmtDate(genDate)}</Text>
+                            <Text
+                              style={[
+                                styles.billDateText,
+                                daysLeft <= 3 && !isPaid && { color: '#DC2626', fontWeight: '800' },
+                              ]}
+                            >
+                              Due: {fmtDate(dueDate)}
+                            </Text>
+                          </View>
+                        </TouchableOpacity>
+                      </Animated.View>
+                    );
+                  })}
+                </View>
+              )}
+            </View>
           </View>
 
           {/* ================= 4. CASH & REPAYMENT ANALYTICS (Dashboard 2.jpg Parity) ================= */}
@@ -2122,7 +2215,7 @@ export default function HomeScreen() {
               : null
           }
         />
-      </SafeAreaView>
+      </View>
     </View>
   );
 }
@@ -2130,12 +2223,30 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   screenContainer: {
     flex: 1,
+    backgroundColor: '#EFF3EE',
   },
   safeArea: {
     flex: 1,
+    backgroundColor: '#EFF3EE',
   },
   scrollContent: {
     paddingBottom: 110,
+  },
+  heroSectionWrapper: {
+    width: '100%',
+    overflow: 'hidden',
+  },
+  heroBackgroundGradient: {
+    width: '100%',
+  },
+  heroMainBody: {
+    paddingHorizontal: 18,
+    paddingTop: 4,
+  },
+  svgWaveWrapper: {
+    width: '100%',
+    marginTop: 14,
+    marginBottom: -1,
   },
   header: {
     flexDirection: 'row',
@@ -2415,7 +2526,81 @@ const styles = StyleSheet.create({
     fontFamily: CedarTypography.body,
     color: CedarColors.ink500,
   },
-  // 5. Active Billing Cycles Card with Enhanced Luxury Shadow
+  // 5. Active Billing Cycles Master Card Container (Web Parity)
+  billingCyclesMasterCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    padding: 18,
+    borderWidth: 1.5,
+    borderColor: '#DFE7DE',
+    shadowColor: '#071A12',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.08,
+    shadowRadius: 18,
+    elevation: 6,
+  },
+  billingCyclesHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  billingTitleLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  calendarIconSquare: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    backgroundColor: 'rgba(46, 148, 75, 0.12)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  billingSectionTitle: {
+    fontSize: 14,
+    fontFamily: CedarTypography.display,
+    fontWeight: '800',
+    color: CedarColors.ink900,
+  },
+  billingSectionSub: {
+    fontSize: 10,
+    fontFamily: CedarTypography.body,
+    color: CedarColors.ink500,
+    marginTop: 1,
+  },
+  billingHeaderRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  billingDivider: {
+    height: 1,
+    backgroundColor: '#EAEFEA',
+    marginBottom: 14,
+  },
+  billingItemsContainer: {
+    gap: 12,
+  },
+  billInnerCard: {
+    borderRadius: 18,
+    padding: 14,
+    borderWidth: 1.2,
+  },
+  billInnerCardPending: {
+    borderColor: '#DFE8E0',
+    backgroundColor: '#FAFCFA',
+  },
+  billInnerCardPaid: {
+    borderColor: '#BEE5C8',
+    backgroundColor: '#F7FCF8',
+  },
+  cardIdentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
   billCard: {
     borderRadius: 24,
     padding: 18,
