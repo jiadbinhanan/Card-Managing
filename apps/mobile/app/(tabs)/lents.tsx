@@ -8,60 +8,59 @@ import {
   TouchableOpacity,
   Modal,
   TextInput,
-  Alert,
-  ActivityIndicator,
   Image,
+  Dimensions,
+  StatusBar,
+  ActivityIndicator,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { CedarColors } from '@credics/core';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import { HapticButton } from '../../components/HapticButton';
-import { supabase } from '../../lib/supabase';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
+  withTiming,
+  withSequence,
+} from 'react-native-reanimated';
+import Svg, { Path } from 'react-native-svg';
 import { useRouter } from 'expo-router';
-import * as Haptics from 'expo-haptics';
+import { supabase } from '../../lib/supabase';
 import {
   Users,
   Plus,
   ArrowUpRight,
   ArrowDownLeft,
   ChevronDown,
-  ChevronRight,
   X,
   CreditCard,
   Wallet,
   Clock,
-  CheckCircle2,
-  Calendar,
   Layers,
-  Phone,
   Banknote,
-  Coins,
-  ShieldCheck,
   Check,
   User,
+  Search,
 } from 'lucide-react-native';
 
-interface Borrower {
-  id: string;
-  name: string;
-  phone?: string | null;
-  created_at: string;
-}
+import { BorrowerCard, BorrowerSummary } from '../../components/lents/BorrowerCard';
+import {
+  BorrowerLedgerDrawer,
+  LedgerEntry,
+} from '../../components/lents/BorrowerLedgerDrawer';
+import {
+  LentGiveModal,
+  LentGiveSubmitParams,
+  CardData,
+} from '../../components/lents/LentGiveModal';
+import {
+  LentCollectModal,
+  LentCollectSubmitParams,
+} from '../../components/lents/LentCollectModal';
+import { AddBorrowerModal } from '../../components/lents/AddBorrowerModal';
+import { EditBorrowerModal } from '../../components/lents/EditBorrowerModal';
+import { TherapeuticSuccessModal } from '../../components/settlements/TherapeuticSuccessModal';
 
-interface BorrowerSummary extends Borrower {
-  netDue: number;
-  totalGiven: number;
-  lastActivity: string;
-}
-
-interface CardData {
-  id: string;
-  card_name: string;
-  last_4_digits: string;
-  is_primary: boolean;
-  parent_card_id?: string;
-  total_limit?: number;
-}
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 interface Profile {
   id: string;
@@ -70,101 +69,178 @@ interface Profile {
   phone?: string;
 }
 
-interface LedgerEntry {
+interface RawBorrower {
   id: string;
-  borrower_id: string;
-  entry_type: 'given' | 'collected';
-  amount: number;
-  transaction_date: string;
-  source_type?: 'cash_on_hand' | 'credit_card' | 'pocket' | null;
-  card_id?: string | null;
-  remarks?: string | null;
-  recorded_by?: string | null;
-  created_at?: string;
-  ledgerSource: 'card' | 'pocket';
+  name: string;
+  phone?: string | null;
+  created_at: string;
 }
+
+type TabType = 'combined' | 'card' | 'pocket';
 
 export default function LentsScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
+
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [activeTab, setActiveTab] = useState<'combined' | 'card' | 'pocket'>('combined');
+  const [activeTab, setActiveTab] = useState<TabType>('combined');
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Vault Selection
   const [selectedVaultCardId, setSelectedVaultCardId] = useState<string>('all');
   const [isCardDropdownOpen, setIsCardDropdownOpen] = useState(false);
 
-  // Data States
-  const [borrowers, setBorrowers] = useState<BorrowerSummary[]>([]);
+  // Core Data States
+  const [rawBorrowers, setRawBorrowers] = useState<RawBorrower[]>([]);
+  const [cardEntries, setCardEntries] = useState<any[]>([]);
+  const [pocketEntries, setPocketEntries] = useState<any[]>([]);
   const [cards, setCards] = useState<CardData[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [currentUser, setCurrentUser] = useState<Profile | null>(null);
   const [cardAvailableMap, setCardAvailableMap] = useState<Record<string, number>>({});
   const [userCardCashMap, setUserCardCashMap] = useState<Record<string, Record<string, number>>>({});
 
-  // Borrower Profile Panel Modal
+  // Borrower Profile Statement Drawer
   const [selectedBorrower, setSelectedBorrower] = useState<BorrowerSummary | null>(null);
-  const [isBorrowerPanelOpen, setIsBorrowerPanelOpen] = useState(false);
+  const [isLedgerDrawerOpen, setIsLedgerDrawerOpen] = useState(false);
   const [borrowerLedger, setBorrowerLedger] = useState<LedgerEntry[]>([]);
   const [isLedgerLoading, setIsLedgerLoading] = useState(false);
 
-  // Give Loan Modal
+  // Action Drawers
   const [isGiveModalOpen, setIsGiveModalOpen] = useState(false);
-  const [giveAmount, setGiveAmount] = useState('');
-  const [giveDate, setGiveDate] = useState('');
-  const [giveSource, setGiveSource] = useState<'credit_card' | 'cash_on_hand' | 'pocket'>('cash_on_hand');
-  const [giveCardId, setGiveCardId] = useState('');
-  const [giveRemarks, setGiveRemarks] = useState('');
-  const [isSavingGive, setIsSavingGive] = useState(false);
-
-  // Recovery / Return Modal
   const [isCollectModalOpen, setIsCollectModalOpen] = useState(false);
-  const [collectAmount, setCollectAmount] = useState('');
-  const [collectDate, setCollectDate] = useState('');
-  const [collectTargetCardId, setCollectTargetCardId] = useState('');
-  const [collectRemarks, setCollectRemarks] = useState('');
-  const [isSavingCollect, setIsSavingCollect] = useState(false);
-
-  // Add Borrower Modal
   const [isAddBorrowerOpen, setIsAddBorrowerOpen] = useState(false);
-  const [newBorrowerName, setNewBorrowerName] = useState('');
-  const [newBorrowerPhone, setNewBorrowerPhone] = useState('');
-  const [isSavingBorrower, setIsSavingBorrower] = useState(false);
+  const [isEditBorrowerOpen, setIsEditBorrowerOpen] = useState(false);
 
+  // Therapeutic Celebration
+  const [successModalVisible, setSuccessModalVisible] = useState(false);
+  const [successTitle, setSuccessTitle] = useState('Loan Recorded');
+  const [successSubtitle, setSuccessSubtitle] = useState('');
+  const [successAmount, setSuccessAmount] = useState<number | undefined>(undefined);
+
+  // 120Hz Animation Values
+  const cardDropdownScale = useSharedValue(1);
+  const fabScale = useSharedValue(1);
+  const heroCardScale = useSharedValue(1);
+  const heroCardOpacity = useSharedValue(1);
+
+  const cardDropdownAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: cardDropdownScale.value }],
+  }));
+
+  const fabAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: fabScale.value }],
+  }));
+
+  const heroAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: heroCardScale.value }],
+    opacity: heroCardOpacity.value,
+  }));
+
+  // Tab switch animation
+  useEffect(() => {
+    heroCardScale.value = withSequence(
+      withTiming(0.96, { duration: 90 }),
+      withSpring(1, { damping: 14, stiffness: 220 })
+    );
+    heroCardOpacity.value = withSequence(
+      withTiming(0.65, { duration: 80 }),
+      withTiming(1, { duration: 120 })
+    );
+  }, [activeTab]);
+
+  const handleCardDropdownPress = () => {
+    cardDropdownScale.value = withSequence(
+      withTiming(0.92, { duration: 80 }),
+      withSpring(1, { damping: 14 })
+    );
+    setIsCardDropdownOpen(true);
+  };
+
+  const handleFabPress = () => {
+    fabScale.value = withSequence(
+      withTiming(0.88, { duration: 70 }),
+      withSpring(1, { damping: 14 })
+    );
+    setIsAddBorrowerOpen(true);
+  };
+
+  // Helper for available cash on hand
+  const getUserCashForCard = useCallback(
+    (userId: string, cardId: string): number => {
+      const userMap = userCardCashMap[userId] || {};
+      if (!cardId) return Object.values(userMap).reduce((s, v) => s + v, 0);
+      const card = cards.find((c) => c.id === cardId);
+      const primaryId = card?.is_primary ? card.id : card?.parent_card_id;
+      const familyIds = cards
+        .filter((c) => c.id === primaryId || c.parent_card_id === primaryId)
+        .map((c) => c.id);
+      return familyIds.reduce((s, cid) => s + (userMap[cid] || 0), 0);
+    },
+    [userCardCashMap, cards]
+  );
+
+  const getCardName = useCallback(
+    (cardId?: string | null) => {
+      const c = cards.find((card) => card.id === cardId);
+      return c ? `${c.card_name} (**${c.last_4_digits})` : 'Card';
+    },
+    [cards]
+  );
+
+  const getRecorderName = useCallback(
+    (userId?: string | null) => {
+      return profiles.find((p) => p.id === userId)?.name || 'Unknown';
+    },
+    [profiles]
+  );
+
+  // Fetch Core Data
   const fetchData = useCallback(async () => {
     try {
       const { data: authData } = await supabase.auth.getSession();
       const currentAuthUser = authData?.session?.user;
 
-      const [bRes, cRes, pRes, cohRes, cardLedgerRes, pocketLedgerRes] = await Promise.all([
-        supabase.from('borrowers').select('*').order('name'),
-        supabase.from('cards').select('*').order('is_primary', { ascending: false }),
-        supabase.from('profiles').select('*').order('name'),
-        supabase.from('cash_on_hand').select('*'),
-        supabase.from('card_lent_ledger').select('*').order('transaction_date', { ascending: false }),
-        supabase.from('pocket_lent_ledger').select('*').order('transaction_date', { ascending: false }),
-      ]);
+      const [bRes, cRes, pRes, cohRes, cardLedgerRes, pocketLedgerRes, txsRes, spendsRes] =
+        await Promise.all([
+          supabase.from('borrowers').select('*').order('name'),
+          supabase.from('cards').select('*').order('is_primary', { ascending: false }),
+          supabase.from('profiles').select('*').order('name'),
+          supabase.from('cash_on_hand').select('*'),
+          supabase.from('card_lent_ledger').select('*').order('transaction_date', { ascending: false }),
+          supabase.from('pocket_lent_ledger').select('*').order('transaction_date', { ascending: false }),
+          supabase.from('card_transactions').select('amount, type, card_id, status, qr_id, remarks'),
+          supabase.from('spends').select('amount, payment_method, card_id'),
+        ]);
 
-      const rawBorrowers: Borrower[] = bRes.data || [];
+      const rawB: RawBorrower[] = bRes.data || [];
       const cardsData: CardData[] = cRes.data || [];
       const profilesData: Profile[] = pRes.data || [];
       const coh = cohRes.data || [];
-      const cardEntries = cardLedgerRes.data || [];
-      const pocketEntries = pocketLedgerRes.data || [];
+      const cardEntriesData = cardLedgerRes.data || [];
+      const pocketEntriesData = pocketLedgerRes.data || [];
+      const txsData = txsRes.data || [];
+      const spendsData = spendsRes.data || [];
 
+      setRawBorrowers(rawB);
       setCards(cardsData);
       setProfiles(profilesData);
+      setCardEntries(cardEntriesData);
+      setPocketEntries(pocketEntriesData);
 
+      let foundUser: Profile | null = null;
       if (currentAuthUser) {
-        const found = profilesData.find((p) => p.id === currentAuthUser.id);
-        if (found) setCurrentUser(found);
-      } else if (profilesData.length > 0) {
-        setCurrentUser(profilesData[0]);
+        foundUser = profilesData.find((p) => p.id === currentAuthUser.id) || null;
       }
+      if (!foundUser && profilesData.length > 0) {
+        foundUser = profilesData[0];
+      }
+      setCurrentUser(foundUser);
 
-      // Calculate Cash Map
+      // Cash On Hand Map
       const cardCashMap: Record<string, Record<string, number>> = {};
-      coh.forEach((c) => {
+      coh.forEach((c: any) => {
         if (c.user_id && c.card_id) {
           if (!cardCashMap[c.user_id]) cardCashMap[c.user_id] = {};
           cardCashMap[c.user_id][c.card_id] = Number(c.current_balance || 0);
@@ -172,94 +248,85 @@ export default function LentsScreen() {
       });
       setUserCardCashMap(cardCashMap);
 
-      // Build Summaries
-      const summaries: BorrowerSummary[] = rawBorrowers.map((b) => {
-        let cardGiven = 0;
-        let cardCollected = 0;
-        let pocketGiven = 0;
-        let pocketCollected = 0;
-        let latestDate = b.created_at;
+      // Card Available Map
+      const availableMap: Record<string, number> = {};
+      cardsData
+        .filter((c) => c.is_primary)
+        .forEach((primaryCard) => {
+          const familyCardIds = cardsData
+            .filter((c) => c.id === primaryCard.id || c.parent_card_id === primaryCard.id)
+            .map((c) => c.id);
 
-        // Card Ledger entries
-        cardEntries
-          .filter((e) => e.borrower_id === b.id)
-          .forEach((e) => {
-            // Apply vault filter if active
-            if (selectedVaultCardId !== 'all' && e.card_id !== selectedVaultCardId) return;
+          const withdrawals =
+            txsData
+              .filter((t: any) => {
+                if (t.type !== 'withdrawal') return false;
+                if (!t.card_id || !familyCardIds.includes(t.card_id)) return false;
+                const isRotation =
+                  t.qr_id || (t.remarks || '').toLowerCase().includes('rotation');
+                return (
+                  isRotation ||
+                  t.status === 'pending_settlement' ||
+                  t.status === 'partially_settled'
+                );
+              })
+              .reduce((sum: number, t: any) => sum + Number(t.amount || 0), 0) || 0;
 
-            const isGiven = e.entry_type === 'given' || e.entry_type === 'lent';
-            const isCollect = e.entry_type === 'collected' || e.entry_type === 'return';
-            if (isGiven) cardGiven += Number(e.amount || 0);
-            if (isCollect) cardCollected += Number(e.amount || 0);
+          const billPayments =
+            txsData
+              .filter(
+                (t: any) =>
+                  t.type === 'bill_payment' && t.card_id && familyCardIds.includes(t.card_id)
+              )
+              .reduce((sum: number, t: any) => sum + Number(t.amount || 0), 0) || 0;
 
-            if (e.transaction_date && e.transaction_date > latestDate) {
-              latestDate = e.transaction_date;
-            }
+          const ccSpends =
+            spendsData
+              .filter(
+                (s: any) =>
+                  s.payment_method === 'credit_card' &&
+                  s.card_id &&
+                  familyCardIds.includes(s.card_id)
+              )
+              .reduce((sum: number, s: any) => sum + Number(s.amount || 0), 0) || 0;
+
+          const available =
+            Number(primaryCard.total_limit || 0) - withdrawals - ccSpends + billPayments;
+          familyCardIds.forEach((id) => {
+            availableMap[id] = available;
           });
-
-        // Pocket Ledger entries
-        pocketEntries
-          .filter((e) => e.borrower_id === b.id)
-          .forEach((e) => {
-            const isGiven = e.entry_type === 'given' || e.entry_type === 'lent';
-            const isCollect = e.entry_type === 'collected' || e.entry_type === 'return';
-            if (isGiven) pocketGiven += Number(e.amount || 0);
-            if (isCollect) pocketCollected += Number(e.amount || 0);
-
-            if (e.transaction_date && e.transaction_date > latestDate) {
-              latestDate = e.transaction_date;
-            }
-          });
-
-        let given = 0;
-        let collected = 0;
-
-        if (activeTab === 'card') {
-          given = cardGiven;
-          collected = cardCollected;
-        } else if (activeTab === 'pocket') {
-          given = pocketGiven;
-          collected = pocketCollected;
-        } else {
-          // Combined
-          given = cardGiven + pocketGiven;
-          collected = cardCollected + pocketCollected;
-        }
-
-        const netDue = Math.max(0, given - collected);
-
-        return {
-          ...b,
-          netDue,
-          totalGiven: given,
-          lastActivity: latestDate
-            ? new Date(latestDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
-            : 'Recent',
-        };
-      });
-
-      // Sort by netDue desc, then totalGiven desc
-      summaries.sort((a, b) => b.netDue - a.netDue || b.totalGiven - a.totalGiven);
-      setBorrowers(summaries);
-
-      if (cardsData.length > 0 && !giveCardId) setGiveCardId(cardsData[0].id);
-      if (cardsData.length > 0 && !collectTargetCardId) setCollectTargetCardId(cardsData[0].id);
+        });
+      setCardAvailableMap(availableMap);
     } catch (err) {
       console.error('Error fetching lents data:', err);
     } finally {
       setIsLoading(false);
       setRefreshing(false);
     }
-  }, [activeTab, selectedVaultCardId, giveCardId, collectTargetCardId]);
+  }, []);
 
   useEffect(() => {
     fetchData();
 
+    // Realtime listeners
     const channel = supabase
-      .channel('mobile-lents-live')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'card_lent_ledger' }, () => fetchData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'pocket_lent_ledger' }, () => fetchData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'borrowers' }, () => fetchData())
+      .channel('lents_mobile_realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'card_lent_ledger' },
+        () => fetchData()
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'pocket_lent_ledger' },
+        () => fetchData()
+      )
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'borrowers' }, () =>
+        fetchData()
+      )
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'cash_on_hand' }, () =>
+        fetchData()
+      )
       .subscribe();
 
     return () => {
@@ -272,308 +339,547 @@ export default function LentsScreen() {
     fetchData();
   };
 
-  // Total Outstanding Due
-  const totalOutstanding = useMemo(() => {
-    return borrowers.reduce((sum, b) => sum + b.netDue, 0);
-  }, [borrowers]);
+  // Fetch individual borrower's ledger statement
+  const fetchBorrowerLedger = useCallback(
+    async (borrowerId: string) => {
+      setIsLedgerLoading(true);
+      try {
+        let entriesList: LedgerEntry[] = [];
 
-  // Load Deep Borrower Ledger
-  const openBorrowerPanel = async (borrower: BorrowerSummary) => {
-    setSelectedBorrower(borrower);
-    setIsBorrowerPanelOpen(true);
-    setIsLedgerLoading(true);
+        if (activeTab === 'combined') {
+          const [{ data: cRows }, { data: pRows }] = await Promise.all([
+            supabase
+              .from('card_lent_ledger')
+              .select('*')
+              .eq('borrower_id', borrowerId)
+              .order('transaction_date', { ascending: false }),
+            currentUser
+              ? supabase
+                  .from('pocket_lent_ledger')
+                  .select('*')
+                  .eq('borrower_id', borrowerId)
+                  .eq('recorded_by', currentUser.id)
+                  .order('transaction_date', { ascending: false })
+              : Promise.resolve({ data: [] }),
+          ]);
 
-    try {
-      const [cardRes, pocketRes] = await Promise.all([
-        supabase
-          .from('card_lent_ledger')
-          .select('*')
-          .eq('borrower_id', borrower.id)
-          .order('transaction_date', { ascending: false }),
-        supabase
-          .from('pocket_lent_ledger')
-          .select('*')
-          .eq('borrower_id', borrower.id)
-          .order('transaction_date', { ascending: false }),
-      ]);
+          const cardWithSource = (cRows || []).map((r) => ({
+            ...r,
+            ledgerSource: 'card' as const,
+          }));
+          const pocketWithSource = (pRows || []).map((r) => ({
+            ...r,
+            ledgerSource: 'pocket' as const,
+          }));
 
-      const cEntries: LedgerEntry[] = (cardRes.data || []).map((e: any) => ({
-        ...e,
-        entry_type: e.entry_type === 'lent' ? 'given' : e.entry_type === 'return' ? 'collected' : e.entry_type,
-        ledgerSource: 'card',
-      }));
+          entriesList = [...cardWithSource, ...pocketWithSource].sort((a, b) => {
+            const d = (b.transaction_date || '').localeCompare(a.transaction_date || '');
+            if (d !== 0) return d;
+            return (b.created_at || '').localeCompare(a.created_at || '');
+          });
+        } else if (activeTab === 'card') {
+          const { data: cRows } = await supabase
+            .from('card_lent_ledger')
+            .select('*')
+            .eq('borrower_id', borrowerId)
+            .order('transaction_date', { ascending: false });
 
-      const pEntries: LedgerEntry[] = (pocketRes.data || []).map((e: any) => ({
-        ...e,
-        entry_type: e.entry_type === 'lent' ? 'given' : e.entry_type === 'return' ? 'collected' : e.entry_type,
-        source_type: 'pocket',
-        ledgerSource: 'pocket',
-      }));
+          entriesList = (cRows || []).map((r) => ({
+            ...r,
+            ledgerSource: 'card' as const,
+          }));
+        } else {
+          // pocket
+          let q = supabase
+            .from('pocket_lent_ledger')
+            .select('*')
+            .eq('borrower_id', borrowerId);
+          if (currentUser) {
+            q = q.eq('recorded_by', currentUser.id);
+          }
+          const { data: pRows } = await q.order('transaction_date', { ascending: false });
 
-      let allEntries = [...cEntries, ...pEntries];
-      if (activeTab === 'card') allEntries = cEntries;
-      if (activeTab === 'pocket') allEntries = pEntries;
+          entriesList = (pRows || []).map((r) => ({
+            ...r,
+            ledgerSource: 'pocket' as const,
+          }));
+        }
 
-      allEntries.sort(
-        (a, b) => new Date(b.transaction_date).getTime() - new Date(a.transaction_date).getTime()
-      );
+        setBorrowerLedger(entriesList);
+      } catch (err) {
+        console.error('Error fetching borrower ledger:', err);
+      } finally {
+        setIsLedgerLoading(false);
+      }
+    },
+    [activeTab, currentUser]
+  );
 
-      setBorrowerLedger(allEntries);
-    } catch (err) {
-      console.error('Error fetching borrower ledger:', err);
-    } finally {
-      setIsLedgerLoading(false);
-    }
+  // Compute borrower summaries according to active tab and selected vault card
+  const borrowerSummaries: BorrowerSummary[] = useMemo(() => {
+    return rawBorrowers
+      .map((b) => {
+        let given = 0;
+        let collected = 0;
+        let latestDate = b.created_at || '';
+
+        // Card Ledger
+        if (activeTab === 'combined' || activeTab === 'card') {
+          cardEntries
+            .filter((e) => e.borrower_id === b.id)
+            .forEach((e) => {
+              if (selectedVaultCardId !== 'all' && e.card_id !== selectedVaultCardId) return;
+
+              const isGiven = e.entry_type === 'given' || e.entry_type === 'lent';
+              const isCollect = e.entry_type === 'collected' || e.entry_type === 'return';
+              if (isGiven) given += Number(e.amount || 0);
+              if (isCollect) collected += Number(e.amount || 0);
+
+              if (e.transaction_date && e.transaction_date > latestDate) {
+                latestDate = e.transaction_date;
+              }
+            });
+        }
+
+        // Pocket Ledger (only recorded by currentUser)
+        if (activeTab === 'combined' || activeTab === 'pocket') {
+          pocketEntries
+            .filter((e) => e.borrower_id === b.id)
+            .forEach((e) => {
+              if (currentUser && e.recorded_by && e.recorded_by !== currentUser.id) return;
+
+              const isGiven = e.entry_type === 'given' || e.entry_type === 'lent';
+              const isCollect = e.entry_type === 'collected' || e.entry_type === 'return';
+              if (isGiven) given += Number(e.amount || 0);
+              if (isCollect) collected += Number(e.amount || 0);
+
+              if (e.transaction_date && e.transaction_date > latestDate) {
+                latestDate = e.transaction_date;
+              }
+            });
+        }
+
+        const netDue = given - collected;
+        return {
+          id: b.id,
+          name: b.name,
+          phone: b.phone,
+          netDue,
+          totalGiven: given,
+          lastActivity: latestDate
+            ? new Date(latestDate).toLocaleDateString('en-GB', {
+                day: '2-digit',
+                month: 'short',
+              })
+            : 'Recent',
+        };
+      })
+      .filter((b) => b.totalGiven > 0 || b.netDue !== 0) // only active ledger profiles
+      .sort((a, b) => b.netDue - a.netDue);
+  }, [
+    rawBorrowers,
+    cardEntries,
+    pocketEntries,
+    activeTab,
+    selectedVaultCardId,
+    currentUser,
+  ]);
+
+  // Filtered by Search query
+  const filteredBorrowers = useMemo(() => {
+    if (!searchQuery.trim()) return borrowerSummaries;
+    const q = searchQuery.toLowerCase().trim();
+    return borrowerSummaries.filter(
+      (b) =>
+        b.name.toLowerCase().includes(q) ||
+        (b.phone && b.phone.toLowerCase().includes(q))
+    );
+  }, [borrowerSummaries, searchQuery]);
+
+  // Aggregate Metrics for Hero Card
+  const totalNetDue = useMemo(() => {
+    return borrowerSummaries.reduce((sum, b) => sum + Math.max(0, b.netDue), 0);
+  }, [borrowerSummaries]);
+
+  const totalGivenAll = useMemo(() => {
+    return borrowerSummaries.reduce((sum, b) => sum + b.totalGiven, 0);
+  }, [borrowerSummaries]);
+
+  const handleBorrowerPress = (b: BorrowerSummary) => {
+    setSelectedBorrower(b);
+    setIsLedgerDrawerOpen(true);
+    fetchBorrowerLedger(b.id);
   };
 
-  // Handle Give Loan
-  const handleConfirmGiveLoan = async () => {
-    if (!selectedBorrower || !giveAmount || Number(giveAmount) <= 0) {
-      Alert.alert('Required', 'Please enter a valid amount.');
-      return;
-    }
+  // ================= SAVE: YOU GAVE LOAN =================
+  const handleSaveGiveLoan = async ({
+    amount,
+    date,
+    sourceType,
+    cardId,
+    remarks,
+  }: LentGiveSubmitParams) => {
+    if (!currentUser || !selectedBorrower) return;
 
-    setIsSavingGive(true);
+    let linkedCashLedgerId: string | null = null;
+    let linkedCardTransactionId: string | null = null;
 
-    try {
-      const numAmt = Number(giveAmount);
-      const finalDate = giveDate || new Date().toISOString().slice(0, 10);
-      const actingUserId = currentUser?.id;
+    const isPocket = sourceType === 'pocket';
+    const tableName = isPocket ? 'pocket_lent_ledger' : 'card_lent_ledger';
 
-      if (giveSource === 'pocket' || activeTab === 'pocket') {
-        // Pocket Loan
-        await supabase.from('pocket_lent_ledger').insert({
-          borrower_id: selectedBorrower.id,
-          user_id: actingUserId,
-          amount: numAmt,
-          entry_type: 'given',
-          transaction_date: finalDate,
-          remarks: giveRemarks || 'Pocket Loan Given',
-        });
-      } else {
-        // Card Limit or Cash on Hand
-        const { data: lentRow } = await supabase
-          .from('card_lent_ledger')
+    if (!isPocket && cardId) {
+      if (sourceType === 'cash_on_hand') {
+        const { data: cohRow, error: cohErr } = await supabase
+          .from('cash_on_hand_ledger')
           .insert({
-            borrower_id: selectedBorrower.id,
-            card_id: giveCardId,
-            amount: numAmt,
-            entry_type: 'given',
-            source_type: giveSource,
-            transaction_date: finalDate,
-            recorded_by: actingUserId,
-            remarks: giveRemarks || `Loan given from ${giveSource === 'cash_on_hand' ? 'Cash' : 'Card'}`,
+            user_id: currentUser.id,
+            card_id: cardId,
+            amount,
+            transaction_type: 'debit',
+            remarks: `Lent given to ${selectedBorrower.name}`,
+            transaction_date: new Date().toISOString(),
           })
           .select('id')
           .single();
+        if (cohErr) throw cohErr;
+        linkedCashLedgerId = cohRow?.id || null;
+      } else if (sourceType === 'credit_card') {
+        const { data: txRow, error: txErr } = await supabase
+          .from('card_transactions')
+          .insert({
+            card_id: cardId,
+            amount,
+            type: 'withdrawal',
+            status: 'pending_settlement',
+            transaction_date: date,
+            recorded_by: currentUser.id,
+            remarks: `Lent given to ${selectedBorrower.name}`,
+          })
+          .select('id')
+          .single();
+        if (txErr) throw txErr;
+        linkedCardTransactionId = txRow?.id || null;
+      }
+    }
 
-        if (giveSource === 'cash_on_hand') {
-          // Debit from cash on hand ledger
-          await supabase.from('cash_on_hand_ledger').insert({
-            user_id: actingUserId,
-            card_id: giveCardId,
-            amount: numAmt,
-            transaction_type: 'debit',
-            remarks: `Lent given to ${selectedBorrower.name} ${giveRemarks ? '- ' + giveRemarks : ''}`,
+    const { error: insertErr } = await supabase.from(tableName).insert({
+      borrower_id: selectedBorrower.id,
+      entry_type: 'given',
+      amount,
+      transaction_date: date,
+      ...(!isPocket
+        ? {
+            source_type: sourceType,
+            card_id: cardId,
+            linked_cash_ledger_id: linkedCashLedgerId,
+            linked_card_transaction_id: linkedCardTransactionId,
+          }
+        : {}),
+      remarks: remarks || null,
+      recorded_by: currentUser.id,
+    });
+    if (insertErr) throw insertErr;
+
+    // Celebration modal
+    setSuccessTitle('Loan Given Recorded');
+    setSuccessSubtitle(`Advanced ₹${amount.toLocaleString('en-IN')} to ${selectedBorrower.name}`);
+    setSuccessAmount(amount);
+    setSuccessModalVisible(true);
+
+    await fetchData();
+    await fetchBorrowerLedger(selectedBorrower.id);
+  };
+
+  // ================= SAVE: YOU GOT PAYMENT =================
+  const handleSaveCollectLoan = async ({
+    amount,
+    date,
+    sourceType,
+    cardId,
+    remarks,
+  }: LentCollectSubmitParams) => {
+    if (!currentUser || !selectedBorrower) return;
+
+    let linkedCashLedgerId: string | null = null;
+    let linkedCardTransactionId: string | null = null;
+    let linkedBillingCycleId: string | null = null;
+
+    const isPocket = sourceType === 'pocket';
+    const tableName = isPocket ? 'pocket_lent_ledger' : 'card_lent_ledger';
+
+    if (!isPocket && cardId) {
+      if (sourceType === 'cash_on_hand') {
+        const { data: cohRow, error: cohErr } = await supabase
+          .from('cash_on_hand_ledger')
+          .insert({
+            user_id: currentUser.id,
+            card_id: cardId,
+            amount,
+            transaction_type: 'credit',
+            remarks: `Collected lent from ${selectedBorrower.name}`,
             transaction_date: new Date().toISOString(),
-          });
+          })
+          .select('id')
+          .single();
+        if (cohErr) throw cohErr;
+        linkedCashLedgerId = cohRow?.id || null;
+      } else if (sourceType === 'credit_card') {
+        // Bill paydown check
+        const now = new Date();
+        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toLocaleDateString(
+          'en-CA',
+          { timeZone: 'Asia/Kolkata' }
+        );
+        const endOfMonth = new Date(
+          now.getFullYear(),
+          now.getMonth() + 1,
+          0
+        ).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
+        const { data: cycles } = await supabase
+          .from('billing_cycles')
+          .select('*')
+          .eq('card_id', cardId)
+          .gte('billing_month', startOfMonth)
+          .lte('billing_month', endOfMonth);
+
+        if (cycles && cycles.length > 0) {
+          const cycle = cycles[0];
+          const generatedAmt = Number(cycle.generated_amount || 0);
+          const paidAmt = Number(cycle.paid_amount || 0);
+          if (paidAmt < generatedAmt) {
+            const newPaidAmt = paidAmt + amount;
+            let cycleStatus = cycle.status;
+            if (newPaidAmt >= generatedAmt) cycleStatus = 'paid';
+            else if (newPaidAmt > 0) cycleStatus = 'partially_paid';
+            await supabase
+              .from('billing_cycles')
+              .update({ paid_amount: newPaidAmt, status: cycleStatus })
+              .eq('id', cycle.id);
+            linkedBillingCycleId = cycle.id;
+          }
         }
-      }
 
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setIsGiveModalOpen(false);
-      setGiveAmount('');
-      setGiveRemarks('');
-      if (selectedBorrower) openBorrowerPanel(selectedBorrower);
-      fetchData();
-    } catch (err: any) {
-      console.error('Error giving loan:', err);
-      Alert.alert('Error', err?.message || 'Failed to record loan.');
-    } finally {
-      setIsSavingGive(false);
+        const { data: txRow, error: txErr } = await supabase
+          .from('card_transactions')
+          .insert({
+            card_id: cardId,
+            amount,
+            transaction_date: date,
+            type: 'bill_payment',
+            status: 'settled',
+            recorded_by: currentUser.id,
+            payment_method: 'lent_recovery',
+            remarks: `Collected lent from ${selectedBorrower.name}`,
+            billing_cycle_id: linkedBillingCycleId,
+          })
+          .select('id')
+          .single();
+        if (txErr) throw txErr;
+        linkedCardTransactionId = txRow?.id || null;
+      }
     }
+
+    const { error: insertErr } = await supabase.from(tableName).insert({
+      borrower_id: selectedBorrower.id,
+      entry_type: 'collected',
+      amount,
+      transaction_date: date,
+      ...(!isPocket
+        ? {
+            source_type: sourceType,
+            card_id: cardId,
+            linked_cash_ledger_id: linkedCashLedgerId,
+            linked_card_transaction_id: linkedCardTransactionId,
+            linked_billing_cycle_id: linkedBillingCycleId,
+            billing_cycle_delta_amount: linkedBillingCycleId ? amount : null,
+          }
+        : {}),
+      remarks: remarks || null,
+      recorded_by: currentUser.id,
+    });
+    if (insertErr) throw insertErr;
+
+    // Celebration modal
+    setSuccessTitle('Payment Recovery Recorded');
+    setSuccessSubtitle(`Received ₹${amount.toLocaleString('en-IN')} from ${selectedBorrower.name}`);
+    setSuccessAmount(amount);
+    setSuccessModalVisible(true);
+
+    await fetchData();
+    await fetchBorrowerLedger(selectedBorrower.id);
   };
 
-  // Handle Collect Loan
-  const handleConfirmCollect = async () => {
-    if (!selectedBorrower || !collectAmount || Number(collectAmount) <= 0) {
-      Alert.alert('Required', 'Please enter a valid amount.');
-      return;
-    }
-
-    setIsSavingCollect(true);
-
-    try {
-      const numAmt = Number(collectAmount);
-      const finalDate = collectDate || new Date().toISOString().slice(0, 10);
-      const actingUserId = currentUser?.id;
-
-      if (activeTab === 'pocket') {
-        await supabase.from('pocket_lent_ledger').insert({
-          borrower_id: selectedBorrower.id,
-          user_id: actingUserId,
-          amount: numAmt,
-          entry_type: 'collected',
-          transaction_date: finalDate,
-          remarks: collectRemarks || 'Loan Recovery Received',
-        });
-      } else {
-        await supabase.from('card_lent_ledger').insert({
-          borrower_id: selectedBorrower.id,
-          card_id: collectTargetCardId,
-          amount: numAmt,
-          entry_type: 'collected',
-          source_type: 'cash_on_hand',
-          transaction_date: finalDate,
-          recorded_by: actingUserId,
-          remarks: collectRemarks || `Loan collected from ${selectedBorrower.name}`,
-        });
-
-        // Credit to cash on hand ledger
-        await supabase.from('cash_on_hand_ledger').insert({
-          user_id: actingUserId,
-          card_id: collectTargetCardId,
-          amount: numAmt,
-          transaction_type: 'credit',
-          remarks: `Loan recovery from ${selectedBorrower.name} ${collectRemarks ? '- ' + collectRemarks : ''}`,
-          transaction_date: new Date().toISOString(),
-        });
-      }
-
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setIsCollectModalOpen(false);
-      setCollectAmount('');
-      setCollectRemarks('');
-      if (selectedBorrower) openBorrowerPanel(selectedBorrower);
-      fetchData();
-    } catch (err: any) {
-      console.error('Error recording collection:', err);
-      Alert.alert('Error', err?.message || 'Failed to record collection.');
-    } finally {
-      setIsSavingCollect(false);
-    }
+  // Add Borrower
+  const handleAddBorrower = async ({ name, phone }: { name: string; phone?: string }) => {
+    const { error } = await supabase.from('borrowers').insert({
+      name,
+      phone: phone || null,
+    });
+    if (error) throw error;
+    await fetchData();
   };
 
-  // Handle Add New Borrower
-  const handleAddNewBorrower = async () => {
-    if (!newBorrowerName.trim()) {
-      Alert.alert('Required', 'Please enter a borrower name.');
-      return;
+  // Update Borrower
+  const handleUpdateBorrower = async ({
+    id,
+    name,
+    phone,
+  }: {
+    id: string;
+    name: string;
+    phone?: string;
+  }) => {
+    const { error } = await supabase
+      .from('borrowers')
+      .update({ name, phone: phone || null })
+      .eq('id', id);
+    if (error) throw error;
+
+    if (selectedBorrower?.id === id) {
+      setSelectedBorrower((prev) =>
+        prev ? { ...prev, name, phone: phone || null } : null
+      );
     }
+    await fetchData();
+  };
 
-    setIsSavingBorrower(true);
-
-    try {
-      await supabase.from('borrowers').insert({
-        name: newBorrowerName.trim(),
-        phone: newBorrowerPhone.trim() || null,
-      });
-
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setIsAddBorrowerOpen(false);
-      setNewBorrowerName('');
-      setNewBorrowerPhone('');
-      fetchData();
-    } catch (err: any) {
-      console.error('Error adding borrower:', err);
-      Alert.alert('Error', err?.message || 'Failed to create borrower.');
-    } finally {
-      setIsSavingBorrower(false);
-    }
+  // Delete Borrower
+  const handleDeleteBorrower = async (borrowerId: string) => {
+    const { error } = await supabase.from('borrowers').delete().eq('id', borrowerId);
+    if (error) throw error;
+    setIsLedgerDrawerOpen(false);
+    setSelectedBorrower(null);
+    await fetchData();
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      {/* ================= 1. HEADER ================= */}
-      <View style={styles.header}>
-        <View style={styles.headerLeft}>
+    <View style={styles.screenContainer}>
+      <StatusBar barStyle="light-content" backgroundColor="#03180F" translucent />
+
+      {/* ================= 1. LUXURY GREEN GRADIENT HEADER ================= */}
+      <LinearGradient
+        colors={['#03180F', '#072C1C', '#0B3F28', '#062618']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 0, y: 1 }}
+        style={[styles.headerHeroContainer, { paddingTop: insets.top + 8 }]}
+      >
+        <View style={styles.headerTopRow}>
           <TouchableOpacity
-            style={styles.avatarButton}
+            style={styles.userProfileBtn}
             onPress={() => router.push('/settings')}
             activeOpacity={0.8}
           >
-            {currentUser?.avatar_url ? (
-              <Image source={{ uri: currentUser.avatar_url }} style={styles.avatarImg} />
-            ) : (
-              <View style={styles.avatarPlaceholder}>
-                <Text style={styles.avatarInitial}>{currentUser?.name?.[0] || 'U'}</Text>
+            <View style={styles.avatarBorder}>
+              {currentUser?.avatar_url ? (
+                <Image source={{ uri: currentUser.avatar_url }} style={styles.avatarImg} />
+              ) : (
+                <View style={styles.avatarPlaceholder}>
+                  <Text style={styles.avatarText}>
+                    {currentUser?.name?.charAt(0).toUpperCase() || 'U'}
+                  </Text>
+                </View>
+              )}
+            </View>
+            <View style={styles.userTextCol}>
+              <View style={styles.liveStatusRow}>
+                <View style={styles.livePulseDot} />
+                <Text style={styles.liveStatusText}>RECEIVABLES LEDGER • REALTIME</Text>
               </View>
-            )}
-            <View style={styles.avatarStatusDot} />
-          </TouchableOpacity>
-
-          <View>
-            <Text style={styles.headerSub}>Receivables & Loans</Text>
-            <Text style={styles.headerTitle}>Lents & Loans</Text>
-          </View>
-        </View>
-
-        <View style={styles.headerRight}>
-          {/* Vault Selector Pill */}
-          <TouchableOpacity
-            style={styles.vaultPill}
-            onPress={() => setIsCardDropdownOpen(!isCardDropdownOpen)}
-            activeOpacity={0.8}
-          >
-            <Layers size={13} color="#2D7A5D" />
-            <Text style={styles.vaultPillText} numberOfLines={1}>
-              {selectedVaultCardId === 'all'
-                ? 'All Cards'
-                : cards.find((c) => c.id === selectedVaultCardId)?.card_name || 'Card'}
-            </Text>
-            <ChevronDown size={12} color={CedarColors.ink500} />
-          </TouchableOpacity>
-
-          {/* Add Borrower Button */}
-          <HapticButton
-            style={styles.addBorrowerBtn}
-            onPress={() => {
-              setIsAddBorrowerOpen(true);
-            }}
-            feedbackType="rigid"
-          >
-            <Plus size={16} color="#F6F9F5" strokeWidth={2.5} />
-            <Text style={styles.addBorrowerBtnText}>Borrower</Text>
-          </HapticButton>
-        </View>
-      </View>
-
-      {/* ================= 2. HERO OUTSTANDING DUE CARD ================= */}
-      <View style={styles.summaryCardWrapper}>
-        <LinearGradient
-          colors={['#071A12', '#0C2B20', '#071A12']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.summaryCard}
-        >
-          <View style={styles.summaryTopRow}>
-            <View>
-              <Text style={styles.summaryLabel}>Total Outstanding Due</Text>
-              <Text style={styles.summaryAmount}>₹{totalOutstanding.toLocaleString('en-IN')}</Text>
+              <Text style={styles.headerTitle}>Lents & Loans</Text>
             </View>
-            <View style={styles.activeBorrowersBadge}>
-              <Users size={12} color="#10B981" />
-              <Text style={styles.activeBorrowersText}>
-                {borrowers.filter((b) => b.netDue > 0).length} Due
+          </TouchableOpacity>
+
+          {/* Vault Card Dropdown Selector */}
+          <Animated.View style={cardDropdownAnimStyle}>
+            <TouchableOpacity
+              style={styles.vaultPill}
+              onPress={handleCardDropdownPress}
+              activeOpacity={0.8}
+            >
+              <Layers size={13} color="#CAD6C9" />
+              <Text style={styles.vaultPillText} numberOfLines={1}>
+                {selectedVaultCardId === 'all'
+                  ? 'All Cards'
+                  : cards.find((c) => c.id === selectedVaultCardId)?.card_name || 'Card'}
               </Text>
-            </View>
-          </View>
+              <ChevronDown size={12} color="#CAD6C9" />
+            </TouchableOpacity>
+          </Animated.View>
+        </View>
 
-          <View style={styles.summaryBottomRow}>
-            <Text style={styles.summarySub}>
-              {activeTab === 'combined'
-                ? 'Combined Card & Pocket Receivables'
-                : activeTab === 'card'
-                ? 'Shared Card Limit & Cash Loans'
-                : 'Personal Pocket Advances'}
-            </Text>
-          </View>
-        </LinearGradient>
+        {/* Symmetrical Organic SVG Wave Transition */}
+        <View style={styles.svgWaveWrapper}>
+          <Svg
+            width={SCREEN_WIDTH}
+            height={32}
+            viewBox={`0 0 ${SCREEN_WIDTH} 32`}
+            preserveAspectRatio="none"
+          >
+            <Path
+              d={`M 0,0 C ${SCREEN_WIDTH * 0.25},24 ${SCREEN_WIDTH * 0.75},24 ${SCREEN_WIDTH},0 L ${SCREEN_WIDTH},32 L 0,32 Z`}
+              fill="#EFF3EE"
+            />
+          </Svg>
+        </View>
+      </LinearGradient>
+
+      {/* ================= 2. ANIMATED HERO OUTSTANDING DUE CARD ================= */}
+      <View style={styles.heroCardWrapper}>
+        <Animated.View style={heroAnimStyle}>
+          <LinearGradient
+            colors={['#071A12', '#0C2B20', '#071A12']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.heroCard}
+          >
+            <View style={styles.heroTopRow}>
+              <View>
+                <Text style={styles.heroLabel}>
+                  {activeTab === 'combined'
+                    ? 'Total Outstanding Due (Combined)'
+                    : activeTab === 'card'
+                    ? 'Total Card & Cash Dues'
+                    : 'Personal Pocket Outstanding'}
+                </Text>
+                <Text style={styles.heroAmount}>
+                  ₹{totalNetDue.toLocaleString('en-IN')}
+                </Text>
+              </View>
+              <View style={styles.heroBadge}>
+                <Clock size={12} color="#E05D52" />
+                <Text style={styles.heroBadgeText}>
+                  {borrowerSummaries.length} Borrowers
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.heroSubMetrics}>
+              <View style={styles.heroSubMetricItem}>
+                <Text style={styles.heroSubLabel}>Total Given</Text>
+                <Text style={styles.heroSubVal}>
+                  ₹{totalGivenAll.toLocaleString('en-IN')}
+                </Text>
+              </View>
+              <View style={styles.heroSubDivider} />
+              <View style={styles.heroSubMetricItem}>
+                <Text style={styles.heroSubLabel}>Active Ledger</Text>
+                <Text style={styles.heroSubVal}>
+                  {activeTab === 'combined'
+                    ? 'Card + Pocket'
+                    : activeTab === 'card'
+                    ? 'Shared Limits'
+                    : 'Private Pocket'}
+                </Text>
+              </View>
+            </View>
+          </LinearGradient>
+        </Animated.View>
       </View>
 
-      {/* ================= 3. 3 SEGMENTED TABS ================= */}
-      <View style={styles.tabsRow}>
-        {(['combined', 'card', 'pocket'] as const).map((tab) => {
+      {/* ================= 3. 3-TAB SEGMENTED CONTROLS ================= */}
+      <View style={styles.tabBarContainer}>
+        {(['combined', 'card', 'pocket'] as TabType[]).map((tab) => {
           const isActive = activeTab === tab;
           const label =
             tab === 'combined'
@@ -585,9 +891,7 @@ export default function LentsScreen() {
             <TouchableOpacity
               key={tab}
               style={[styles.tabChip, isActive && styles.activeTabChip]}
-              onPress={() => {
-                setActiveTab(tab);
-              }}
+              onPress={() => setActiveTab(tab)}
               activeOpacity={0.8}
             >
               <Text style={[styles.tabChipText, isActive && styles.activeTabChipText]}>
@@ -598,531 +902,161 @@ export default function LentsScreen() {
         })}
       </View>
 
-      {/* ================= 4. BORROWERS LIST ================= */}
+      {/* ================= 4. SEARCH & BORROWER LIST ================= */}
+      <View style={styles.searchBarContainer}>
+        <View style={styles.searchBox}>
+          <Search size={15} color="#658270" strokeWidth={2.2} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search borrower by name or phone..."
+            placeholderTextColor="#8CA394"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+          />
+          {searchQuery ? (
+            <TouchableOpacity onPress={() => setSearchQuery('')}>
+              <X size={14} color="#658270" />
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      </View>
+
       {isLoading ? (
         <View style={styles.loaderContainer}>
-          <ActivityIndicator size="large" color="#1B4D3E" />
-          <Text style={styles.loaderText}>Loading Borrower Statements...</Text>
+          <ActivityIndicator size="large" color="#0B3F28" />
+          <Text style={styles.loaderText}>Loading Receivables Ledger...</Text>
         </View>
       ) : (
         <ScrollView
           style={styles.contentScroll}
-          contentContainerStyle={styles.scrollContent}
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: 130 }]}
           showsVerticalScrollIndicator={false}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#1B4D3E']} />}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={['#0B3F28']}
+              tintColor="#0B3F28"
+            />
+          }
         >
-          {borrowers.length === 0 ? (
-            <View style={styles.emptyContainer}>
+          {filteredBorrowers.length === 0 ? (
+            <View style={styles.emptyStateContainer}>
               <View style={styles.emptyIconCircle}>
-                <Users size={32} color={CedarColors.ink500} />
+                <Users size={32} color="#8CA394" />
               </View>
-              <Text style={styles.emptyTitle}>No Borrowers Added</Text>
-              <Text style={styles.emptySub}>
-                Add a borrower to start tracking loans, collections, and statements.
+              <Text style={styles.emptyStateTitle}>
+                {searchQuery ? 'No matching borrowers' : 'No Active Receivables'}
               </Text>
-            </View>
-          ) : (
-            borrowers.map((b) => {
-              const hasDue = b.netDue > 0;
-              return (
+              <Text style={styles.emptyStateSub}>
+                {searchQuery
+                  ? 'Try searching with another name or phone number.'
+                  : 'Tap the + button below to register a borrower and record loan entries.'}
+              </Text>
+              {!searchQuery && (
                 <TouchableOpacity
-                  key={b.id}
-                  style={styles.borrowerCard}
-                  onPress={() => openBorrowerPanel(b)}
+                  style={styles.emptyAddBtn}
+                  onPress={() => setIsAddBorrowerOpen(true)}
                   activeOpacity={0.85}
                 >
-                  <View style={styles.borrowerMainRow}>
-                    {/* Avatar Icon */}
-                    <View
-                      style={[
-                        styles.borrowerAvatarBox,
-                        hasDue ? styles.borrowerAvatarDue : styles.borrowerAvatarSettled,
-                      ]}
-                    >
-                      <User size={18} color={hasDue ? '#E05D52' : '#2D7A5D'} />
-                    </View>
-
-                    {/* Middle Info */}
-                    <View style={styles.borrowerInfoCol}>
-                      <Text style={styles.borrowerName}>{b.name}</Text>
-                      <View style={styles.borrowerMetaRow}>
-                        {b.phone ? (
-                          <Text style={styles.borrowerPhone}>{b.phone}</Text>
-                        ) : (
-                          <Text style={styles.borrowerPhone}>No phone</Text>
-                        )}
-                        <Text style={styles.dotSeparator}>•</Text>
-                        <Text style={styles.lastActivityText}>Active {b.lastActivity}</Text>
-                      </View>
-                    </View>
-
-                    {/* Right Due & Total Given */}
-                    <View style={styles.borrowerAmountCol}>
-                      <Text
-                        style={[
-                          styles.borrowerDueAmount,
-                          hasDue ? styles.dueText : styles.settledText,
-                        ]}
-                      >
-                        {hasDue ? `₹${b.netDue.toLocaleString('en-IN')}` : 'Settled'}
-                      </Text>
-                      <Text style={styles.borrowerGivenSub}>
-                        Total Given: ₹{b.totalGiven.toLocaleString('en-IN')}
-                      </Text>
-                    </View>
-
-                    <ChevronRight size={14} color={CedarColors.ink500} style={{ marginLeft: 6 }} />
-                  </View>
+                  <Plus size={16} color="#FFFFFF" strokeWidth={2.4} />
+                  <Text style={styles.emptyAddBtnText}>Register Borrower</Text>
                 </TouchableOpacity>
-              );
-            })
+              )}
+            </View>
+          ) : (
+            filteredBorrowers.map((borrower) => (
+              <BorrowerCard
+                key={borrower.id}
+                borrower={borrower}
+                onPress={() => handleBorrowerPress(borrower)}
+              />
+            ))
           )}
         </ScrollView>
       )}
 
-      {/* ================= BORROWER PROFILE PANEL MODAL ================= */}
-      {selectedBorrower && (
-        <Modal visible={isBorrowerPanelOpen} animationType="slide" transparent>
-          <View style={styles.panelOverlay}>
-            <View style={styles.panelCard}>
-              {/* Panel Header */}
-              <View style={styles.panelHeader}>
-                <View>
-                  <Text style={styles.panelTitle}>{selectedBorrower.name}</Text>
-                  <Text style={styles.panelSub}>{selectedBorrower.phone || 'Statement Ledger'}</Text>
-                </View>
-                <TouchableOpacity
-                  style={styles.panelCloseBtn}
-                  onPress={() => setIsBorrowerPanelOpen(false)}
-                >
-                  <X size={18} color={CedarColors.ink700} />
-                </TouchableOpacity>
-              </View>
+      {/* ================= 5. ELEVATED FLOATING ACTION BUTTON (FAB) ================= */}
+      <Animated.View style={[styles.floatingFabContainer, fabAnimStyle]}>
+        <TouchableOpacity
+          style={styles.floatingFab}
+          activeOpacity={0.9}
+          onPress={handleFabPress}
+        >
+          <LinearGradient
+            colors={['#10B981', '#047857']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.floatingFabGradient}
+          >
+            <Plus size={24} color="#FFFFFF" strokeWidth={2.8} />
+          </LinearGradient>
+        </TouchableOpacity>
+      </Animated.View>
 
-              {/* Panel Summary Banner */}
-              <View style={styles.panelBanner}>
-                <View>
-                  <Text style={styles.panelBannerLabel}>Outstanding Receivable</Text>
-                  <Text style={styles.panelBannerDue}>
-                    ₹{selectedBorrower.netDue.toLocaleString('en-IN')}
-                  </Text>
-                </View>
-                <View style={styles.panelActionButtonsRow}>
-                  <HapticButton
-                    style={styles.panelGiveBtn}
-                    onPress={() => {
-                      setGiveDate(new Date().toISOString().slice(0, 10));
-                      setGiveAmount('');
-                      setGiveRemarks('');
-                      setIsGiveModalOpen(true);
-                    }}
-                    feedbackType="rigid"
-                  >
-                    <ArrowDownLeft size={13} color="#FFFFFF" />
-                    <Text style={styles.panelActionBtnText}>Give Loan</Text>
-                  </HapticButton>
+      {/* ================= MODALS & DRAWERS ================= */}
 
-                  <HapticButton
-                    style={styles.panelCollectBtn}
-                    onPress={() => {
-                      setCollectDate(new Date().toISOString().slice(0, 10));
-                      setCollectAmount('');
-                      setCollectRemarks('');
-                      setIsCollectModalOpen(true);
-                    }}
-                    feedbackType="rigid"
-                  >
-                    <ArrowUpRight size={13} color="#FFFFFF" />
-                    <Text style={styles.panelActionBtnText}>Collect</Text>
-                  </HapticButton>
-                </View>
-              </View>
+      {/* Borrower Statement Drawer with Skeleton + Khatabook timeline */}
+      <BorrowerLedgerDrawer
+        visible={isLedgerDrawerOpen}
+        onClose={() => setIsLedgerDrawerOpen(false)}
+        borrower={selectedBorrower}
+        entries={borrowerLedger}
+        isLoading={isLedgerLoading}
+        onGivePress={() => setIsGiveModalOpen(true)}
+        onCollectPress={() => setIsCollectModalOpen(true)}
+        onEditBorrowerPress={() => setIsEditBorrowerOpen(true)}
+        getCardName={getCardName}
+        getRecorderName={getRecorderName}
+      />
 
-              {/* Statement History Entries */}
-              <Text style={styles.panelLedgerTitle}>Transaction Statement</Text>
+      {/* Give Loan Modal */}
+      <LentGiveModal
+        visible={isGiveModalOpen}
+        onClose={() => setIsGiveModalOpen(false)}
+        borrowerName={selectedBorrower?.name || 'Borrower'}
+        cards={cards}
+        currentUserId={currentUser?.id}
+        getUserCashForCard={getUserCashForCard}
+        cardAvailableMap={cardAvailableMap}
+        onSave={handleSaveGiveLoan}
+      />
 
-              {isLedgerLoading ? (
-                <View style={{ paddingVertical: 30, alignItems: 'center' }}>
-                  <ActivityIndicator size="small" color="#1B4D3E" />
-                </View>
-              ) : (
-                <ScrollView
-                  showsVerticalScrollIndicator={false}
-                  contentContainerStyle={styles.panelLedgerScroll}
-                >
-                  {borrowerLedger.length === 0 ? (
-                    <Text style={styles.emptyLedgerText}>No entries recorded yet.</Text>
-                  ) : (
-                    borrowerLedger.map((entry) => {
-                      const isGiven = entry.entry_type === 'given';
-                      return (
-                        <View key={entry.id} style={styles.statementRow}>
-                          <View
-                            style={[
-                              styles.statementIconBox,
-                              isGiven ? styles.statementIconGiven : styles.statementIconCollect,
-                            ]}
-                          >
-                            {isGiven ? (
-                              <ArrowDownLeft size={14} color="#E05D52" />
-                            ) : (
-                              <ArrowUpRight size={14} color="#2D7A5D" />
-                            )}
-                          </View>
+      {/* Collect Loan Modal */}
+      <LentCollectModal
+        visible={isCollectModalOpen}
+        onClose={() => setIsCollectModalOpen(false)}
+        borrowerName={selectedBorrower?.name || 'Borrower'}
+        cards={cards}
+        onSave={handleSaveCollectLoan}
+      />
 
-                          <View style={styles.statementInfoCol}>
-                            <Text style={styles.statementTitle}>
-                              {isGiven ? 'Loan Given' : 'Payment Received'}
-                            </Text>
-                            <Text style={styles.statementSub}>
-                              {entry.ledgerSource === 'pocket' ? 'Pocket Advance' : 'Card / Cash'} •{' '}
-                              {entry.transaction_date}
-                            </Text>
-                            {entry.remarks ? (
-                              <Text style={styles.statementRemarks}>"{entry.remarks}"</Text>
-                            ) : null}
-                          </View>
+      {/* Add Borrower Modal */}
+      <AddBorrowerModal
+        visible={isAddBorrowerOpen}
+        onClose={() => setIsAddBorrowerOpen(false)}
+        onSave={handleAddBorrower}
+      />
 
-                          <Text
-                            style={[
-                              styles.statementAmount,
-                              isGiven ? styles.statementGivenText : styles.statementCollectText,
-                            ]}
-                          >
-                            {isGiven ? '-' : '+'}₹{entry.amount.toLocaleString('en-IN')}
-                          </Text>
-                        </View>
-                      );
-                    })
-                  )}
-                </ScrollView>
-              )}
-            </View>
-          </View>
-        </Modal>
-      )}
+      {/* Edit Borrower Modal */}
+      <EditBorrowerModal
+        visible={isEditBorrowerOpen}
+        onClose={() => setIsEditBorrowerOpen(false)}
+        borrower={selectedBorrower}
+        onUpdate={handleUpdateBorrower}
+        onDelete={handleDeleteBorrower}
+      />
 
-      {/* ================= GIVE LOAN MODAL ================= */}
-      <Modal visible={isGiveModalOpen} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeader}>
-              <View>
-                <Text style={styles.modalTitle}>Give Loan to {selectedBorrower?.name}</Text>
-                <Text style={styles.modalSub}>Disburse funds and update receivables</Text>
-              </View>
-              <TouchableOpacity onPress={() => setIsGiveModalOpen(false)}>
-                <X size={18} color={CedarColors.ink700} />
-              </TouchableOpacity>
-            </View>
+      {/* Therapeutic Success Celebration Modal */}
+      <TherapeuticSuccessModal
+        visible={successModalVisible}
+        onDismiss={() => setSuccessModalVisible(false)}
+        title={successTitle}
+        subtitle={successSubtitle}
+        amount={successAmount}
+      />
 
-            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.modalBody}>
-              {/* Amount */}
-              <View style={styles.formGroup}>
-                <Text style={styles.formLabel}>Loan Amount (₹)</Text>
-                <TextInput
-                  style={styles.textInput}
-                  placeholder="Enter amount"
-                  placeholderTextColor={CedarColors.ink500}
-                  keyboardType="numeric"
-                  value={giveAmount}
-                  onChangeText={setGiveAmount}
-                />
-              </View>
-
-              {/* Source Switcher */}
-              <View style={styles.formGroup}>
-                <Text style={styles.formLabel}>Disbursement Source</Text>
-                <View style={styles.sourceToggleRow}>
-                  <TouchableOpacity
-                    style={[
-                      styles.sourceToggleBtn,
-                      giveSource === 'cash_on_hand' && styles.sourceToggleBtnActive,
-                    ]}
-                    onPress={() => {
-                      setGiveSource('cash_on_hand');
-                    }}
-                  >
-                    <Banknote size={13} color={giveSource === 'cash_on_hand' ? '#1B4D3E' : CedarColors.ink500} />
-                    <Text
-                      style={[
-                        styles.sourceToggleBtnText,
-                        giveSource === 'cash_on_hand' && styles.sourceToggleBtnTextActive,
-                      ]}
-                    >
-                      Cash on Hand
-                    </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[
-                      styles.sourceToggleBtn,
-                      giveSource === 'credit_card' && styles.sourceToggleBtnActive,
-                    ]}
-                    onPress={() => {
-                      setGiveSource('credit_card');
-                    }}
-                  >
-                    <CreditCard size={13} color={giveSource === 'credit_card' ? '#1B4D3E' : CedarColors.ink500} />
-                    <Text
-                      style={[
-                        styles.sourceToggleBtnText,
-                        giveSource === 'credit_card' && styles.sourceToggleBtnTextActive,
-                      ]}
-                    >
-                      Credit Card
-                    </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[
-                      styles.sourceToggleBtn,
-                      giveSource === 'pocket' && styles.sourceToggleBtnActive,
-                    ]}
-                    onPress={() => {
-                      setGiveSource('pocket');
-                    }}
-                  >
-                    <Wallet size={13} color={giveSource === 'pocket' ? '#1B4D3E' : CedarColors.ink500} />
-                    <Text
-                      style={[
-                        styles.sourceToggleBtnText,
-                        giveSource === 'pocket' && styles.sourceToggleBtnTextActive,
-                      ]}
-                    >
-                      Pocket
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-
-              {/* Card Selection if card mode */}
-              {giveSource !== 'pocket' && (
-                <View style={styles.formGroup}>
-                  <Text style={styles.formLabel}>Select Card</Text>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.pillsScroll}>
-                    {cards.map((c) => {
-                      const isSelected = giveCardId === c.id;
-                      return (
-                        <TouchableOpacity
-                          key={c.id}
-                          style={[styles.cardPill, isSelected && styles.cardPillActive]}
-                          onPress={() => {
-                            setGiveCardId(c.id);
-                          }}
-                        >
-                          <Text style={[styles.cardPillText, isSelected && styles.cardPillTextActive]}>
-                            {c.card_name} (**{c.last_4_digits})
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </ScrollView>
-                </View>
-              )}
-
-              {/* Date */}
-              <View style={styles.formGroup}>
-                <Text style={styles.formLabel}>Date</Text>
-                <TextInput
-                  style={styles.textInput}
-                  value={giveDate}
-                  onChangeText={setGiveDate}
-                  placeholder="YYYY-MM-DD"
-                  placeholderTextColor={CedarColors.ink500}
-                />
-              </View>
-
-              {/* Remarks */}
-              <View style={styles.formGroup}>
-                <Text style={styles.formLabel}>Purpose / Note</Text>
-                <TextInput
-                  style={styles.textInput}
-                  placeholder="Optional remarks"
-                  placeholderTextColor={CedarColors.ink500}
-                  value={giveRemarks}
-                  onChangeText={setGiveRemarks}
-                />
-              </View>
-            </ScrollView>
-
-            <View style={styles.modalFooter}>
-              <HapticButton
-                style={[styles.confirmBtn, isSavingGive && styles.confirmBtnDisabled]}
-                onPress={handleConfirmGiveLoan}
-                disabled={isSavingGive}
-                feedbackType="rigid"
-              >
-                {isSavingGive ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
-                ) : (
-                  <>
-                    <ShieldCheck size={18} color="#FFFFFF" strokeWidth={2.5} />
-                    <Text style={styles.confirmBtnText}>Confirm Disburse</Text>
-                  </>
-                )}
-              </HapticButton>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* ================= COLLECT LOAN MODAL ================= */}
-      <Modal visible={isCollectModalOpen} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeader}>
-              <View>
-                <Text style={styles.modalTitle}>Record Recovery / Return</Text>
-                <Text style={styles.modalSub}>From {selectedBorrower?.name}</Text>
-              </View>
-              <TouchableOpacity onPress={() => setIsCollectModalOpen(false)}>
-                <X size={18} color={CedarColors.ink700} />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.modalBody}>
-              <View style={styles.formGroup}>
-                <Text style={styles.formLabel}>Received Amount (₹)</Text>
-                <TextInput
-                  style={styles.textInput}
-                  placeholder="Enter collected amount"
-                  placeholderTextColor={CedarColors.ink500}
-                  keyboardType="numeric"
-                  value={collectAmount}
-                  onChangeText={setCollectAmount}
-                />
-              </View>
-
-              {activeTab !== 'pocket' && (
-                <View style={styles.formGroup}>
-                  <Text style={styles.formLabel}>Deposit into Card Cash on Hand</Text>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.pillsScroll}>
-                    {cards.map((c) => {
-                      const isSelected = collectTargetCardId === c.id;
-                      return (
-                        <TouchableOpacity
-                          key={c.id}
-                          style={[styles.cardPill, isSelected && styles.cardPillActive]}
-                          onPress={() => {
-                            setCollectTargetCardId(c.id);
-                          }}
-                        >
-                          <Text style={[styles.cardPillText, isSelected && styles.cardPillTextActive]}>
-                            {c.card_name} (**{c.last_4_digits})
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </ScrollView>
-                </View>
-              )}
-
-              <View style={styles.formGroup}>
-                <Text style={styles.formLabel}>Date</Text>
-                <TextInput
-                  style={styles.textInput}
-                  value={collectDate}
-                  onChangeText={setCollectDate}
-                  placeholder="YYYY-MM-DD"
-                  placeholderTextColor={CedarColors.ink500}
-                />
-              </View>
-
-              <View style={styles.formGroup}>
-                <Text style={styles.formLabel}>Receipt Remarks</Text>
-                <TextInput
-                  style={styles.textInput}
-                  placeholder="Optional receipt notes"
-                  placeholderTextColor={CedarColors.ink500}
-                  value={collectRemarks}
-                  onChangeText={setCollectRemarks}
-                />
-              </View>
-            </ScrollView>
-
-            <View style={styles.modalFooter}>
-              <HapticButton
-                style={[styles.confirmBtn, isSavingCollect && styles.confirmBtnDisabled]}
-                onPress={handleConfirmCollect}
-                disabled={isSavingCollect}
-                feedbackType="rigid"
-              >
-                {isSavingCollect ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
-                ) : (
-                  <>
-                    <CheckCircle2 size={18} color="#FFFFFF" strokeWidth={2.5} />
-                    <Text style={styles.confirmBtnText}>Save Recovery</Text>
-                  </>
-                )}
-              </HapticButton>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* ================= ADD BORROWER MODAL ================= */}
-      <Modal visible={isAddBorrowerOpen} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeader}>
-              <View>
-                <Text style={styles.modalTitle}>Add New Borrower</Text>
-                <Text style={styles.modalSub}>Create a new contact profile</Text>
-              </View>
-              <TouchableOpacity onPress={() => setIsAddBorrowerOpen(false)}>
-                <X size={18} color={CedarColors.ink700} />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.modalBody}>
-              <View style={styles.formGroup}>
-                <Text style={styles.formLabel}>Borrower Name</Text>
-                <TextInput
-                  style={styles.textInput}
-                  placeholder="e.g. John Doe"
-                  placeholderTextColor={CedarColors.ink500}
-                  value={newBorrowerName}
-                  onChangeText={setNewBorrowerName}
-                />
-              </View>
-
-              <View style={styles.formGroup}>
-                <Text style={styles.formLabel}>Phone Number (Optional)</Text>
-                <TextInput
-                  style={styles.textInput}
-                  placeholder="e.g. +91 98765 43210"
-                  placeholderTextColor={CedarColors.ink500}
-                  keyboardType="phone-pad"
-                  value={newBorrowerPhone}
-                  onChangeText={setNewBorrowerPhone}
-                />
-              </View>
-            </ScrollView>
-
-            <View style={styles.modalFooter}>
-              <HapticButton
-                style={[styles.confirmBtn, isSavingBorrower && styles.confirmBtnDisabled]}
-                onPress={handleAddNewBorrower}
-                disabled={isSavingBorrower}
-                feedbackType="rigid"
-              >
-                {isSavingBorrower ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
-                ) : (
-                  <>
-                    <Plus size={18} color="#FFFFFF" strokeWidth={2.5} />
-                    <Text style={styles.confirmBtnText}>Create Borrower</Text>
-                  </>
-                )}
-              </HapticButton>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* ================= CARD FILTER MODAL ================= */}
+      {/* Vault Card Dropdown Filter Modal */}
       <Modal visible={isCardDropdownOpen} transparent animationType="fade">
         <TouchableOpacity
           style={styles.modalBackdrop}
@@ -1133,12 +1067,15 @@ export default function LentsScreen() {
             <View style={styles.filterMenuHeader}>
               <Text style={styles.filterMenuTitle}>Select Vault Card</Text>
               <TouchableOpacity onPress={() => setIsCardDropdownOpen(false)}>
-                <X size={16} color={CedarColors.ink500} />
+                <X size={16} color="#4A6B56" />
               </TouchableOpacity>
             </View>
 
             <TouchableOpacity
-              style={[styles.menuOption, selectedVaultCardId === 'all' && styles.menuOptionActive]}
+              style={[
+                styles.menuOption,
+                selectedVaultCardId === 'all' && styles.menuOptionActive,
+              ]}
               onPress={() => {
                 setSelectedVaultCardId('all');
                 setIsCardDropdownOpen(false);
@@ -1152,7 +1089,7 @@ export default function LentsScreen() {
               >
                 All Vault Cards
               </Text>
-              {selectedVaultCardId === 'all' && <Check size={14} color="#1B4D3E" />}
+              {selectedVaultCardId === 'all' && <Check size={14} color="#0B3F28" />}
             </TouchableOpacity>
 
             {cards.map((card) => {
@@ -1167,656 +1104,392 @@ export default function LentsScreen() {
                   }}
                 >
                   <View>
-                    <Text style={[styles.menuOptionText, isSelected && styles.menuOptionTextActive]}>
+                    <Text
+                      style={[
+                        styles.menuOptionText,
+                        isSelected && styles.menuOptionTextActive,
+                      ]}
+                    >
                       {card.card_name}
                     </Text>
                     <Text style={styles.menuOptionSub}>**{card.last_4_digits}</Text>
                   </View>
-                  {isSelected && <Check size={14} color="#1B4D3E" />}
+                  {isSelected && <Check size={14} color="#0B3F28" />}
                 </TouchableOpacity>
               );
             })}
           </View>
         </TouchableOpacity>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
+  screenContainer: {
     flex: 1,
     backgroundColor: '#EFF3EE',
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#DCE4DA',
-    backgroundColor: '#EFF3EE',
-  },
-  headerLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  avatarButton: {
+  headerHeroContainer: {
     position: 'relative',
+    paddingBottom: 24,
   },
-  avatarImg: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    borderWidth: 1.5,
-    borderColor: '#2D7A5D',
+  headerTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingTop: 4,
+    paddingBottom: 8,
   },
-  avatarPlaceholder: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: '#071A12',
+  userProfileBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  avatarBorder: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: 'rgba(255, 255, 255, 0.4)',
+    overflow: 'hidden',
+    backgroundColor: '#072C1C',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: '#2D7A5D',
   },
-  avatarInitial: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#F6F9F5',
+  avatarImg: {
+    width: '100%',
+    height: '100%',
   },
-  avatarStatusDot: {
-    position: 'absolute',
-    bottom: 0,
-    right: 0,
-    width: 10,
-    height: 10,
-    borderRadius: 5,
+  avatarPlaceholder: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarText: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: '#CAD6C9',
+  },
+  userTextCol: {
+    justifyContent: 'center',
+  },
+  liveStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginBottom: 2,
+  },
+  livePulseDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
     backgroundColor: '#10B981',
-    borderWidth: 2,
-    borderColor: '#EFF3EE',
   },
-  headerSub: {
+  liveStatusText: {
     fontSize: 9,
     fontWeight: '800',
-    color: '#2D7A5D',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
+    color: '#8CA394',
+    letterSpacing: 0.6,
   },
   headerTitle: {
     fontSize: 18,
-    fontWeight: '800',
-    color: CedarColors.ink900,
-  },
-  headerRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    letterSpacing: -0.3,
   },
   vaultPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    paddingHorizontal: 10,
     paddingVertical: 6,
-    backgroundColor: '#F6F9F5',
-    borderRadius: 12,
+    borderRadius: 18,
     borderWidth: 1,
-    borderColor: '#DCE4DA',
+    borderColor: 'rgba(255, 255, 255, 0.18)',
+    gap: 6,
+    maxWidth: 130,
   },
   vaultPillText: {
     fontSize: 11,
     fontWeight: '700',
-    color: CedarColors.ink900,
-    maxWidth: 80,
+    color: '#CAD6C9',
   },
-  addBorrowerBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    backgroundColor: '#1B4D3E',
-    borderRadius: 12,
+  svgWaveWrapper: {
+    position: 'absolute',
+    bottom: -1,
+    left: 0,
+    right: 0,
   },
-  addBorrowerBtnText: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#F6F9F5',
+  heroCardWrapper: {
+    marginHorizontal: 18,
+    marginTop: -8,
+    marginBottom: 12,
   },
-  summaryCardWrapper: {
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 6,
-  },
-  summaryCard: {
+  heroCard: {
     borderRadius: 20,
-    padding: 16,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    borderWidth: 1.2,
+    borderColor: '#0F3B29',
+    shadowColor: '#072C1C',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.14,
+    shadowRadius: 10,
+    elevation: 4,
   },
-  summaryTopRow: {
+  heroTopRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
   },
-  summaryLabel: {
+  heroLabel: {
     fontSize: 10,
-    fontWeight: '700',
-    color: '#8A948C',
+    fontWeight: '800',
+    color: '#CAD6C9',
+    letterSpacing: 0.7,
     textTransform: 'uppercase',
-    letterSpacing: 0.8,
   },
-  summaryAmount: {
+  heroAmount: {
     fontSize: 26,
     fontWeight: '900',
-    color: '#F6F9F5',
-    marginTop: 2,
+    color: '#FFFFFF',
+    letterSpacing: -0.5,
+    marginTop: 4,
   },
-  activeBorrowersBadge: {
+  heroBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+    backgroundColor: 'rgba(224, 93, 82, 0.15)',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: 'rgba(16, 185, 129, 0.3)',
+    borderColor: 'rgba(224, 93, 82, 0.3)',
+    gap: 4,
   },
-  activeBorrowersText: {
+  heroBadgeText: {
     fontSize: 10,
     fontWeight: '800',
-    color: '#10B981',
+    color: '#E05D52',
   },
-  summaryBottomRow: {
-    marginTop: 10,
-  },
-  summarySub: {
-    fontSize: 10,
-    color: '#A0ACA2',
-  },
-  tabsRow: {
+  heroSubMetrics: {
     flexDirection: 'row',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    backgroundColor: '#EFF3EE',
+    alignItems: 'center',
+    marginTop: 14,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  heroSubMetricItem: {
+    flex: 1,
+  },
+  heroSubDivider: {
+    width: 1,
+    height: 24,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    marginHorizontal: 12,
+  },
+  heroSubLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#8CA394',
+  },
+  heroSubVal: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#CAD6C9',
+    marginTop: 2,
+  },
+  tabBarContainer: {
+    flexDirection: 'row',
+    paddingHorizontal: 18,
+    gap: 8,
+    marginBottom: 10,
   },
   tabChip: {
     flex: 1,
+    paddingVertical: 8,
+    borderRadius: 14,
+    backgroundColor: '#E4ECE5',
     alignItems: 'center',
-    paddingVertical: 7,
-    marginHorizontal: 3,
-    borderRadius: 10,
-    backgroundColor: '#F6F9F5',
+    justifyContent: 'center',
     borderWidth: 1,
-    borderColor: '#DCE4DA',
+    borderColor: '#DFE8E0',
   },
   activeTabChip: {
-    backgroundColor: '#1B4D3E',
-    borderColor: '#1B4D3E',
+    backgroundColor: '#0B3F28',
+    borderColor: '#072C1C',
   },
   tabChipText: {
     fontSize: 11,
     fontWeight: '700',
-    color: CedarColors.ink700,
+    color: '#4A6B56',
   },
   activeTabChipText: {
-    color: '#F6F9F5',
+    color: '#FFFFFF',
     fontWeight: '800',
   },
-  loaderContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 40,
+  searchBarContainer: {
+    paddingHorizontal: 18,
+    marginBottom: 8,
   },
-  loaderText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: CedarColors.ink700,
-    marginTop: 10,
+  searchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    height: 40,
+    borderWidth: 1.2,
+    borderColor: '#DFE8E0',
+    gap: 8,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#072C1C',
+    padding: 0,
   },
   contentScroll: {
     flex: 1,
   },
   scrollContent: {
-    paddingHorizontal: 16,
-    paddingBottom: 120,
+    paddingHorizontal: 18,
+    paddingTop: 4,
   },
-  emptyContainer: {
+  loaderContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  loaderText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#4A6B56',
+  },
+  emptyStateContainer: {
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 60,
+    paddingHorizontal: 24,
   },
   emptyIconCircle: {
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: '#E4ECE3',
+    backgroundColor: '#E4ECE5',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 12,
+    marginBottom: 14,
   },
-  emptyTitle: {
+  emptyStateTitle: {
     fontSize: 15,
     fontWeight: '800',
-    color: CedarColors.ink900,
-    marginBottom: 4,
-  },
-  emptySub: {
-    fontSize: 11,
-    color: CedarColors.ink500,
-    textAlign: 'center',
-    maxWidth: 240,
-  },
-  borrowerCard: {
-    backgroundColor: '#F6F9F5',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#DCE4DA',
-    padding: 12,
-    marginBottom: 8,
-  },
-  borrowerMainRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  borrowerAvatarBox: {
-    width: 36,
-    height: 36,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
-  },
-  borrowerAvatarDue: {
-    backgroundColor: '#FCEBEA',
-  },
-  borrowerAvatarSettled: {
-    backgroundColor: '#E8F5E9',
-  },
-  borrowerInfoCol: {
-    flex: 1,
-  },
-  borrowerName: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: CedarColors.ink900,
-  },
-  borrowerMetaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginTop: 2,
-  },
-  borrowerPhone: {
-    fontSize: 10,
-    color: CedarColors.ink500,
-  },
-  dotSeparator: {
-    fontSize: 10,
-    color: CedarColors.ink500,
-  },
-  lastActivityText: {
-    fontSize: 9,
-    fontWeight: '700',
-    color: CedarColors.ink700,
-  },
-  borrowerAmountCol: {
-    alignItems: 'flex-end',
-  },
-  borrowerDueAmount: {
-    fontSize: 13,
-    fontWeight: '800',
-  },
-  dueText: {
-    color: '#E05D52',
-  },
-  settledText: {
-    color: '#2D7A5D',
-  },
-  borrowerGivenSub: {
-    fontSize: 9,
-    color: CedarColors.ink500,
-    marginTop: 2,
-  },
-  panelOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    justifyContent: 'flex-end',
-  },
-  panelCard: {
-    backgroundColor: '#F6F9F5',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    maxHeight: '92%',
-    paddingBottom: 24,
-  },
-  panelHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#DCE4DA',
-  },
-  panelTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: CedarColors.ink900,
-  },
-  panelSub: {
-    fontSize: 10,
-    color: CedarColors.ink500,
-    marginTop: 1,
-  },
-  panelCloseBtn: {
-    padding: 4,
-  },
-  panelBanner: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: '#E4ECE3',
-    marginHorizontal: 16,
-    marginTop: 12,
-    padding: 12,
-    borderRadius: 16,
-  },
-  panelBannerLabel: {
-    fontSize: 9,
-    fontWeight: '700',
-    color: CedarColors.ink700,
-    textTransform: 'uppercase',
-  },
-  panelBannerDue: {
-    fontSize: 18,
-    fontWeight: '900',
-    color: '#E05D52',
-    marginTop: 2,
-  },
-  panelActionButtonsRow: {
-    flexDirection: 'row',
-    gap: 6,
-  },
-  panelGiveBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#E05D52',
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 10,
-  },
-  panelCollectBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#1B4D3E',
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 10,
-  },
-  panelActionBtnText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#FFFFFF',
-  },
-  panelLedgerTitle: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: CedarColors.ink900,
-    marginHorizontal: 20,
-    marginTop: 16,
-    marginBottom: 8,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  panelLedgerScroll: {
-    paddingHorizontal: 20,
-    paddingBottom: 20,
-  },
-  emptyLedgerText: {
-    fontSize: 11,
-    color: CedarColors.ink500,
-    textAlign: 'center',
-    paddingVertical: 20,
-  },
-  statementRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#DCE4DA',
-    padding: 10,
+    color: '#072C1C',
     marginBottom: 6,
   },
-  statementIconBox: {
-    width: 28,
-    height: 28,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
-  },
-  statementIconGiven: {
-    backgroundColor: '#FCEBEA',
-  },
-  statementIconCollect: {
-    backgroundColor: '#E8F5E9',
-  },
-  statementInfoCol: {
-    flex: 1,
-  },
-  statementTitle: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: CedarColors.ink900,
-  },
-  statementSub: {
-    fontSize: 9,
-    color: CedarColors.ink500,
-    marginTop: 1,
-  },
-  statementRemarks: {
-    fontSize: 9,
-    fontStyle: 'italic',
-    color: CedarColors.ink700,
-    marginTop: 2,
-  },
-  statementAmount: {
+  emptyStateSub: {
     fontSize: 12,
-    fontWeight: '800',
+    fontWeight: '500',
+    color: '#718C79',
+    textAlign: 'center',
+    lineHeight: 18,
+    marginBottom: 16,
   },
-  statementGivenText: {
-    color: '#E05D52',
-  },
-  statementCollectText: {
-    color: '#2D7A5D',
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    justifyContent: 'flex-end',
-  },
-  modalCard: {
-    backgroundColor: '#F6F9F5',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    maxHeight: '90%',
-    paddingBottom: 24,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#DCE4DA',
-  },
-  modalTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: CedarColors.ink900,
-  },
-  modalSub: {
-    fontSize: 10,
-    color: CedarColors.ink500,
-    marginTop: 2,
-  },
-  modalBody: {
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-  },
-  formGroup: {
-    marginBottom: 12,
-  },
-  formLabel: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: CedarColors.ink700,
-    textTransform: 'uppercase',
-    marginBottom: 6,
-  },
-  textInput: {
-    height: 42,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#DCE4DA',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    fontSize: 12,
-    color: CedarColors.ink900,
-  },
-  sourceToggleRow: {
-    flexDirection: 'row',
-    gap: 6,
-  },
-  sourceToggleBtn: {
-    flex: 1,
+  emptyAddBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-    paddingVertical: 8,
-    borderRadius: 10,
-    backgroundColor: '#E4ECE3',
-    borderWidth: 1,
-    borderColor: '#DCE4DA',
-  },
-  sourceToggleBtnActive: {
-    backgroundColor: '#F6F9F5',
-    borderColor: '#1B4D3E',
-  },
-  sourceToggleBtnText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: CedarColors.ink700,
-  },
-  sourceToggleBtnTextActive: {
-    color: '#1B4D3E',
-    fontWeight: '800',
-  },
-  pillsScroll: {
-    flexDirection: 'row',
-  },
-  cardPill: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 12,
-    backgroundColor: '#E4ECE3',
-    marginRight: 6,
-  },
-  cardPillActive: {
-    backgroundColor: '#1B4D3E',
-  },
-  cardPillText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: CedarColors.ink900,
-  },
-  cardPillTextActive: {
-    color: '#F6F9F5',
-    fontWeight: '800',
-  },
-  modalFooter: {
-    paddingHorizontal: 20,
-    paddingTop: 10,
-  },
-  confirmBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    backgroundColor: '#1B4D3E',
+    backgroundColor: '#0B3F28',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
     borderRadius: 14,
-    paddingVertical: 14,
+    gap: 6,
   },
-  confirmBtnDisabled: {
-    opacity: 0.6,
-  },
-  confirmBtnText: {
-    fontSize: 14,
+  emptyAddBtnText: {
+    fontSize: 12,
     fontWeight: '800',
     color: '#FFFFFF',
+  },
+  floatingFabContainer: {
+    position: 'absolute',
+    bottom: 86,
+    right: 18,
+    zIndex: 99,
+  },
+  floatingFab: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    shadowColor: '#072C1C',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.28,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  floatingFabGradient: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 24,
+    paddingHorizontal: 24,
   },
   filterMenuBox: {
     width: '100%',
-    maxWidth: 320,
-    backgroundColor: '#F6F9F5',
+    backgroundColor: '#FFFFFF',
     borderRadius: 20,
     padding: 16,
-    borderWidth: 1,
-    borderColor: '#DCE4DA',
+    maxHeight: 380,
   },
   filterMenuHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 12,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#DFE8E0',
+    marginBottom: 8,
   },
   filterMenuTitle: {
     fontSize: 14,
     fontWeight: '800',
-    color: CedarColors.ink900,
+    color: '#072C1C',
   },
   menuOption: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 10,
-    paddingHorizontal: 8,
-    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 12,
   },
   menuOptionActive: {
-    backgroundColor: '#E4ECE3',
+    backgroundColor: '#EBF3EC',
   },
   menuOptionText: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '700',
-    color: CedarColors.ink900,
+    color: '#2F5C3F',
   },
   menuOptionTextActive: {
-    color: '#1B4D3E',
-    fontWeight: '800',
+    color: '#0B3F28',
+    fontWeight: '900',
   },
   menuOptionSub: {
-    fontSize: 10,
-    color: CedarColors.ink500,
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#8CA394',
+    marginTop: 2,
   },
 });
