@@ -3,183 +3,145 @@ import {
   View,
   Text,
   StyleSheet,
-  ScrollView,
-  RefreshControl,
   TouchableOpacity,
   Modal,
-  TextInput,
-  Alert,
   ActivityIndicator,
   Image,
-  Linking,
+  Dimensions,
+  StatusBar,
+  ScrollView,
+  RefreshControl,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { CedarColors } from '@credics/core';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import { HapticButton } from '../../components/HapticButton';
-import { supabase } from '../../lib/supabase';
+import Svg, { Path } from 'react-native-svg';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withTiming,
+  withSpring,
+  withSequence,
+} from 'react-native-reanimated';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import {
-  QrCode,
-  ShieldCheck,
-  Clock,
-  CheckCircle2,
-  ChevronDown,
   Plus,
-  X,
-  CreditCard,
-  User,
-  ArrowRight,
-  ArrowDownLeft,
-  Timer,
-  Check,
   Layers,
-  Banknote,
-  Send,
-  Zap,
+  ChevronDown,
+  X,
+  Check,
+  Clock,
+  QrCode,
+  ArrowDownLeft,
+  CheckCircle2,
 } from 'lucide-react-native';
 
-interface SettlementHistoryEntry {
-  settle_id: string;
-  amount: number;
-  settled_date: string;
-  settled_to_user: string;
-  card_id: string;
-  remarks?: string;
-}
+import { supabase } from '../../lib/supabase';
+import { QRVaultTab, ActiveCooldown } from '../../components/settlements/QRVaultTab';
+import { InTransitTab, InTransitTransaction } from '../../components/settlements/InTransitTab';
+import { SettledHistoryTab, SettledTransaction } from '../../components/settlements/SettledHistoryTab';
+import { QRPaymentModal, QRData, CardData } from '../../components/settlements/QRPaymentModal';
+import { SettleConfirmModal, Profile } from '../../components/settlements/SettleConfirmModal';
+import { AddQRDrawer } from '../../components/settlements/AddQRDrawer';
+import { TherapeuticSuccessModal } from '../../components/settlements/TherapeuticSuccessModal';
 
-interface SettlementDetails {
-  total_settled: number;
-  total_due: number;
-  history: SettlementHistoryEntry[];
-}
-
-interface Transaction {
-  id: string;
-  type: 'withdrawal' | 'bill_payment';
-  amount: number;
-  transaction_date: string;
-  status: 'pending_settlement' | 'partially_settled' | 'settled';
-  settled_date?: string;
-  recorded_by: string;
-  qr_id?: string;
-  settled_to_user?: string;
-  card_id?: string;
-  remarks?: string;
-  settlement_details?: SettlementDetails | null;
-  card_name?: string;
-  last_4_digits?: string;
-  merchant_name?: string;
-  recorder_name?: string;
-  settled_to_name?: string;
-}
-
-interface Profile {
-  id: string;
-  name: string;
-  avatar_url?: string;
-  phone?: string;
-}
-
-interface CardData {
-  id: string;
-  card_name: string;
-  last_4_digits: string;
-  is_primary: boolean;
-  parent_card_id?: string;
-  total_limit?: number;
-}
-
-interface QRData {
-  id: string;
-  merchant_name: string;
-  platform?: string;
-  status?: string;
-  upi_id?: string;
-  settlement_time?: string;
-  base_payment_link?: string | null;
-  last_used_date?: string | null;
-}
-
-interface ActiveCooldown {
-  qrId: string;
-  merchantName: string;
-  expiresAt: number;
-  isBharatPe: boolean;
-}
+const SCREEN_WIDTH = Dimensions.get('window').width;
+const HISTORY_PAGE_SIZE = 20;
 
 export default function SettlementsScreen() {
   const router = useRouter();
-  const [isLoading, setIsLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [activeTab, setActiveTab] = useState<'pending' | 'vault' | 'history'>('pending');
+  const insets = useSafeAreaInsets();
 
-  const [pendingTxs, setPendingTxs] = useState<Transaction[]>([]);
-  const [settledTxs, setSettledTxs] = useState<Transaction[]>([]);
-  const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [cards, setCards] = useState<CardData[]>([]);
-  const [qrs, setQrs] = useState<QRData[]>([]);
-  const [currentUser, setCurrentUser] = useState<Profile | null>(null);
+  // Primary Tab Order: 1. QR Vault -> 2. In Transit -> 3. History
+  const [activeTab, setActiveTab] = useState<'vault' | 'pending' | 'history'>('vault');
 
   // Vault Selection
   const [selectedVaultCardId, setSelectedVaultCardId] = useState<string>('all');
   const [isCardDropdownOpen, setIsCardDropdownOpen] = useState(false);
+
+  // Data Stores
+  const [isLoading, setIsLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [cards, setCards] = useState<CardData[]>([]);
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [qrs, setQrs] = useState<QRData[]>([]);
+  const [currentUser, setCurrentUser] = useState<Profile | null>(null);
   const [cardAvailableMap, setCardAvailableMap] = useState<Record<string, number>>({});
-
-  // Settle Modal State
-  const [isSettleModalOpen, setIsSettleModalOpen] = useState(false);
-  const [settleTx, setSettleTx] = useState<Transaction | null>(null);
-  const [settlementType, setSettlementType] = useState<'full' | 'partial'>('full');
-  const [partialAmount, setPartialAmount] = useState('');
-  const [cashReceiverId, setCashReceiverId] = useState('');
-  const [settleTargetCardId, setSettleTargetCardId] = useState('');
-  const [settleRemarks, setSettleRemarks] = useState('');
-  const [isSettling, setIsSettling] = useState(false);
-
-  // New Rotation Withdrawal Modal
-  const [isNewWithdrawalOpen, setIsNewWithdrawalOpen] = useState(false);
-  const [manualAmount, setManualAmount] = useState('');
-  const [manualCardId, setManualCardId] = useState('');
-  const [manualQrId, setManualQrId] = useState('');
-  const [manualRemarks, setManualRemarks] = useState('');
-  const [isSavingWithdrawal, setIsSavingWithdrawal] = useState(false);
-
-  // QR Modal State (from QR Vault tab)
-  const [selectedQrForPayment, setSelectedQrForPayment] = useState<QRData | null>(null);
-  const [paymentMode, setPaymentMode] = useState<'once' | 'multiple'>('once');
-  const [splitCount, setSplitCount] = useState<number>(2);
-  const [qrPayAmount, setQrPayAmount] = useState<string>('5000');
-  const [generatedAmounts, setGeneratedAmounts] = useState<number[]>([]);
-  const [selectedPaymentCardId, setSelectedPaymentCardId] = useState<string>('');
-  const [isMarkingRotation, setIsMarkingRotation] = useState(false);
-
-  // Active Cooldowns
   const [activeCooldowns, setActiveCooldowns] = useState<ActiveCooldown[]>([]);
 
-  // Fetch Auxiliary Data
-  const fetchData = useCallback(async () => {
+  // In Transit & History Lists
+  const [pendingTxs, setPendingTxs] = useState<InTransitTransaction[]>([]);
+  const [settledHistory, setSettledHistory] = useState<SettledTransaction[]>([]);
+  const [historyPage, setHistoryPage] = useState(0);
+  const [hasMoreHistory, setHasMoreHistory] = useState(true);
+  const [loadingMoreHistory, setLoadingMoreHistory] = useState(false);
+
+  // Modals & Drawers State
+  const [selectedQrForPayment, setSelectedQrForPayment] = useState<QRData | null>(null);
+  const [selectedTxForSettle, setSelectedTxForSettle] = useState<InTransitTransaction | null>(null);
+  const [isAddQrOpen, setIsAddQrOpen] = useState(false);
+
+  // Therapeutic Celebration State
+  const [successModalVisible, setSuccessModalVisible] = useState(false);
+  const [successTitle, setSuccessTitle] = useState('Rotation Recorded');
+  const [successSubtitle, setSuccessSubtitle] = useState('Added to In-Transit liquidity queue');
+  const [successAmount, setSuccessAmount] = useState<number | undefined>(undefined);
+
+  // 120Hz Animations
+  const cardDropdownScale = useSharedValue(1);
+  const fabScale = useSharedValue(1);
+
+  const cardDropdownAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: cardDropdownScale.value }],
+  }));
+
+  const fabAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: fabScale.value }],
+  }));
+
+  const handleCardDropdownPress = () => {
+    cardDropdownScale.value = withSequence(
+      withTiming(0.92, { duration: 80 }),
+      withSpring(1, { damping: 14 })
+    );
+    setIsCardDropdownOpen(true);
+  };
+
+  const handleFabPress = () => {
+    fabScale.value = withSequence(
+      withTiming(0.88, { duration: 70 }),
+      withSpring(1, { damping: 14 })
+    );
+    setIsAddQrOpen(true);
+  };
+
+  // Fetch Auxiliary Data (Cards, Profiles, QRs, In-Transit)
+  const fetchCoreData = useCallback(async () => {
     try {
       const { data: authData } = await supabase.auth.getSession();
       const currentAuthUser = authData?.session?.user;
 
-      const [cardsRes, profilesRes, qrsRes, txsRes, allTxsRes, spendsRes] = await Promise.all([
-        supabase.from('cards').select('*').order('is_primary', { ascending: false }),
-        supabase.from('profiles').select('*').order('name'),
-        supabase.from('qrs').select('*').order('merchant_name'),
-        supabase
-          .from('card_transactions')
-          .select('*')
-          .eq('type', 'withdrawal')
-          .order('transaction_date', { ascending: false }),
-        supabase.from('card_transactions').select('amount, type, card_id, status, qr_id, remarks'),
-        supabase.from('spends').select('amount, payment_method, card_id'),
-      ]);
+      const [cardsRes, profilesRes, qrsRes, pendingRes, allTxsRes, spendsRes] =
+        await Promise.all([
+          supabase.from('cards').select('*').order('is_primary', { ascending: false }),
+          supabase.from('profiles').select('*').order('name'),
+          supabase.from('qrs').select('*').order('merchant_name'),
+          supabase
+            .from('card_transactions')
+            .select('*')
+            .eq('type', 'withdrawal')
+            .in('status', ['pending_settlement', 'partially_settled'])
+            .order('transaction_date', { ascending: false }),
+          supabase
+            .from('card_transactions')
+            .select('amount, type, card_id, status, qr_id, remarks'),
+          supabase.from('spends').select('amount, payment_method, card_id'),
+        ]);
 
       const cardsData: CardData[] = cardsRes.data || [];
       const profilesData: Profile[] = profilesRes.data || [];
       const qrsData: QRData[] = qrsRes.data || [];
-      const rawTxs = txsRes.data || [];
+      const rawPending = pendingRes.data || [];
       const allTxs = allTxsRes.data || [];
       const allSpends = spendsRes.data || [];
 
@@ -214,17 +176,22 @@ export default function SettlementsScreen() {
             .reduce((sum, t) => sum + Number(t.amount || 0), 0);
 
           const billPayments = allTxs
-            .filter((t) => t.type === 'bill_payment' && t.card_id && familyCardIds.includes(t.card_id))
+            .filter(
+              (t) => t.type === 'bill_payment' && t.card_id && familyCardIds.includes(t.card_id)
+            )
             .reduce((sum, t) => sum + Number(t.amount || 0), 0);
 
           const ccSpends = allSpends
             .filter(
               (s) =>
-                s.payment_method === 'credit_card' && s.card_id && familyCardIds.includes(s.card_id)
+                s.payment_method === 'credit_card' &&
+                s.card_id &&
+                familyCardIds.includes(s.card_id)
             )
             .reduce((sum, s) => sum + Number(s.amount || 0), 0);
 
-          const available = Number(primaryCard.total_limit || 0) - withdrawals - ccSpends + billPayments;
+          const available =
+            Number(primaryCard.total_limit || 0) - withdrawals - ccSpends + billPayments;
 
           familyCardIds.forEach((id) => {
             availableMap[id] = available;
@@ -232,8 +199,8 @@ export default function SettlementsScreen() {
         });
       setCardAvailableMap(availableMap);
 
-      // Process Transactions
-      const enriched: Transaction[] = rawTxs.map((t) => {
+      // Enrich In-Transit Transactions
+      const enrichedPending: InTransitTransaction[] = rawPending.map((t) => {
         const card = cardsData.find((c) => c.id === t.card_id);
         const qr = qrsData.find((q) => q.id === t.qr_id);
         const recorder = profilesData.find((p) => p.id === t.recorded_by);
@@ -248,31 +215,24 @@ export default function SettlementsScreen() {
           settled_to_name: settledTo?.name,
         };
       });
+      setPendingTxs(enrichedPending);
 
-      const pending = enriched.filter(
-        (t) => t.status === 'pending_settlement' || t.status === 'partially_settled'
-      );
-      const history = enriched.filter((t) => t.status === 'settled');
-
-      setPendingTxs(pending);
-      setSettledTxs(history);
-
-      // Defaults for manual entry
-      if (cardsData.length > 0 && !manualCardId) setManualCardId(cardsData[0].id);
-      if (qrsData.length > 0 && !manualQrId) setManualQrId(qrsData[0].id);
-
-      // Check Active Cooldowns (BharatPe 5-day / 24h cooling)
+      // Check Active Cooldowns (BharatPe 5-day / Standard 24h)
       const fiveDaysAgo = new Date();
       fiveDaysAgo.setDate(fiveDaysAgo.getDate() - 5);
 
-      const recentWithdrawals = rawTxs.filter(
-        (t) => t.qr_id && new Date(t.created_at || t.transaction_date) >= fiveDaysAgo
-      );
+      const { data: recentTxs } = await supabase
+        .from('card_transactions')
+        .select('qr_id, created_at, transaction_date')
+        .eq('type', 'withdrawal')
+        .gte('created_at', fiveDaysAgo.toISOString())
+        .not('qr_id', 'is', null)
+        .order('created_at', { ascending: false });
 
       const cooldownList: ActiveCooldown[] = [];
       const processedQrIds = new Set<string>();
 
-      recentWithdrawals.forEach((tx) => {
+      (recentTxs || []).forEach((tx) => {
         if (!tx.qr_id || processedQrIds.has(tx.qr_id)) return;
         const qrInfo = qrsData.find((q) => q.id === tx.qr_id);
         if (!qrInfo) return;
@@ -296,44 +256,312 @@ export default function SettlementsScreen() {
       });
       setActiveCooldowns(cooldownList);
     } catch (err) {
-      console.error('Error fetching settlements data:', err);
+      console.error('Error fetching settlements core data:', err);
     } finally {
       setIsLoading(false);
       setRefreshing(false);
     }
-  }, [manualCardId, manualQrId]);
+  }, []);
+
+  // Paginated History Engine (20 items + Infinite Scroll)
+  const fetchSettledHistoryPage = useCallback(
+    async (pageNumber: number, replace: boolean = false) => {
+      try {
+        if (pageNumber > 0) setLoadingMoreHistory(true);
+
+        const from = pageNumber * HISTORY_PAGE_SIZE;
+        const to = from + HISTORY_PAGE_SIZE - 1;
+
+        let q = supabase
+          .from('card_transactions')
+          .select('*')
+          .eq('type', 'withdrawal')
+          .eq('status', 'settled')
+          .order('settled_date', { ascending: false });
+
+        if (selectedVaultCardId !== 'all') {
+          q = q.eq('card_id', selectedVaultCardId);
+        }
+
+        const { data: rawSettled } = await q.range(from, to);
+        const settledList = rawSettled || [];
+
+        const enriched: SettledTransaction[] = settledList.map((t) => {
+          const card = cards.find((c) => c.id === t.card_id);
+          const qr = qrs.find((q) => q.id === t.qr_id);
+          const settledTo = profiles.find((p) => p.id === t.settled_to_user);
+
+          return {
+            id: t.id,
+            amount: Number(t.amount || 0),
+            transaction_date: t.transaction_date,
+            settled_date: t.settled_date,
+            merchant_name: qr?.merchant_name,
+            card_name: card?.card_name,
+            last_4_digits: card?.last_4_digits,
+            settled_to_name: settledTo?.name,
+            remarks: t.remarks,
+          };
+        });
+
+        setHasMoreHistory(settledList.length === HISTORY_PAGE_SIZE);
+
+        if (replace || pageNumber === 0) {
+          setSettledHistory(enriched);
+          setHistoryPage(0);
+        } else {
+          setSettledHistory((prev) => {
+            const existingIds = new Set(prev.map((p) => p.id));
+            const uniqueNew = enriched.filter((e) => !existingIds.has(e.id));
+            return [...prev, ...uniqueNew];
+          });
+          setHistoryPage(pageNumber);
+        }
+      } catch (err) {
+        console.error('Error fetching settled history page:', err);
+      } finally {
+        setLoadingMoreHistory(false);
+      }
+    },
+    [selectedVaultCardId, cards, qrs, profiles]
+  );
 
   useEffect(() => {
-    fetchData();
+    fetchCoreData();
+  }, [fetchCoreData]);
 
+  useEffect(() => {
+    if (cards.length > 0 || profiles.length > 0) {
+      fetchSettledHistoryPage(0, true);
+    }
+  }, [fetchSettledHistoryPage, cards.length, profiles.length]);
+
+  // Realtime Subscriptions
+  useEffect(() => {
     const channel = supabase
       .channel('mobile-settlements-live')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'card_transactions' }, () => fetchData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'cash_on_hand' }, () => fetchData())
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'card_transactions' },
+        () => {
+          fetchCoreData();
+          fetchSettledHistoryPage(0, true);
+        }
+      )
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'qrs' }, () => {
+        fetchCoreData();
+      })
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'cash_on_hand' },
+        () => {
+          fetchCoreData();
+        }
+      )
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [fetchData]);
+  }, [fetchCoreData, fetchSettledHistoryPage]);
 
-  const onRefresh = () => {
+  const onRefresh = async () => {
     setRefreshing(true);
-    fetchData();
+    await fetchCoreData();
+    await fetchSettledHistoryPage(0, true);
   };
 
-  // Filtered lists based on vault card
+  const handleLoadMoreHistory = () => {
+    if (loadingMoreHistory || !hasMoreHistory) return;
+    fetchSettledHistoryPage(historyPage + 1, false);
+  };
+
+  // Toggle QR Active vs On-Hold with Optimistic Update
+  const handleToggleQrStatus = async (qrId: string, currentStatus: string) => {
+    const newStatus = currentStatus === 'active' ? 'on_hold' : 'active';
+    setQrs((prev) => prev.map((q) => (q.id === qrId ? { ...q, status: newStatus } : q)));
+
+    try {
+      const { error } = await supabase.from('qrs').update({ status: newStatus }).eq('id', qrId);
+      if (error) throw error;
+    } catch (err) {
+      console.error('Error toggling QR status:', err);
+      setQrs((prev) => prev.map((q) => (q.id === qrId ? { ...q, status: currentStatus } : q)));
+    }
+  };
+
+  // Record Rotation Withdrawal from Recommended QR or QR Payment Modal
+  const handleRecordRotation = async ({
+    cardId,
+    qrId,
+    amount,
+    remarks,
+  }: {
+    cardId: string;
+    qrId: string;
+    amount: number;
+    remarks: string;
+  }) => {
+    const today = new Date().toISOString().slice(0, 10);
+    const nowISO = new Date().toISOString();
+
+    const { error: txError } = await supabase.from('card_transactions').insert({
+      card_id: cardId,
+      qr_id: qrId,
+      amount,
+      transaction_date: today,
+      type: 'withdrawal',
+      status: 'pending_settlement',
+      recorded_by: currentUser?.id,
+      remarks,
+    });
+    if (txError) throw txError;
+
+    await supabase.from('qrs').update({ last_used_date: nowISO }).eq('id', qrId);
+
+    // Haptics on save
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+    // Show Therapeutic Success Checkmark Celebration
+    setSuccessTitle('Rotation Recorded');
+    setSuccessSubtitle('Queued into In-Transit ledger for settlement');
+    setSuccessAmount(amount);
+    setSuccessModalVisible(true);
+
+    await fetchCoreData();
+  };
+
+  // Confirm Settlement (Full or Partial)
+  const handleConfirmSettlement = async ({
+    tx,
+    amtToSettle,
+    cashReceiverId,
+    settleTargetCardId,
+    remarks,
+  }: {
+    tx: InTransitTransaction;
+    amtToSettle: number;
+    cashReceiverId: string;
+    settleTargetCardId: string;
+    remarks: string;
+  }) => {
+    const today = new Date().toISOString().slice(0, 10);
+    const prevHistory = Array.isArray(tx.settlement_details?.history)
+      ? tx.settlement_details.history
+      : [];
+    const prevSettled = Number(tx.settlement_details?.total_settled || 0);
+    const newSettled = prevSettled + amtToSettle;
+    const newDue = Math.max(0, Number(tx.amount) - newSettled);
+
+    const newHistoryEntry = {
+      settle_id: `settle-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      amount: amtToSettle,
+      settled_date: today,
+      settled_to_user: cashReceiverId,
+      card_id: settleTargetCardId,
+      remarks: remarks || undefined,
+    };
+
+    const updatedSettlementDetails = {
+      total_settled: newSettled,
+      total_due: newDue,
+      history: [...prevHistory, newHistoryEntry],
+    };
+
+    if (newDue <= 0) {
+      await supabase
+        .from('card_transactions')
+        .update({
+          card_id: settleTargetCardId,
+          status: 'settled',
+          settled_date: today,
+          settled_to_user: cashReceiverId,
+          settlement_details: updatedSettlementDetails,
+        })
+        .eq('id', tx.id);
+    } else {
+      await supabase
+        .from('card_transactions')
+        .update({
+          status: 'partially_settled',
+          settlement_details: updatedSettlementDetails,
+        })
+        .eq('id', tx.id);
+    }
+
+    const baseRemark = `Settlement received from ${tx.merchant_name || 'Rotation Entry'}`;
+    const finalRemark = remarks ? `${baseRemark} - ${remarks}` : baseRemark;
+
+    await supabase.from('cash_on_hand_ledger').insert({
+      user_id: cashReceiverId,
+      card_id: settleTargetCardId,
+      amount: amtToSettle,
+      transaction_type: 'credit',
+      remarks: finalRemark,
+      transaction_date: new Date().toISOString(),
+      linked_card_transaction_id: tx.id,
+    });
+
+    // Success Haptics on settlement
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+    // Show Therapeutic Success Checkmark Celebration
+    setSuccessTitle('Settlement Completed');
+    setSuccessSubtitle('Successfully credited into Cash on Hand balance');
+    setSuccessAmount(amtToSettle);
+    setSuccessModalVisible(true);
+
+    await fetchCoreData();
+    await fetchSettledHistoryPage(0, true);
+  };
+
+  // Save New QR (Dynamic or Static)
+  const handleSaveNewQR = async ({
+    merchant_name,
+    upi_id,
+    platform,
+    settlement_time,
+    base_payment_link,
+    is_static,
+    card_id,
+  }: {
+    merchant_name: string;
+    upi_id: string;
+    platform: string;
+    settlement_time: string;
+    base_payment_link?: string;
+    is_static: boolean;
+    card_id?: string;
+  }) => {
+    const payload: any = {
+      merchant_name,
+      upi_id,
+      platform,
+      settlement_time,
+      base_payment_link: basePaymentLink(base_payment_link),
+      status: is_static ? 'static' : 'active',
+      card_id: card_id || cards[0]?.id || null,
+    };
+
+    const { error } = await supabase.from('qrs').insert(payload);
+    if (error) throw error;
+
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    await fetchCoreData();
+  };
+
+  const basePaymentLink = (link?: string) => {
+    if (!link || !link.trim()) return null;
+    return link.trim();
+  };
+
+  // Filtered lists by selected vault card
   const filteredPending = useMemo(() => {
     if (selectedVaultCardId === 'all') return pendingTxs;
     return pendingTxs.filter((t) => t.card_id === selectedVaultCardId);
   }, [pendingTxs, selectedVaultCardId]);
 
-  const filteredSettled = useMemo(() => {
-    if (selectedVaultCardId === 'all') return settledTxs;
-    return settledTxs.filter((t) => t.card_id === selectedVaultCardId);
-  }, [settledTxs, selectedVaultCardId]);
-
-  // Total in transit calculation
+  // Total In Transit Calculation
   const totalInTransit = useMemo(() => {
     return filteredPending.reduce((sum, t) => {
       const due =
@@ -344,289 +572,78 @@ export default function SettlementsScreen() {
     }, 0);
   }, [filteredPending]);
 
-  // Open Settle Modal
-  const openSettleModal = (tx: Transaction) => {
-    setSettleTx(tx);
-    setCashReceiverId(currentUser?.id || (profiles.length > 0 ? profiles[0].id : ''));
-    const defaultCard =
-      selectedVaultCardId !== 'all'
-        ? selectedVaultCardId
-        : tx.card_id || (cards.length > 0 ? cards[0].id : '');
-    setSettleTargetCardId(defaultCard);
-    setSettlementType('full');
-    setPartialAmount('');
-    setSettleRemarks('');
-    setIsSettleModalOpen(true);
-  };
-
-  // Confirm Settlement
-  const handleConfirmSettlement = async () => {
-    if (!settleTx || !cashReceiverId || !settleTargetCardId) {
-      Alert.alert('Required', 'Please ensure recipient and target card are selected.');
-      return;
-    }
-
-    setIsSettling(true);
-
-    const today = new Date().toISOString().slice(0, 10);
-    const currentDue =
-      settleTx.settlement_details?.total_due !== undefined
-        ? Number(settleTx.settlement_details.total_due)
-        : Number(settleTx.amount);
-
-    const isPartial =
-      settlementType === 'partial' &&
-      Number(partialAmount) > 0 &&
-      Number(partialAmount) < currentDue;
-    const amtToSettle = isPartial ? Number(partialAmount) : currentDue;
-
-    const prevHistory = Array.isArray(settleTx.settlement_details?.history)
-      ? settleTx.settlement_details.history
-      : [];
-    const prevSettled = Number(settleTx.settlement_details?.total_settled || 0);
-
-    const newSettled = prevSettled + amtToSettle;
-    const newDue = Math.max(0, Number(settleTx.amount) - newSettled);
-
-    const newHistoryEntry: SettlementHistoryEntry = {
-      settle_id: `settle-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      amount: amtToSettle,
-      settled_date: today,
-      settled_to_user: cashReceiverId,
-      card_id: settleTargetCardId,
-      remarks: settleRemarks.trim() || undefined,
-    };
-
-    const updatedSettlementDetails: SettlementDetails = {
-      total_settled: newSettled,
-      total_due: newDue,
-      history: [...prevHistory, newHistoryEntry],
-    };
-
-    try {
-      if (newDue <= 0) {
-        await supabase
-          .from('card_transactions')
-          .update({
-            card_id: settleTargetCardId,
-            status: 'settled',
-            settled_date: today,
-            settled_to_user: cashReceiverId,
-            settlement_details: updatedSettlementDetails,
-          })
-          .eq('id', settleTx.id);
-      } else {
-        await supabase
-          .from('card_transactions')
-          .update({
-            status: 'partially_settled',
-            settlement_details: updatedSettlementDetails,
-          })
-          .eq('id', settleTx.id);
-      }
-
-      const baseRemark = `Settlement received from ${settleTx.merchant_name || 'Rotation Entry'}`;
-      const finalLedgerRemark = settleRemarks.trim()
-        ? `${baseRemark} - ${settleRemarks.trim()}`
-        : baseRemark;
-
-      await supabase.from('cash_on_hand_ledger').insert({
-        user_id: cashReceiverId,
-        card_id: settleTargetCardId,
-        amount: amtToSettle,
-        transaction_type: 'credit',
-        remarks: finalLedgerRemark,
-        transaction_date: new Date().toISOString(),
-        linked_card_transaction_id: settleTx.id,
-      });
-
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setIsSettleModalOpen(false);
-      fetchData();
-    } catch (err: any) {
-      console.error('Error during settlement:', err);
-      Alert.alert('Error', err?.message || 'Failed to confirm settlement.');
-    } finally {
-      setIsSettling(false);
-    }
-  };
-
-  // Submit Manual Rotation Withdrawal
-  const handleSaveManualWithdrawal = async () => {
-    if (!manualAmount || Number(manualAmount) <= 0 || !manualCardId) {
-      Alert.alert('Required', 'Please enter a valid amount and select a card.');
-      return;
-    }
-
-    setIsSavingWithdrawal(true);
-
-    try {
-      const today = new Date().toISOString().slice(0, 10);
-      await supabase.from('card_transactions').insert({
-        card_id: manualCardId,
-        qr_id: manualQrId || null,
-        amount: Number(manualAmount),
-        transaction_date: today,
-        type: 'withdrawal',
-        status: 'pending_settlement',
-        recorded_by: currentUser?.id,
-        remarks: manualRemarks || 'Manual Rotation Entry',
-      });
-
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setIsNewWithdrawalOpen(false);
-      setManualAmount('');
-      setManualRemarks('');
-      fetchData();
-    } catch (err: any) {
-      console.error('Save error:', err);
-      Alert.alert('Error', err?.message || 'Failed to record withdrawal.');
-    } finally {
-      setIsSavingWithdrawal(false);
-    }
-  };
-
-  // Split Amounts Generator
-  const generateSplits = (total: number, count: number) => {
-    if (count <= 1) return [total];
-    let remaining = total;
-    const splits: number[] = [];
-    for (let i = 0; i < count - 1; i++) {
-      const avg = remaining / (count - i);
-      const min = Math.max(500, Math.floor(avg * 0.7));
-      const max = Math.min(remaining - 500 * (count - i - 1), Math.floor(avg * 1.3));
-      const val = Math.floor((Math.random() * (max - min) + min) / 100) * 100;
-      splits.push(val);
-      remaining -= val;
-    }
-    splits.push(remaining);
-    return splits;
-  };
-
-  // Open QR Payment Modal
-  const openQrPaymentModal = (qr: QRData) => {
-    setSelectedQrForPayment(qr);
-    setPaymentMode('once');
-    setSplitCount(2);
-    setQrPayAmount('5000');
-    setGeneratedAmounts([5000]);
-    setSelectedPaymentCardId(cards.length > 0 ? cards[0].id : '');
-  };
-
-  // Recalculate QR splits
-  const handleAmountChange = (text: string) => {
-    setQrPayAmount(text);
-    const num = Number(text) || 0;
-    if (paymentMode === 'multiple') {
-      setGeneratedAmounts(generateSplits(num, splitCount));
-    } else {
-      setGeneratedAmounts([num]);
-    }
-  };
-
-  const handleSplitCountChange = (count: number) => {
-    setSplitCount(count);
-    const num = Number(qrPayAmount) || 0;
-    setGeneratedAmounts(generateSplits(num, count));
-  };
-
-  // Mark Used & Save Rotation
-  const handleMarkUsedAndSave = async () => {
-    if (!selectedQrForPayment || !selectedPaymentCardId || !qrPayAmount) {
-      Alert.alert('Required', 'Please enter amount and pick card.');
-      return;
-    }
-
-    setIsMarkingRotation(true);
-
-    try {
-      const numAmt = Number(qrPayAmount);
-      const today = new Date().toISOString().slice(0, 10);
-
-      await supabase.from('card_transactions').insert({
-        card_id: selectedPaymentCardId,
-        qr_id: selectedQrForPayment.id,
-        amount: numAmt,
-        transaction_date: today,
-        type: 'withdrawal',
-        status: 'pending_settlement',
-        recorded_by: currentUser?.id,
-        remarks: `Smart QR Swipe • ${selectedQrForPayment.merchant_name}`,
-      });
-
-      await supabase
-        .from('qrs')
-        .update({ last_used_date: today })
-        .eq('id', selectedQrForPayment.id);
-
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setSelectedQrForPayment(null);
-      fetchData();
-    } catch (err: any) {
-      console.error('Error saving rotation:', err);
-      Alert.alert('Error', err?.message || 'Failed to save rotation.');
-    } finally {
-      setIsMarkingRotation(false);
-    }
-  };
-
   return (
-    <SafeAreaView style={styles.safeArea}>
-      {/* ================= 1. HEADER ================= */}
-      <View style={styles.header}>
-        <View style={styles.headerLeft}>
+    <View style={styles.screenContainer}>
+      <StatusBar barStyle="light-content" backgroundColor="#03180F" translucent />
+
+      {/* ================= 1. LUXURY GREEN GRADIENT HEADER ================= */}
+      <LinearGradient
+        colors={['#03180F', '#072C1C', '#0B3F28', '#062618']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 0, y: 1 }}
+        style={[styles.headerHeroContainer, { paddingTop: insets.top + 8 }]}
+      >
+        <View style={styles.headerTopRow}>
           <TouchableOpacity
-            style={styles.avatarButton}
+            style={styles.userProfileBtn}
             onPress={() => router.push('/settings')}
             activeOpacity={0.8}
           >
-            {currentUser?.avatar_url ? (
-              <Image source={{ uri: currentUser.avatar_url }} style={styles.avatarImg} />
-            ) : (
-              <View style={styles.avatarPlaceholder}>
-                <Text style={styles.avatarInitial}>{currentUser?.name?.[0] || 'U'}</Text>
+            <View style={styles.avatarBorder}>
+              {currentUser?.avatar_url ? (
+                <Image source={{ uri: currentUser.avatar_url }} style={styles.avatarImg} />
+              ) : (
+                <View style={styles.avatarPlaceholder}>
+                  <Text style={styles.avatarText}>
+                    {currentUser?.name?.charAt(0).toUpperCase() || 'U'}
+                  </Text>
+                </View>
+              )}
+            </View>
+            <View style={styles.userTextCol}>
+              <View style={styles.liveStatusRow}>
+                <View style={styles.livePulseDot} />
+                <Text style={styles.liveStatusText}>LIQUIDITY ENGINE • REALTIME</Text>
               </View>
-            )}
-            <View style={styles.avatarStatusDot} />
+              <Text style={styles.headerTitle}>Settlements & QRs</Text>
+            </View>
           </TouchableOpacity>
 
-          <View>
-            <Text style={styles.headerSub}>Liquidity Engine</Text>
-            <Text style={styles.headerTitle}>Settlements & QRs</Text>
-          </View>
+          {/* Vault Card Selector Dropdown with 120Hz Tactile Pop */}
+          <Animated.View style={cardDropdownAnimStyle}>
+            <TouchableOpacity
+              style={styles.vaultPill}
+              onPress={handleCardDropdownPress}
+              activeOpacity={0.8}
+            >
+              <Layers size={13} color="#CAD6C9" />
+              <Text style={styles.vaultPillText} numberOfLines={1}>
+                {selectedVaultCardId === 'all'
+                  ? 'All Cards'
+                  : cards.find((c) => c.id === selectedVaultCardId)?.card_name || 'Card'}
+              </Text>
+              <ChevronDown size={12} color="#CAD6C9" />
+            </TouchableOpacity>
+          </Animated.View>
         </View>
 
-        <View style={styles.headerRight}>
-          {/* Vault Selector Pill */}
-          <TouchableOpacity
-            style={styles.vaultPill}
-            onPress={() => setIsCardDropdownOpen(!isCardDropdownOpen)}
-            activeOpacity={0.8}
+        {/* Symmetrical Organic SVG Wave Transition */}
+        <View style={styles.svgWaveWrapper}>
+          <Svg
+            width={SCREEN_WIDTH}
+            height={32}
+            viewBox={`0 0 ${SCREEN_WIDTH} 32`}
+            preserveAspectRatio="none"
           >
-            <Layers size={13} color="#2D7A5D" />
-            <Text style={styles.vaultPillText} numberOfLines={1}>
-              {selectedVaultCardId === 'all'
-                ? 'All Cards'
-                : cards.find((c) => c.id === selectedVaultCardId)?.card_name || 'Card'}
-            </Text>
-            <ChevronDown size={12} color={CedarColors.ink500} />
-          </TouchableOpacity>
-
-          {/* New Rotation Withdrawal Button */}
-          <HapticButton
-            style={styles.withdrawBtn}
-            onPress={() => {
-              setIsNewWithdrawalOpen(true);
-            }}
-            feedbackType="rigid"
-          >
-            <Plus size={16} color="#F6F9F5" strokeWidth={2.5} />
-            <Text style={styles.withdrawBtnText}>Withdraw</Text>
-          </HapticButton>
+            <Path
+              d={`M 0,0 C ${SCREEN_WIDTH * 0.25},24 ${SCREEN_WIDTH * 0.75},24 ${SCREEN_WIDTH},0 L ${SCREEN_WIDTH},32 L 0,32 Z`}
+              fill="#EFF3EE"
+            />
+          </Svg>
         </View>
-      </View>
+      </LinearGradient>
 
-      {/* ================= 2. SUMMARY BANNER ================= */}
+      {/* ================= 2. LIQUIDITY SUMMARY BANNER ================= */}
       <View style={styles.summaryCardWrapper}>
         <LinearGradient
           colors={['#071A12', '#0C2B20', '#071A12']}
@@ -644,32 +661,28 @@ export default function SettlementsScreen() {
               <Text style={styles.pendingBadgeText}>{filteredPending.length} Pending</Text>
             </View>
           </View>
-
-          <View style={styles.summaryBottomRow}>
-            <Text style={styles.summarySub}>
-              Tap any rotation below to record receipt into cash on hand
-            </Text>
-          </View>
+          <Text style={styles.summarySub}>
+            Tap any rotation below to record receipt into cash on hand
+          </Text>
         </LinearGradient>
       </View>
 
-      {/* ================= 3. SEGMENTED TABS ================= */}
+      {/* ================= 3. REORDERED SEGMENTED TABS ================= */}
+      {/* 1. QR Vault -> 2. In Transit -> 3. History */}
       <View style={styles.tabsRow}>
-        {(['pending', 'vault', 'history'] as const).map((tab) => {
+        {(['vault', 'pending', 'history'] as const).map((tab) => {
           const isActive = activeTab === tab;
           const label =
-            tab === 'pending'
-              ? 'In Transit'
-              : tab === 'vault'
+            tab === 'vault'
               ? 'QR Vault'
+              : tab === 'pending'
+              ? 'In Transit'
               : 'Settled History';
           return (
             <TouchableOpacity
               key={tab}
               style={[styles.tabChip, isActive && styles.activeTabChip]}
-              onPress={() => {
-                setActiveTab(tab);
-              }}
+              onPress={() => setActiveTab(tab)}
               activeOpacity={0.8}
             >
               <Text style={[styles.tabChipText, isActive && styles.activeTabChipText]}>
@@ -683,629 +696,115 @@ export default function SettlementsScreen() {
       {/* ================= 4. TAB CONTENT ================= */}
       {isLoading ? (
         <View style={styles.loaderContainer}>
-          <ActivityIndicator size="large" color="#1B4D3E" />
-          <Text style={styles.loaderText}>Loading Settlements...</Text>
+          <ActivityIndicator size="large" color="#0B3F28" />
+          <Text style={styles.loaderText}>Loading Liquidity Ledger...</Text>
+        </View>
+      ) : activeTab === 'history' ? (
+        <View style={styles.historyContainer}>
+          <SettledHistoryTab
+            transactions={settledHistory}
+            loadingMore={loadingMoreHistory}
+            hasMore={hasMoreHistory}
+            onLoadMore={handleLoadMoreHistory}
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+          />
         </View>
       ) : (
         <ScrollView
           style={styles.contentScroll}
-          contentContainerStyle={styles.scrollContent}
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: 130 }]}
           showsVerticalScrollIndicator={false}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#1B4D3E']} />}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={['#0B3F28']}
+              tintColor="#0B3F28"
+            />
+          }
         >
-          {/* TAB 1: IN TRANSIT / PENDING */}
-          {activeTab === 'pending' && (
-            <View style={styles.tabSection}>
-              {filteredPending.length === 0 ? (
-                <View style={styles.emptyContainer}>
-                  <View style={styles.emptyIconCircle}>
-                    <CheckCircle2 size={32} color="#2D7A5D" />
-                  </View>
-                  <Text style={styles.emptyTitle}>All Rotations Settled</Text>
-                  <Text style={styles.emptySub}>
-                    Zero pending withdrawals in transit. All cash has been accounted for.
-                  </Text>
-                </View>
-              ) : (
-                filteredPending.map((tx) => {
-                  const currentDue =
-                    tx.settlement_details?.total_due !== undefined
-                      ? Number(tx.settlement_details.total_due)
-                      : Number(tx.amount);
-                  const isPartial = tx.status === 'partially_settled';
-
-                  return (
-                    <View key={tx.id} style={styles.rotationCard}>
-                      <View style={styles.rotationTopRow}>
-                        <View style={styles.rotationMerchantCol}>
-                          <Text style={styles.rotationMerchant}>
-                            {tx.merchant_name || 'Rotation Withdrawal'}
-                          </Text>
-                          <Text style={styles.rotationSub}>
-                            Rotated by {tx.recorder_name?.split(' ')[0] || 'User'} •{' '}
-                            {tx.card_name || 'Card'} (**{tx.last_4_digits || '0000'})
-                          </Text>
-                        </View>
-
-                        <View style={styles.rotationAmountCol}>
-                          <Text style={styles.rotationAmount}>₹{currentDue.toLocaleString('en-IN')}</Text>
-                          <View
-                            style={[
-                              styles.statusBadge,
-                              isPartial ? styles.partialBadge : styles.pendingBadgeSmall,
-                            ]}
-                          >
-                            <Text
-                              style={[
-                                styles.statusBadgeText,
-                                isPartial ? styles.partialBadgeText : styles.pendingBadgeTextSmall,
-                              ]}
-                            >
-                              {isPartial ? 'Partially Settled' : 'Pending'}
-                            </Text>
-                          </View>
-                        </View>
-                      </View>
-
-                      {tx.remarks ? (
-                        <Text style={styles.rotationRemarks}>"{tx.remarks}"</Text>
-                      ) : null}
-
-                      <View style={styles.rotationDivider} />
-
-                      <View style={styles.rotationBottomRow}>
-                        <Text style={styles.rotationDate}>
-                          Date: {tx.transaction_date ? new Date(tx.transaction_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Recent'}
-                        </Text>
-
-                        <HapticButton
-                          style={styles.settleBtn}
-                          onPress={() => openSettleModal(tx)}
-                          feedbackType="rigid"
-                        >
-                          <CheckCircle2 size={13} color="#FFFFFF" />
-                          <Text style={styles.settleBtnText}>Settle Now</Text>
-                        </HapticButton>
-                      </View>
-                    </View>
-                  );
-                })
-              )}
-            </View>
-          )}
-
-          {/* TAB 2: QR VAULT */}
+          {/* TAB 1: QR VAULT */}
           {activeTab === 'vault' && (
-            <View style={styles.tabSection}>
-              {/* Cooldown Alert Banner */}
-              {activeCooldowns.length > 0 && (
-                <View style={styles.coolingBanner}>
-                  <Timer size={14} color="#D97706" />
-                  <Text style={styles.coolingBannerText}>
-                    {activeCooldowns.length} QR{activeCooldowns.length > 1 ? 's' : ''} currently in 24h cooling cycle.
-                  </Text>
-                </View>
-              )}
-
-              <Text style={styles.qrSectionTitle}>Operational Merchant QRs</Text>
-
-              <View style={styles.qrGrid}>
-                {qrs.map((qr) => {
-                  const cooldown = activeCooldowns.find((c) => c.qrId === qr.id);
-                  const isCooling = !!cooldown;
-
-                  return (
-                    <TouchableOpacity
-                      key={qr.id}
-                      style={[styles.qrCard, isCooling && styles.qrCardCooling]}
-                      onPress={() => openQrPaymentModal(qr)}
-                      activeOpacity={0.8}
-                    >
-                      <View style={styles.qrCardTop}>
-                        <View style={styles.qrIconBadge}>
-                          <QrCode size={18} color="#1B4D3E" />
-                        </View>
-                        <View
-                          style={[
-                            styles.qrStatusPill,
-                            isCooling ? styles.qrStatusCooling : styles.qrStatusActive,
-                          ]}
-                        >
-                          <Text
-                            style={[
-                              styles.qrStatusText,
-                              isCooling ? styles.qrStatusTextCooling : styles.qrStatusTextActive,
-                            ]}
-                          >
-                            {isCooling ? 'Cooling' : 'Active'}
-                          </Text>
-                        </View>
-                      </View>
-
-                      <Text style={styles.qrName} numberOfLines={1}>
-                        {qr.merchant_name}
-                      </Text>
-                      <Text style={styles.qrPlatform}>{qr.platform || 'UPI QR'}</Text>
-
-                      <View style={styles.qrFooterRow}>
-                        <Text style={styles.qrSettlementTime}>
-                          {qr.settlement_time || 'T+0 Instant'}
-                        </Text>
-                        <ArrowRight size={13} color="#2D7A5D" />
-                      </View>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            </View>
+            <QRVaultTab
+              qrs={qrs}
+              activeCooldowns={activeCooldowns}
+              currentUserName={currentUser?.name || ''}
+              onSelectQr={(qr) => setSelectedQrForPayment(qr)}
+              onToggleStatus={handleToggleQrStatus}
+            />
           )}
 
-          {/* TAB 3: SETTLED HISTORY */}
-          {activeTab === 'history' && (
-            <View style={styles.tabSection}>
-              {filteredSettled.length === 0 ? (
-                <View style={styles.emptyContainer}>
-                  <View style={styles.emptyIconCircle}>
-                    <Clock size={32} color={CedarColors.ink500} />
-                  </View>
-                  <Text style={styles.emptyTitle}>No Settled Records</Text>
-                  <Text style={styles.emptySub}>
-                    Completed settlements will appear here chronologically.
-                  </Text>
-                </View>
-              ) : (
-                filteredSettled.map((tx) => (
-                  <View key={tx.id} style={styles.historyCard}>
-                    <View style={styles.historyTopRow}>
-                      <View style={styles.historyIconBox}>
-                        <CheckCircle2 size={16} color="#2D7A5D" />
-                      </View>
-                      <View style={styles.historyInfoCol}>
-                        <Text style={styles.historyTitle}>
-                          {tx.merchant_name || 'Settled Rotation'}
-                        </Text>
-                        <Text style={styles.historySubtitle}>
-                          Settled to {tx.settled_to_name || 'User'} • {tx.card_name || 'Card'}
-                        </Text>
-                      </View>
-                      <View style={styles.historyAmountCol}>
-                        <Text style={styles.historyAmount}>+₹{Number(tx.amount).toLocaleString('en-IN')}</Text>
-                        <Text style={styles.historyDate}>
-                          {tx.settled_date || tx.transaction_date}
-                        </Text>
-                      </View>
-                    </View>
-
-                    {tx.remarks ? (
-                      <Text style={styles.historyRemarks}>"{tx.remarks}"</Text>
-                    ) : null}
-                  </View>
-                ))
-              )}
-            </View>
+          {/* TAB 2: IN TRANSIT */}
+          {activeTab === 'pending' && (
+            <InTransitTab
+              transactions={filteredPending}
+              onSettle={(tx) => setSelectedTxForSettle(tx)}
+            />
           )}
         </ScrollView>
       )}
 
-      {/* ================= SETTLE NOW MODAL ================= */}
-      <Modal visible={isSettleModalOpen} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeader}>
-              <View>
-                <Text style={styles.modalTitle}>Confirm Settlement</Text>
-                <Text style={styles.modalSub}>
-                  Crediting Cash on Hand from {settleTx?.merchant_name || 'Rotation'}
-                </Text>
-              </View>
-              <TouchableOpacity onPress={() => setIsSettleModalOpen(false)}>
-                <X size={18} color={CedarColors.ink700} />
-              </TouchableOpacity>
-            </View>
+      {/* ================= 5. ELEVATED FLOATING ACTION BUTTON (FAB) ================= */}
+      <Animated.View style={[styles.floatingFabContainer, fabAnimStyle]}>
+        <TouchableOpacity
+          style={styles.floatingFab}
+          activeOpacity={0.9}
+          onPress={handleFabPress}
+        >
+          <LinearGradient
+            colors={['#10B981', '#047857']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.floatingFabGradient}
+          >
+            <Plus size={24} color="#FFFFFF" strokeWidth={2.8} />
+          </LinearGradient>
+        </TouchableOpacity>
+      </Animated.View>
 
-            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.modalBody}>
-              {/* Type Switcher: Full vs Partial */}
-              <View style={styles.settleTypeRow}>
-                <TouchableOpacity
-                  style={[
-                    styles.settleTypeBtn,
-                    settlementType === 'full' && styles.settleTypeBtnActive,
-                  ]}
-                  onPress={() => {
-                    setSettlementType('full');
-                  }}
-                >
-                  <Text
-                    style={[
-                      styles.settleTypeBtnText,
-                      settlementType === 'full' && styles.settleTypeBtnTextActive,
-                    ]}
-                  >
-                    Full (₹
-                    {(
-                      settleTx?.settlement_details?.total_due !== undefined
-                        ? Number(settleTx.settlement_details.total_due)
-                        : Number(settleTx?.amount || 0)
-                    ).toLocaleString('en-IN')}
-                    )
-                  </Text>
-                </TouchableOpacity>
+      {/* ================= MODALS & DRAWERS ================= */}
 
-                <TouchableOpacity
-                  style={[
-                    styles.settleTypeBtn,
-                    settlementType === 'partial' && styles.settleTypeBtnActive,
-                  ]}
-                  onPress={() => {
-                    setSettlementType('partial');
-                  }}
-                >
-                  <Text
-                    style={[
-                      styles.settleTypeBtnText,
-                      settlementType === 'partial' && styles.settleTypeBtnTextActive,
-                    ]}
-                  >
-                    Partial Amount
-                  </Text>
-                </TouchableOpacity>
-              </View>
+      {/* QR Payment & Rotation Swipe Modal */}
+      <QRPaymentModal
+        visible={!!selectedQrForPayment}
+        onClose={() => setSelectedQrForPayment(null)}
+        qr={selectedQrForPayment}
+        cards={cards}
+        cardAvailableMap={cardAvailableMap}
+        onRecordRotation={handleRecordRotation}
+      />
 
-              {settlementType === 'partial' && (
-                <View style={styles.formGroup}>
-                  <Text style={styles.formLabel}>Partial Amount (₹)</Text>
-                  <TextInput
-                    style={styles.textInput}
-                    placeholder="Enter received amount"
-                    placeholderTextColor={CedarColors.ink500}
-                    keyboardType="numeric"
-                    value={partialAmount}
-                    onChangeText={setPartialAmount}
-                  />
-                </View>
-              )}
+      {/* Settle Confirm Modal */}
+      <SettleConfirmModal
+        visible={!!selectedTxForSettle}
+        onClose={() => setSelectedTxForSettle(null)}
+        tx={selectedTxForSettle}
+        profiles={profiles}
+        cards={cards}
+        currentUserId={currentUser?.id}
+        defaultCardId={selectedVaultCardId}
+        onConfirm={handleConfirmSettlement}
+      />
 
-              {/* Recipient User Picker */}
-              <View style={styles.formGroup}>
-                <Text style={styles.formLabel}>Cash Receiver</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.pillsScroll}>
-                  {profiles.map((p) => {
-                    const isSelected = cashReceiverId === p.id;
-                    return (
-                      <TouchableOpacity
-                        key={p.id}
-                        style={[styles.userPill, isSelected && styles.userPillActive]}
-                        onPress={() => {
-                          setCashReceiverId(p.id);
-                        }}
-                      >
-                        <Text style={[styles.userPillText, isSelected && styles.userPillTextActive]}>
-                          {p.name.split(' ')[0]}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
-              </View>
+      {/* Add New QR Drawer (Dynamic & Static) */}
+      <AddQRDrawer
+        visible={isAddQrOpen}
+        onClose={() => setIsAddQrOpen(false)}
+        cards={cards}
+        onSaveQR={handleSaveNewQR}
+      />
 
-              {/* Target Card Picker */}
-              <View style={styles.formGroup}>
-                <Text style={styles.formLabel}>Target Card (Ledger Destination)</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.pillsScroll}>
-                  {cards.map((c) => {
-                    const isSelected = settleTargetCardId === c.id;
-                    return (
-                      <TouchableOpacity
-                        key={c.id}
-                        style={[styles.cardPill, isSelected && styles.cardPillActive]}
-                        onPress={() => {
-                          setSettleTargetCardId(c.id);
-                        }}
-                      >
-                        <Text style={[styles.cardPillText, isSelected && styles.cardPillTextActive]}>
-                          {c.card_name} (**{c.last_4_digits})
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
-              </View>
+      {/* Therapeutic Success Celebration Modal */}
+      <TherapeuticSuccessModal
+        visible={successModalVisible}
+        onDismiss={() => setSuccessModalVisible(false)}
+        title={successTitle}
+        subtitle={successSubtitle}
+        amount={successAmount}
+      />
 
-              {/* Remarks */}
-              <View style={styles.formGroup}>
-                <Text style={styles.formLabel}>Settlement Note (Optional)</Text>
-                <TextInput
-                  style={styles.textInput}
-                  placeholder="e.g. Received via NEFT / Cash"
-                  placeholderTextColor={CedarColors.ink500}
-                  value={settleRemarks}
-                  onChangeText={setSettleRemarks}
-                />
-              </View>
-            </ScrollView>
-
-            <View style={styles.modalFooter}>
-              <HapticButton
-                style={[styles.confirmBtn, isSettling && styles.confirmBtnDisabled]}
-                onPress={handleConfirmSettlement}
-                disabled={isSettling}
-                feedbackType="rigid"
-              >
-                {isSettling ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
-                ) : (
-                  <>
-                    <ShieldCheck size={18} color="#FFFFFF" strokeWidth={2.5} />
-                    <Text style={styles.confirmBtnText}>Confirm Settlement</Text>
-                  </>
-                )}
-              </HapticButton>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* ================= MANUAL WITHDRAWAL MODAL ================= */}
-      <Modal visible={isNewWithdrawalOpen} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeader}>
-              <View>
-                <Text style={styles.modalTitle}>Record Rotation Withdrawal</Text>
-                <Text style={styles.modalSub}>Swiping Card at Merchant QR</Text>
-              </View>
-              <TouchableOpacity onPress={() => setIsNewWithdrawalOpen(false)}>
-                <X size={18} color={CedarColors.ink700} />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.modalBody}>
-              <View style={styles.formGroup}>
-                <Text style={styles.formLabel}>Amount (₹)</Text>
-                <TextInput
-                  style={styles.textInput}
-                  placeholder="Enter swipe amount"
-                  placeholderTextColor={CedarColors.ink500}
-                  keyboardType="numeric"
-                  value={manualAmount}
-                  onChangeText={setManualAmount}
-                />
-              </View>
-
-              <View style={styles.formGroup}>
-                <Text style={styles.formLabel}>Select Card</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.pillsScroll}>
-                  {cards.map((c) => {
-                    const isSelected = manualCardId === c.id;
-                    return (
-                      <TouchableOpacity
-                        key={c.id}
-                        style={[styles.cardPill, isSelected && styles.cardPillActive]}
-                        onPress={() => {
-                          setManualCardId(c.id);
-                        }}
-                      >
-                        <Text style={[styles.cardPillText, isSelected && styles.cardPillTextActive]}>
-                          {c.card_name} (**{c.last_4_digits})
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
-              </View>
-
-              <View style={styles.formGroup}>
-                <Text style={styles.formLabel}>Select Merchant QR</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.pillsScroll}>
-                  {qrs.map((q) => {
-                    const isSelected = manualQrId === q.id;
-                    return (
-                      <TouchableOpacity
-                        key={q.id}
-                        style={[styles.userPill, isSelected && styles.userPillActive]}
-                        onPress={() => {
-                          setManualQrId(q.id);
-                        }}
-                      >
-                        <Text style={[styles.userPillText, isSelected && styles.userPillTextActive]}>
-                          {q.merchant_name}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
-              </View>
-
-              <View style={styles.formGroup}>
-                <Text style={styles.formLabel}>Remarks</Text>
-                <TextInput
-                  style={styles.textInput}
-                  placeholder="Optional notes"
-                  placeholderTextColor={CedarColors.ink500}
-                  value={manualRemarks}
-                  onChangeText={setManualRemarks}
-                />
-              </View>
-            </ScrollView>
-
-            <View style={styles.modalFooter}>
-              <HapticButton
-                style={[styles.confirmBtn, isSavingWithdrawal && styles.confirmBtnDisabled]}
-                onPress={handleSaveManualWithdrawal}
-                disabled={isSavingWithdrawal}
-                feedbackType="rigid"
-              >
-                {isSavingWithdrawal ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
-                ) : (
-                  <>
-                    <Plus size={18} color="#FFFFFF" strokeWidth={2.5} />
-                    <Text style={styles.confirmBtnText}>Record Withdrawal</Text>
-                  </>
-                )}
-              </HapticButton>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* ================= QR PAYMENT GENERATOR MODAL ================= */}
-      {selectedQrForPayment && (
-        <Modal visible={!!selectedQrForPayment} animationType="slide" transparent>
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalCard}>
-              <View style={styles.modalHeader}>
-                <View>
-                  <Text style={styles.modalTitle}>{selectedQrForPayment.merchant_name}</Text>
-                  <Text style={styles.modalSub}>{selectedQrForPayment.platform || 'UPI QR'}</Text>
-                </View>
-                <TouchableOpacity onPress={() => setSelectedQrForPayment(null)}>
-                  <X size={18} color={CedarColors.ink700} />
-                </TouchableOpacity>
-              </View>
-
-              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.modalBody}>
-                {/* Single vs Split Mode */}
-                <View style={styles.settleTypeRow}>
-                  <TouchableOpacity
-                    style={[styles.settleTypeBtn, paymentMode === 'once' && styles.settleTypeBtnActive]}
-                    onPress={() => {
-                      setPaymentMode('once');
-                      setGeneratedAmounts([Number(qrPayAmount) || 0]);
-                    }}
-                  >
-                    <Text
-                      style={[
-                        styles.settleTypeBtnText,
-                        paymentMode === 'once' && styles.settleTypeBtnTextActive,
-                      ]}
-                    >
-                      Single Swipe
-                    </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[
-                      styles.settleTypeBtn,
-                      paymentMode === 'multiple' && styles.settleTypeBtnActive,
-                    ]}
-                    onPress={() => {
-                      setPaymentMode('multiple');
-                      setGeneratedAmounts(generateSplits(Number(qrPayAmount) || 0, splitCount));
-                    }}
-                  >
-                    <Text
-                      style={[
-                        styles.settleTypeBtnText,
-                        paymentMode === 'multiple' && styles.settleTypeBtnTextActive,
-                      ]}
-                    >
-                      Split Swipes
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-
-                {/* Total Target Amount */}
-                <View style={styles.formGroup}>
-                  <Text style={styles.formLabel}>Total Amount (₹)</Text>
-                  <TextInput
-                    style={styles.textInput}
-                    value={qrPayAmount}
-                    onChangeText={handleAmountChange}
-                    keyboardType="numeric"
-                  />
-                </View>
-
-                {/* Split Counts if multiple */}
-                {paymentMode === 'multiple' && (
-                  <View style={styles.formGroup}>
-                    <Text style={styles.formLabel}>Split Into Swipes</Text>
-                    <View style={{ flexDirection: 'row', gap: 8 }}>
-                      {[2, 3, 4, 5].map((cnt) => (
-                        <TouchableOpacity
-                          key={cnt}
-                          style={[
-                            styles.userPill,
-                            splitCount === cnt && styles.userPillActive,
-                            { flex: 1, alignItems: 'center' },
-                          ]}
-                          onPress={() => {
-                            handleSplitCountChange(cnt);
-                          }}
-                        >
-                          <Text
-                            style={[
-                              styles.userPillText,
-                              splitCount === cnt && styles.userPillTextActive,
-                            ]}
-                          >
-                            {cnt}x
-                          </Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-                  </View>
-                )}
-
-                {/* Generated Amounts Badges */}
-                <View style={styles.formGroup}>
-                  <Text style={styles.formLabel}>Generated Swipe Amounts</Text>
-                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
-                    {generatedAmounts.map((amt, idx) => (
-                      <View key={idx} style={styles.splitAmountBadge}>
-                        <Text style={styles.splitAmountBadgeText}>₹{amt.toLocaleString('en-IN')}</Text>
-                      </View>
-                    ))}
-                  </View>
-                </View>
-
-                {/* Card Selector */}
-                <View style={styles.formGroup}>
-                  <Text style={styles.formLabel}>Card Being Swiped</Text>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.pillsScroll}>
-                    {cards.map((c) => {
-                      const isSelected = selectedPaymentCardId === c.id;
-                      return (
-                        <TouchableOpacity
-                          key={c.id}
-                          style={[styles.cardPill, isSelected && styles.cardPillActive]}
-                          onPress={() => {
-                            setSelectedPaymentCardId(c.id);
-                          }}
-                        >
-                          <Text style={[styles.cardPillText, isSelected && styles.cardPillTextActive]}>
-                            {c.card_name} (**{c.last_4_digits})
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </ScrollView>
-                </View>
-              </ScrollView>
-
-              <View style={styles.modalFooter}>
-                <HapticButton
-                  style={[styles.confirmBtn, isMarkingRotation && styles.confirmBtnDisabled]}
-                  onPress={handleMarkUsedAndSave}
-                  disabled={isMarkingRotation}
-                  feedbackType="rigid"
-                >
-                  {isMarkingRotation ? (
-                    <ActivityIndicator size="small" color="#FFFFFF" />
-                  ) : (
-                    <>
-                      <Zap size={18} color="#FFFFFF" strokeWidth={2.5} />
-                      <Text style={styles.confirmBtnText}>Mark Used & Save Rotation</Text>
-                    </>
-                  )}
-                </HapticButton>
-              </View>
-            </View>
-          </View>
-        </Modal>
-      )}
-
-      {/* ================= CARD FILTER MODAL ================= */}
+      {/* Vault Card Dropdown Filter Modal */}
       <Modal visible={isCardDropdownOpen} transparent animationType="fade">
         <TouchableOpacity
           style={styles.modalBackdrop}
@@ -1316,12 +815,15 @@ export default function SettlementsScreen() {
             <View style={styles.filterMenuHeader}>
               <Text style={styles.filterMenuTitle}>Select Vault Card</Text>
               <TouchableOpacity onPress={() => setIsCardDropdownOpen(false)}>
-                <X size={16} color={CedarColors.ink500} />
+                <X size={16} color="#4A6B56" />
               </TouchableOpacity>
             </View>
 
             <TouchableOpacity
-              style={[styles.menuOption, selectedVaultCardId === 'all' && styles.menuOptionActive]}
+              style={[
+                styles.menuOption,
+                selectedVaultCardId === 'all' && styles.menuOptionActive,
+              ]}
               onPress={() => {
                 setSelectedVaultCardId('all');
                 setIsCardDropdownOpen(false);
@@ -1335,7 +837,7 @@ export default function SettlementsScreen() {
               >
                 All Vault Cards
               </Text>
-              {selectedVaultCardId === 'all' && <Check size={14} color="#1B4D3E" />}
+              {selectedVaultCardId === 'all' && <Check size={14} color="#0B3F28" />}
             </TouchableOpacity>
 
             {cards.map((card) => {
@@ -1350,724 +852,321 @@ export default function SettlementsScreen() {
                   }}
                 >
                   <View>
-                    <Text style={[styles.menuOptionText, isSelected && styles.menuOptionTextActive]}>
+                    <Text
+                      style={[
+                        styles.menuOptionText,
+                        isSelected && styles.menuOptionTextActive,
+                      ]}
+                    >
                       {card.card_name}
                     </Text>
                     <Text style={styles.menuOptionSub}>**{card.last_4_digits}</Text>
                   </View>
-                  {isSelected && <Check size={14} color="#1B4D3E" />}
+                  {isSelected && <Check size={14} color="#0B3F28" />}
                 </TouchableOpacity>
               );
             })}
           </View>
         </TouchableOpacity>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
+  screenContainer: {
     flex: 1,
     backgroundColor: '#EFF3EE',
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#DCE4DA',
-    backgroundColor: '#EFF3EE',
-  },
-  headerLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  avatarButton: {
+  headerHeroContainer: {
     position: 'relative',
+    paddingBottom: 24,
   },
-  avatarImg: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+  headerTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingTop: 4,
+    paddingBottom: 8,
+  },
+  userProfileBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  avatarBorder: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     borderWidth: 1.5,
-    borderColor: '#2D7A5D',
-  },
-  avatarPlaceholder: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: '#071A12',
+    borderColor: 'rgba(255, 255, 255, 0.25)',
+    padding: 2,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: '#2D7A5D',
   },
-  avatarInitial: {
+  avatarImg: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 18,
+  },
+  avatarPlaceholder: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 18,
+    backgroundColor: '#072C1C',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarText: {
+    color: '#CAD6C9',
     fontSize: 14,
     fontWeight: '800',
-    color: '#F6F9F5',
   },
-  avatarStatusDot: {
-    position: 'absolute',
-    bottom: 0,
-    right: 0,
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: '#10B981',
-    borderWidth: 2,
-    borderColor: '#EFF3EE',
+  userTextCol: {
+    justifyContent: 'center',
   },
-  headerSub: {
-    fontSize: 9,
-    fontWeight: '800',
-    color: '#2D7A5D',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: CedarColors.ink900,
-  },
-  headerRight: {
+  liveStatusRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 5,
+  },
+  livePulseDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#10B981',
+  },
+  liveStatusText: {
+    color: '#CAD6C9',
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+  },
+  headerTitle: {
+    color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: '800',
+    letterSpacing: -0.3,
   },
   vaultPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    backgroundColor: '#F6F9F5',
-    borderRadius: 12,
+    gap: 6,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
     borderWidth: 1,
-    borderColor: '#DCE4DA',
+    borderColor: 'rgba(255, 255, 255, 0.16)',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 20,
   },
   vaultPillText: {
+    color: '#CAD6C9',
     fontSize: 11,
     fontWeight: '700',
-    color: CedarColors.ink900,
-    maxWidth: 80,
+    maxWidth: 90,
   },
-  withdrawBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    backgroundColor: '#1B4D3E',
-    borderRadius: 12,
-  },
-  withdrawBtnText: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#F6F9F5',
+  svgWaveWrapper: {
+    position: 'absolute',
+    bottom: -1,
+    left: 0,
+    right: 0,
+    width: SCREEN_WIDTH,
+    height: 32,
+    overflow: 'hidden',
   },
   summaryCardWrapper: {
     paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 6,
+    marginTop: 4,
+    marginBottom: 8,
   },
   summaryCard: {
-    borderRadius: 20,
+    borderRadius: 18,
     padding: 16,
+    shadowColor: '#072C1C',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    elevation: 4,
   },
   summaryTopRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
+    marginBottom: 6,
   },
   summaryLabel: {
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '700',
-    color: '#8A948C',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
+    color: '#CAD6C9',
+    letterSpacing: 0.2,
   },
   summaryAmount: {
-    fontSize: 26,
+    fontSize: 24,
     fontWeight: '900',
-    color: '#F6F9F5',
+    color: '#FFFFFF',
     marginTop: 2,
+    letterSpacing: -0.5,
   },
   pendingBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    backgroundColor: 'rgba(245, 158, 11, 0.15)',
+    gap: 5,
+    backgroundColor: 'rgba(245, 158, 11, 0.2)',
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.4)',
     paddingHorizontal: 8,
     paddingVertical: 4,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(245, 158, 11, 0.3)',
+    borderRadius: 8,
   },
   pendingBadgeText: {
     fontSize: 10,
     fontWeight: '800',
     color: '#F59E0B',
   },
-  summaryBottomRow: {
-    marginTop: 10,
-  },
   summarySub: {
     fontSize: 10,
-    color: '#A0ACA2',
+    fontWeight: '500',
+    color: '#A3B8A5',
   },
   tabsRow: {
     flexDirection: 'row',
     paddingHorizontal: 16,
-    paddingVertical: 10,
-    backgroundColor: '#EFF3EE',
+    marginVertical: 8,
+    gap: 8,
   },
   tabChip: {
     flex: 1,
+    paddingVertical: 9,
     alignItems: 'center',
-    paddingVertical: 7,
-    marginHorizontal: 3,
-    borderRadius: 10,
-    backgroundColor: '#F6F9F5',
+    justifyContent: 'center',
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#DCE4DA',
+    borderColor: '#DFE8E0',
   },
   activeTabChip: {
-    backgroundColor: '#1B4D3E',
-    borderColor: '#1B4D3E',
+    backgroundColor: '#0B3F28',
+    borderColor: '#0B3F28',
+    shadowColor: '#072C1C',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 4,
+    elevation: 2,
   },
   tabChipText: {
     fontSize: 11,
     fontWeight: '700',
-    color: CedarColors.ink700,
+    color: '#4A6B56',
   },
   activeTabChipText: {
-    color: '#F6F9F5',
+    color: '#FFFFFF',
     fontWeight: '800',
-  },
-  loaderContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 40,
-  },
-  loaderText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: CedarColors.ink700,
-    marginTop: 10,
   },
   contentScroll: {
     flex: 1,
   },
   scrollContent: {
     paddingHorizontal: 16,
-    paddingBottom: 120,
-  },
-  tabSection: {
     paddingTop: 6,
   },
-  emptyContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 60,
-  },
-  emptyIconCircle: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: '#E4ECE3',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 12,
-  },
-  emptyTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: CedarColors.ink900,
-    marginBottom: 4,
-  },
-  emptySub: {
-    fontSize: 11,
-    color: CedarColors.ink500,
-    textAlign: 'center',
-    maxWidth: 240,
-  },
-  rotationCard: {
-    backgroundColor: '#F6F9F5',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#DCE4DA',
-    padding: 14,
-    marginBottom: 10,
-  },
-  rotationTopRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-  },
-  rotationMerchantCol: {
+  historyContainer: {
     flex: 1,
-    marginRight: 8,
+    paddingHorizontal: 16,
+    paddingTop: 6,
   },
-  rotationMerchant: {
+  loaderContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingTop: 80,
+  },
+  loaderText: {
+    marginTop: 12,
     fontSize: 13,
-    fontWeight: '800',
-    color: CedarColors.ink900,
-  },
-  rotationSub: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: CedarColors.ink500,
-    marginTop: 2,
-  },
-  rotationAmountCol: {
-    alignItems: 'flex-end',
-  },
-  rotationAmount: {
-    fontSize: 15,
-    fontWeight: '900',
-    color: '#E05D52',
-  },
-  statusBadge: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
-    marginTop: 3,
-  },
-  statusBadgeText: {
-    fontSize: 8,
-    fontWeight: '800',
-  },
-  pendingBadgeSmall: {
-    backgroundColor: '#FCEBEA',
-    borderWidth: 1,
-    borderColor: '#F8B4AF',
-  },
-  pendingBadgeTextSmall: {
-    fontSize: 8,
-    fontWeight: '800',
-    color: '#C53030',
-  },
-  partialBadge: {
-    backgroundColor: '#FEF3C7',
-    borderWidth: 1,
-    borderColor: '#FDE68A',
-  },
-  partialBadgeText: {
-    fontSize: 8,
-    fontWeight: '800',
-    color: '#B45309',
-  },
-  rotationRemarks: {
-    fontSize: 10,
-    fontStyle: 'italic',
-    color: CedarColors.ink700,
-    marginTop: 6,
-  },
-  rotationDivider: {
-    height: 1,
-    backgroundColor: '#DCE4DA',
-    marginVertical: 10,
-  },
-  rotationBottomRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  rotationDate: {
-    fontSize: 10,
     fontWeight: '700',
-    color: CedarColors.ink500,
+    color: '#0B3F28',
   },
-  settleBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#1B4D3E',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+  floatingFabContainer: {
+    position: 'absolute',
+    bottom: 86,
+    right: 18,
+    zIndex: 99,
+    shadowColor: '#047857',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 10,
+    elevation: 8,
   },
-  settleBtnText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#FFFFFF',
+  floatingFab: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    overflow: 'hidden',
   },
-  coolingBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#FEF3C7',
-    borderWidth: 1,
-    borderColor: '#FDE68A',
-    borderRadius: 12,
-    padding: 10,
-    marginBottom: 12,
-  },
-  coolingBannerText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#92400E',
-    flex: 1,
-  },
-  qrSectionTitle: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: CedarColors.ink900,
-    marginBottom: 10,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  qrGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-  },
-  qrCard: {
-    width: '48.5%',
-    backgroundColor: '#F6F9F5',
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#DCE4DA',
-    padding: 12,
-  },
-  qrCardCooling: {
-    opacity: 0.65,
-    backgroundColor: '#ECEFEA',
-  },
-  qrCardTop: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  qrIconBadge: {
-    width: 32,
-    height: 32,
-    borderRadius: 10,
-    backgroundColor: '#E4ECE3',
+  floatingFabGradient: {
+    width: '100%',
+    height: '100%',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  qrStatusPill: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
-  },
-  qrStatusText: {
-    fontSize: 8,
-    fontWeight: '800',
-  },
-  qrStatusActive: {
-    backgroundColor: '#E8F5E9',
-    borderWidth: 1,
-    borderColor: '#A3D9A5',
-  },
-  qrStatusTextActive: {
-    fontSize: 8,
-    fontWeight: '800',
-    color: '#2E944B',
-  },
-  qrStatusCooling: {
-    backgroundColor: '#FEF3C7',
-    borderWidth: 1,
-    borderColor: '#FDE68A',
-  },
-  qrStatusTextCooling: {
-    fontSize: 8,
-    fontWeight: '800',
-    color: '#B45309',
-  },
-  qrName: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: CedarColors.ink900,
-  },
-  qrPlatform: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: CedarColors.ink500,
-    marginTop: 1,
-  },
-  qrFooterRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 10,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#DCE4DA',
-  },
-  qrSettlementTime: {
-    fontSize: 9,
-    fontWeight: '700',
-    color: '#1B4D3E',
-  },
-  historyCard: {
-    backgroundColor: '#F6F9F5',
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#DCE4DA',
-    padding: 12,
-    marginBottom: 8,
-  },
-  historyTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  historyIconBox: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
-    backgroundColor: '#E8F5E9',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
-  },
-  historyInfoCol: {
-    flex: 1,
-  },
-  historyTitle: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: CedarColors.ink900,
-  },
-  historySubtitle: {
-    fontSize: 10,
-    color: CedarColors.ink500,
-    marginTop: 1,
-  },
-  historyAmountCol: {
-    alignItems: 'flex-end',
-  },
-  historyAmount: {
-    fontSize: 13,
-    fontWeight: '900',
-    color: '#2D7A5D',
-  },
-  historyDate: {
-    fontSize: 9,
-    color: CedarColors.ink500,
-    marginTop: 2,
-  },
-  historyRemarks: {
-    fontSize: 10,
-    fontStyle: 'italic',
-    color: CedarColors.ink700,
-    marginTop: 6,
-    paddingLeft: 44,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    justifyContent: 'flex-end',
-  },
-  modalCard: {
-    backgroundColor: '#F6F9F5',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    maxHeight: '90%',
-    paddingBottom: 24,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#DCE4DA',
-  },
-  modalTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: CedarColors.ink900,
-  },
-  modalSub: {
-    fontSize: 10,
-    color: CedarColors.ink500,
-    marginTop: 2,
-  },
-  modalBody: {
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-  },
-  settleTypeRow: {
-    flexDirection: 'row',
-    backgroundColor: '#E4ECE3',
-    borderRadius: 12,
-    padding: 4,
-    marginBottom: 14,
-  },
-  settleTypeBtn: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: 8,
-    borderRadius: 8,
-  },
-  settleTypeBtnActive: {
-    backgroundColor: '#1B4D3E',
-  },
-  settleTypeBtnText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: CedarColors.ink700,
-  },
-  settleTypeBtnTextActive: {
-    color: '#F6F9F5',
-    fontWeight: '800',
-  },
-  formGroup: {
-    marginBottom: 12,
-  },
-  formLabel: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: CedarColors.ink700,
-    textTransform: 'uppercase',
-    marginBottom: 6,
-  },
-  textInput: {
-    height: 42,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#DCE4DA',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    fontSize: 12,
-    color: CedarColors.ink900,
-  },
-  pillsScroll: {
-    flexDirection: 'row',
-  },
-  userPill: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 10,
-    backgroundColor: '#E4ECE3',
-    marginRight: 6,
-  },
-  userPillActive: {
-    backgroundColor: '#1B4D3E',
-  },
-  userPillText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: CedarColors.ink700,
-  },
-  userPillTextActive: {
-    color: '#F6F9F5',
-    fontWeight: '800',
-  },
-  cardPill: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 12,
-    backgroundColor: '#E4ECE3',
-    marginRight: 6,
-  },
-  cardPillActive: {
-    backgroundColor: '#1B4D3E',
-  },
-  cardPillText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: CedarColors.ink900,
-  },
-  cardPillTextActive: {
-    color: '#F6F9F5',
-    fontWeight: '800',
-  },
-  splitAmountBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 8,
-    backgroundColor: '#E4ECE3',
-    borderWidth: 1,
-    borderColor: '#DCE4DA',
-  },
-  splitAmountBadgeText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#1B4D3E',
-  },
-  modalFooter: {
-    paddingHorizontal: 20,
-    paddingTop: 10,
-  },
-  confirmBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    backgroundColor: '#1B4D3E',
-    borderRadius: 14,
-    paddingVertical: 14,
-  },
-  confirmBtnDisabled: {
-    opacity: 0.6,
-  },
-  confirmBtnText: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#FFFFFF',
   },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'rgba(0,0,0,0.45)',
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 24,
+    paddingHorizontal: 24,
   },
   filterMenuBox: {
     width: '100%',
     maxWidth: 320,
-    backgroundColor: '#F6F9F5',
+    backgroundColor: '#FFFFFF',
     borderRadius: 20,
     padding: 16,
-    borderWidth: 1,
-    borderColor: '#DCE4DA',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.15,
+    shadowRadius: 16,
+    elevation: 10,
   },
   filterMenuHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 12,
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#DFE8E0',
   },
   filterMenuTitle: {
     fontSize: 14,
     fontWeight: '800',
-    color: CedarColors.ink900,
+    color: '#072C1C',
   },
   menuOption: {
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
+    alignItems: 'center',
     paddingVertical: 10,
-    paddingHorizontal: 8,
+    paddingHorizontal: 12,
     borderRadius: 10,
+    marginBottom: 4,
   },
   menuOptionActive: {
     backgroundColor: '#E4ECE3',
   },
   menuOptionText: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '700',
-    color: CedarColors.ink900,
+    color: '#1F2937',
   },
   menuOptionTextActive: {
-    color: '#1B4D3E',
+    color: '#0B3F28',
     fontWeight: '800',
   },
   menuOptionSub: {
     fontSize: 10,
-    color: CedarColors.ink500,
+    color: '#4A6B56',
+    marginTop: 1,
   },
 });
