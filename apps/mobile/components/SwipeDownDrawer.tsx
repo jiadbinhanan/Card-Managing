@@ -79,7 +79,7 @@ export function SwipeDownDrawer({
   heightPercent = 0.85,
   gradientColors,
   headerRight,
-  headerAccentColor = CedarColors.ink900,
+  headerAccentColor = '#F6F9F5',
 }: SwipeDownDrawerProps) {
   const SHEET_HEIGHT = SCREEN_HEIGHT * heightPercent;
   const translateY = useSharedValue(SHEET_HEIGHT);
@@ -213,18 +213,22 @@ export function SwipeDownDrawer({
             animatedSheetStyle,
           ]}
         >
-          {gradientColors ? (
-            <LinearGradient
-              colors={gradientColors}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={[StyleSheet.absoluteFill, { borderRadius: 32 }]}
-            >
-              {contentContainer}
-            </LinearGradient>
-          ) : (
-            contentContainer
-          )}
+          <LinearGradient
+            colors={gradientColors || ['#041009', '#081E15', '#0E2E20']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={[
+              StyleSheet.absoluteFill,
+              {
+                borderTopLeftRadius: 32,
+                borderTopRightRadius: 32,
+                borderBottomLeftRadius: 0,
+                borderBottomRightRadius: 0,
+              },
+            ]}
+          >
+            {contentContainer}
+          </LinearGradient>
         </Animated.View>
       </View>
     </Modal>
@@ -242,16 +246,18 @@ const styles = StyleSheet.create({
   },
   sheet: {
     width: '100%',
-    backgroundColor: '#F8FAF8',
+    backgroundColor: '#041009',
     borderTopLeftRadius: 32,
     borderTopRightRadius: 32,
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: -8 },
-    shadowOpacity: 0.28,
+    shadowOpacity: 0.35,
     shadowRadius: 28,
     elevation: 24,
     borderTopWidth: 1.5,
-    borderTopColor: '#DCE8DE',
+    borderTopColor: 'rgba(52, 211, 153, 0.25)',
     overflow: 'hidden',
   },
   handleAndHeaderZone: {

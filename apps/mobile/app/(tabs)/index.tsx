@@ -25,6 +25,7 @@ import Animated, {
   withSpring,
   withTiming,
   withSequence,
+  withRepeat,
   FadeInDown,
   FadeInUp,
 } from 'react-native-reanimated';
@@ -205,24 +206,78 @@ export default function HomeScreen() {
   // 120Hz Spring micro-bounce and playful ring for Notification Bell
   const bellScale = useSharedValue(1);
   const bellRotate = useSharedValue(0);
+  const bellDotPulse = useSharedValue(1);
+
+  // Playful ambient jingle & heartbeat pulse on notification dot
+  useEffect(() => {
+    // Pulse notification dot continuously
+    bellDotPulse.value = withRepeat(
+      withSequence(
+        withTiming(1.3, { duration: 800 }),
+        withTiming(1.0, { duration: 800 })
+      ),
+      -1,
+      true
+    );
+
+    // Periodic playful bell ring every 6 seconds
+    const jingleTimer = setInterval(() => {
+      bellRotate.value = withSequence(
+        withTiming(-16, { duration: 70 }),
+        withTiming(16, { duration: 90 }),
+        withTiming(-10, { duration: 80 }),
+        withTiming(10, { duration: 80 }),
+        withTiming(-4, { duration: 60 }),
+        withTiming(0, { duration: 60 })
+      );
+    }, 6000);
+
+    return () => clearInterval(jingleTimer);
+  }, []);
+
   const bellAnimStyle = useAnimatedStyle(() => ({
-    transform: [
-      { scale: bellScale.value },
-      { rotate: `${bellRotate.value}deg` },
-    ],
+    transform: [{ scale: bellScale.value }],
+  }));
+
+  const bellIconAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${bellRotate.value}deg` }],
+  }));
+
+  const bellDotAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: bellDotPulse.value }],
   }));
 
   const handleNotificationBellPress = () => {
-    bellScale.value = withSpring(0.82, { damping: 14, stiffness: 450 }, () => {
-      bellScale.value = withSpring(1, { damping: 18, stiffness: 350 });
-    });
+    // 120Hz Energetic spring bounce & ringing chime pop
+    bellScale.value = withSequence(
+      withTiming(0.72, { duration: 50 }),
+      withSpring(1.35, { damping: 8, stiffness: 480 }),
+      withSpring(1.0, { damping: 12, stiffness: 350 })
+    );
     bellRotate.value = withSequence(
-      withTiming(-14, { duration: 60 }),
-      withTiming(14, { duration: 90 }),
-      withTiming(-8, { duration: 70 }),
-      withTiming(0, { duration: 70 })
+      withTiming(-26, { duration: 60 }),
+      withTiming(26, { duration: 90 }),
+      withTiming(-16, { duration: 70 }),
+      withTiming(16, { duration: 70 }),
+      withTiming(-8, { duration: 50 }),
+      withTiming(0, { duration: 50 })
     );
     setShowNotificationPanel(true);
+  };
+
+  // 120Hz Tactile Pop Animation for Card Dropdown
+  const cardDropdownScale = useSharedValue(1);
+  const cardDropdownAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: cardDropdownScale.value }],
+  }));
+
+  const handleCardDropdownPress = () => {
+    cardDropdownScale.value = withSequence(
+      withTiming(0.85, { duration: 60 }),
+      withSpring(1.18, { damping: 9, stiffness: 450 }),
+      withSpring(1.0, { damping: 14, stiffness: 350 })
+    );
+    setCardModalVisible(true);
   };
 
   // Cooldown countdown
@@ -396,14 +451,23 @@ export default function HomeScreen() {
           }, 0) || 0;
       setInTransit(inTransitAmt);
 
-      // Card Limit & Utilization Stats for Hero Chart
-      const statsList: CardLimitStat[] = myCards.map((c) => {
-        const cardLimit = Number(c.total_limit || 0);
-        const cWithdrawals =
+      // Card Family Limit & Utilization Stats for Hero Chart & Card Selector
+      const primaryCards = myCards.filter((c) => c.is_primary || !c.parent_card_id);
+      const orphanSubCards = myCards.filter(
+        (c) => !c.is_primary && c.parent_card_id && !primaryCards.some((p) => p.id === c.parent_card_id)
+      );
+      const familyRoots = [...primaryCards, ...orphanSubCards];
+
+      const statsList: CardLimitStat[] = familyRoots.map((rootCard) => {
+        const subCards = myCards.filter((c) => c.parent_card_id === rootCard.id);
+        const familyCardIds = [rootCard.id, ...subCards.map((s) => s.id)];
+        const cardLimit = Number(rootCard.total_limit || 0);
+
+        const familyWithdrawals =
           txs
             ?.filter(
               (t) =>
-                t.card_id === c.id &&
+                familyCardIds.includes(t.card_id) &&
                 t.type === 'withdrawal' &&
                 (t.qr_id ||
                   t.settled_to_user ||
@@ -412,20 +476,28 @@ export default function HomeScreen() {
                   t.status === 'partially_settled')
             )
             .reduce((sum, t) => sum + Number(t.amount || 0), 0) || 0;
-        const cBillPayments =
-          txs?.filter((t) => t.card_id === c.id && t.type === 'bill_payment').reduce((sum, t) => sum + Number(t.amount || 0), 0) ||
-          0;
-        const cSpends =
+
+        const familyBillPayments =
+          txs
+            ?.filter((t) => familyCardIds.includes(t.card_id) && t.type === 'bill_payment')
+            .reduce((sum, t) => sum + Number(t.amount || 0), 0) || 0;
+
+        const familySpends =
           spends
-            ?.filter((s) => s.card_id === c.id && s.payment_method === 'credit_card')
+            ?.filter((s) => familyCardIds.includes(s.card_id) && s.payment_method === 'credit_card')
             .reduce((sum, s) => sum + Number(s.amount || 0), 0) || 0;
-        const used = Math.max(0, cWithdrawals + cSpends - cBillPayments);
+
+        const used = Math.max(0, familyWithdrawals + familySpends - familyBillPayments);
         const avail = Math.max(0, cardLimit - used);
         const ratio = cardLimit > 0 ? used / cardLimit : 0;
+
         return {
-          id: c.id,
-          name: c.card_name,
-          last4: c.last_4_digits,
+          id: rootCard.id,
+          name: rootCard.card_name,
+          last4: rootCard.last_4_digits,
+          hasSubCards: subCards.length > 0,
+          subCardsCount: subCards.length,
+          subCardsLast4: subCards.map((s) => s.last_4_digits),
           totalLimit: cardLimit,
           usedLimit: used,
           availableLimit: avail,
@@ -627,6 +699,10 @@ export default function HomeScreen() {
 
   const getActiveCardName = () => {
     if (selectedCardId === 'all') return 'All Vault Cards';
+    const fam = cardLimitStats.find((c) => c.id === selectedCardId);
+    if (fam) {
+      return fam.hasSubCards ? `${fam.name} (+${fam.subCardsCount} sub)` : `${fam.name} (••${fam.last4})`;
+    }
     const card = accessibleCards.find((c) => c.id === selectedCardId);
     return card ? `${card.card_name} (••${card.last_4_digits})` : 'All Vault Cards';
   };
@@ -991,18 +1067,20 @@ export default function HomeScreen() {
                 </TouchableOpacity>
 
                 <View style={styles.headerActions}>
-                  {/* Card Selector Dropdown */}
-                  <TouchableOpacity
-                    style={styles.cardDropdown}
-                    onPress={() => setCardModalVisible(true)}
-                    activeOpacity={0.8}
-                  >
-                    <CreditCard size={13} color="#CAD6C9" />
-                    <Text style={styles.cardDropdownText} numberOfLines={1}>
-                      {getActiveCardName()}
-                    </Text>
-                    <ChevronDown size={13} color="#CAD6C9" />
-                  </TouchableOpacity>
+                  {/* Card Selector Dropdown with 120Hz Tactile Pop */}
+                  <Animated.View style={cardDropdownAnimStyle}>
+                    <TouchableOpacity
+                      style={styles.cardDropdown}
+                      onPress={handleCardDropdownPress}
+                      activeOpacity={0.8}
+                    >
+                      <CreditCard size={13} color="#CAD6C9" />
+                      <Text style={styles.cardDropdownText} numberOfLines={1}>
+                        {getActiveCardName()}
+                      </Text>
+                      <ChevronDown size={13} color="#CAD6C9" />
+                    </TouchableOpacity>
+                  </Animated.View>
 
                   {/* Notification Bell with 120Hz micro-bounce animation */}
                   <Animated.View style={bellAnimStyle}>
@@ -1011,8 +1089,12 @@ export default function HomeScreen() {
                       onPress={handleNotificationBellPress}
                       activeOpacity={0.8}
                     >
-                      <Bell size={18} color="#F6F9F5" />
-                      {daysToBill <= 3 && <View style={styles.notificationDot} />}
+                      <Animated.View style={bellIconAnimStyle}>
+                        <Bell size={18} color="#F6F9F5" />
+                      </Animated.View>
+                      {daysToBill <= 3 && (
+                        <Animated.View style={[styles.notificationDot, bellDotAnimStyle]} />
+                      )}
                     </TouchableOpacity>
                   </Animated.View>
                 </View>
@@ -1035,13 +1117,6 @@ export default function HomeScreen() {
                       )}
                     </TouchableOpacity>
                   </View>
-
-                  {/* Dynamic Micro-Chart: Column Chart (All Cards) or Circular Donut (Single Card) */}
-                  <HeroCardLimitChart
-                    isAllCards={selectedCardId === 'all'}
-                    cards={cardLimitStats}
-                    singleCard={cardLimitStats.find((c) => c.id === selectedCardId)}
-                  />
                 </View>
 
                 {/* Large Balance Typography with Text Animation */}
@@ -1052,10 +1127,15 @@ export default function HomeScreen() {
                   >
                     {showBalance ? `₹${availableLimit.toLocaleString('en-IN')}` : '••••••••'}
                   </Animated.Text>
-                  <View style={styles.trendPill}>
-                    <TrendingUp size={12} color="#4ADE80" />
-                    <Text style={styles.trendText}>Active Vault</Text>
-                  </View>
+                </View>
+
+                {/* Full-Width Spacious Card Family Limit Chart */}
+                <View style={styles.heroChartContainer}>
+                  <HeroCardLimitChart
+                    isAllCards={selectedCardId === 'all'}
+                    cards={cardLimitStats}
+                    singleCard={cardLimitStats.find((c) => c.id === selectedCardId)}
+                  />
                 </View>
 
                 <View style={styles.heroDivider} />
@@ -1120,7 +1200,7 @@ export default function HomeScreen() {
                   preserveAspectRatio="none"
                 >
                   <Path
-                    d={`M 0,0 C ${SCREEN_WIDTH * 0.28},24 ${SCREEN_WIDTH * 0.65},32 ${SCREEN_WIDTH},6 L ${SCREEN_WIDTH},32 L 0,32 Z`}
+                    d={`M 0,0 C ${SCREEN_WIDTH * 0.25},24 ${SCREEN_WIDTH * 0.75},24 ${SCREEN_WIDTH},0 L ${SCREEN_WIDTH},32 L 0,32 Z`}
                     fill="#EFF3EE"
                   />
                 </Svg>
@@ -1532,33 +1612,45 @@ export default function HomeScreen() {
               }}
             >
               <View style={styles.cardOptionLeft}>
-                <CreditCard size={18} color={CedarColors.forest800} />
-                <Text style={styles.cardOptionName}>All Vault Cards (Unified)</Text>
+                <CreditCard size={18} color="#34D399" />
+                <View>
+                  <Text style={styles.cardOptionName}>All Vault Cards (Unified)</Text>
+                  <Text style={styles.cardOptionDigits}>
+                    {cardLimitStats.length} Card {cardLimitStats.length === 1 ? 'Family' : 'Families'} • Total Limit: ₹{totalLimit.toLocaleString('en-IN')}
+                  </Text>
+                </View>
               </View>
-              {selectedCardId === 'all' && <CheckCircle2 size={18} color={CedarColors.forest800} />}
+              {selectedCardId === 'all' && <CheckCircle2 size={18} color="#34D399" />}
             </TouchableOpacity>
 
-            {accessibleCards.map((c) => {
-              const isSelected = selectedCardId === c.id;
+            {cardLimitStats.map((fam) => {
+              const isSelected = selectedCardId === fam.id;
               return (
                 <TouchableOpacity
-                  key={c.id}
+                  key={fam.id}
                   style={[styles.cardOptionRow, isSelected && styles.cardOptionSelected]}
                   onPress={() => {
-                    setSelectedCardId(c.id);
+                    setSelectedCardId(fam.id);
                     setCardModalVisible(false);
                   }}
                 >
                   <View style={styles.cardOptionLeft}>
-                    <CreditCard size={18} color={CedarColors.forest800} />
-                    <View>
-                      <Text style={styles.cardOptionName}>{c.card_name}</Text>
+                    <CreditCard size={18} color={isSelected ? '#34D399' : '#8EAA97'} />
+                    <View style={{ flex: 1 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <Text style={styles.cardOptionName} numberOfLines={1}>{fam.name}</Text>
+                        {fam.hasSubCards && (
+                          <View style={styles.subCardBadge}>
+                            <Text style={styles.subCardBadgeText}>+{fam.subCardsCount} Sub</Text>
+                          </View>
+                        )}
+                      </View>
                       <Text style={styles.cardOptionDigits}>
-                        •••• {c.last_4_digits} | Limit: ₹{Number(c.total_limit).toLocaleString('en-IN')}
+                        •••• {fam.last4} {fam.subCardsLast4 && fam.subCardsLast4.length > 0 ? `(Sub: ••${fam.subCardsLast4.join(', ••')})` : ''} | Limit: ₹{Number(fam.totalLimit).toLocaleString('en-IN')}
                       </Text>
                     </View>
                   </View>
-                  {isSelected && <CheckCircle2 size={18} color={CedarColors.forest800} />}
+                  {isSelected && <CheckCircle2 size={18} color="#34D399" />}
                 </TouchableOpacity>
               );
             })}
@@ -2422,6 +2514,11 @@ const styles = StyleSheet.create({
     fontFamily: CedarTypography.display,
     fontWeight: '900',
   },
+  heroChartContainer: {
+    width: '100%',
+    marginTop: 14,
+    marginBottom: 4,
+  },
   trendPill: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2973,13 +3070,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 14,
     borderRadius: 16,
-    backgroundColor: '#F4F7F4',
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
     borderWidth: 1.2,
-    borderColor: '#DCE7DE',
+    borderColor: 'rgba(255, 255, 255, 0.1)',
   },
   cardOptionSelected: {
-    borderColor: CedarColors.forest800,
-    backgroundColor: '#EBF4ED',
+    borderColor: '#34D399',
+    backgroundColor: 'rgba(52, 211, 153, 0.14)',
   },
   cardOptionLeft: {
     flexDirection: 'row',
@@ -2991,20 +3088,34 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontFamily: CedarTypography.bodySemiBold,
     fontWeight: '800',
-    color: CedarColors.ink900,
+    color: '#F6F9F5',
   },
   cardOptionDigits: {
     fontSize: 11,
     fontFamily: CedarTypography.body,
-    color: CedarColors.ink500,
+    color: '#8EAA97',
     marginTop: 2,
+  },
+  subCardBadge: {
+    backgroundColor: 'rgba(52, 211, 153, 0.2)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(52, 211, 153, 0.35)',
+  },
+  subCardBadgeText: {
+    fontSize: 9,
+    fontFamily: CedarTypography.bodySemiBold,
+    color: '#34D399',
+    fontWeight: '700',
   },
   // Inputs in Drawers
   inputLabel: {
     fontSize: 11,
     fontFamily: CedarTypography.bodySemiBold,
     fontWeight: '700',
-    color: CedarColors.ink700,
+    color: '#34D399',
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
@@ -3016,36 +3127,37 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 12,
-    backgroundColor: '#EFF5F0',
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
     marginRight: 8,
     borderWidth: 1,
-    borderColor: '#D8E5DA',
+    borderColor: 'rgba(255, 255, 255, 0.12)',
   },
   activeSelectorChip: {
-    backgroundColor: CedarColors.forest800,
-    borderColor: CedarColors.forest800,
+    backgroundColor: '#10B981',
+    borderColor: '#34D399',
   },
   selectorChipText: {
     fontSize: 11,
     fontFamily: CedarTypography.bodySemiBold,
-    color: CedarColors.ink700,
+    color: '#CAD6C9',
   },
   activeSelectorChipText: {
-    color: '#F6F9F5',
+    color: '#FFFFFF',
+    fontWeight: '800',
   },
   sheetInput: {
-    backgroundColor: '#F3FAF4',
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
     borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 12,
     borderWidth: 1,
-    borderColor: '#DCE8DE',
+    borderColor: 'rgba(255, 255, 255, 0.12)',
     fontSize: 14,
     fontFamily: CedarTypography.body,
-    color: CedarColors.ink900,
+    color: '#F6F9F5',
   },
   sheetSaveBtn: {
-    backgroundColor: CedarColors.forest800,
+    backgroundColor: '#10B981',
     borderRadius: 16,
     paddingVertical: 14,
     alignItems: 'center',
@@ -3053,7 +3165,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   sheetSaveText: {
-    color: '#F6F9F5',
+    color: '#FFFFFF',
     fontSize: 13,
     fontFamily: CedarTypography.bodySemiBold,
     fontWeight: '800',

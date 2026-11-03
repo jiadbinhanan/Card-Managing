@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -9,14 +9,14 @@ import {
   LayoutChangeEvent,
 } from 'react-native';
 import { BottomTabBarProps } from '@react-navigation/bottom-tabs';
-import { CedarColors, CedarTypography } from '@credics/core';
-import * as Haptics from 'expo-haptics';
+import { CedarTypography } from '@credics/core';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withSpring,
   withTiming,
+  withSequence,
   runOnJS,
   interpolate,
   Extrapolation,
@@ -37,23 +37,31 @@ const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 // 120Hz ProMotion Ultra-Smooth Spring Physics
 const SPRING_CONFIG = {
-  damping: 28,
+  damping: 26,
   stiffness: 340,
   mass: 0.8,
 };
 
-const DRAWER_HEIGHT = 215;
+const DRAWER_HEIGHT = 98; // Compact height for mini chips
 
 export function FloatingBottomNav({ state, descriptors, navigation }: BottomTabBarProps) {
   const [isExpanded, setIsExpanded] = useState(false);
+  const [navWidth, setNavWidth] = useState(0);
+
   const translateY = useSharedValue(0);
   const contextY = useSharedValue(0);
 
-  // Tab Item Layouts for 120Hz Sliding Oval Indicator
-  const [tabLayouts, setTabLayouts] = useState<{ [key: number]: { x: number; width: number } }>({});
+  // 120Hz Sliding Dark Green Selection Pill
   const indicatorX = useSharedValue(0);
-  const indicatorWidth = useSharedValue(0);
   const indicatorOpacity = useSharedValue(0);
+
+  // Individual Icon Pop Animations
+  const scale0 = useSharedValue(1);
+  const scale1 = useSharedValue(1);
+  const scale2 = useSharedValue(1);
+  const scale3 = useSharedValue(1);
+  const scale4 = useSharedValue(1);
+  const iconScales = useRef([scale0, scale1, scale2, scale3, scale4]).current;
 
   const toggleExpand = useCallback((expand: boolean) => {
     setIsExpanded(expand);
@@ -71,10 +79,9 @@ export function FloatingBottomNav({ state, descriptors, navigation }: BottomTabB
     runOnJS(toggleExpand)(false);
   }, [toggleExpand]);
 
-  // 120Hz Worklet-Driven Pan Gesture restricted to intentional drag
+  // 120Hz Worklet-Driven Pan Gesture across ANY point of the nav bar (No hint required)
   const panGesture = Gesture.Pan()
     .activeOffsetY([-8, 8])
-    .failOffsetX([-25, 25])
     .onStart(() => {
       contextY.value = translateY.value;
     })
@@ -89,9 +96,9 @@ export function FloatingBottomNav({ state, descriptors, navigation }: BottomTabB
       }
     })
     .onEnd((event) => {
-      if (event.translationY < -25 || event.velocityY < -400) {
+      if (event.translationY < -12 || event.velocityY < -280) {
         openDrawer();
-      } else if (event.translationY > 25 || event.velocityY > 400) {
+      } else if (event.translationY > 12 || event.velocityY > 280) {
         closeDrawer();
       } else {
         if (translateY.value < -DRAWER_HEIGHT / 2) {
@@ -105,8 +112,8 @@ export function FloatingBottomNav({ state, descriptors, navigation }: BottomTabB
   const drawerAnimStyle = useAnimatedStyle(() => {
     const opacity = interpolate(
       translateY.value,
-      [0, -DRAWER_HEIGHT * 0.25, -DRAWER_HEIGHT],
-      [0, 0.7, 1],
+      [0, -DRAWER_HEIGHT * 0.35, -DRAWER_HEIGHT],
+      [0, 0.8, 1],
       Extrapolation.CLAMP
     );
     const height = interpolate(
@@ -121,76 +128,60 @@ export function FloatingBottomNav({ state, descriptors, navigation }: BottomTabB
     };
   });
 
-  const handleIndicatorStyle = useAnimatedStyle(() => {
-    const width = interpolate(
-      translateY.value,
-      [0, -DRAWER_HEIGHT],
-      [36, 52],
-      Extrapolation.CLAMP
-    );
-    return { width };
-  });
-
-  const backdropAnimStyle = useAnimatedStyle(() => {
-    const opacity = interpolate(
-      translateY.value,
-      [0, -DRAWER_HEIGHT],
-      [0, 0.45],
-      Extrapolation.CLAMP
-    );
-    const pointerEvents = translateY.value < -20 ? 'auto' : 'none';
-    return {
-      opacity,
-      pointerEvents,
-    };
-  });
-
-  // FAB Sync Animation: Elevates in sync with drawer expansion
-  const fabAnimStyle = useAnimatedStyle(() => {
-    return {
-      transform: [{ translateY: translateY.value }],
-    };
-  });
-
-  // 4 Standard Tabs + 1 Center FAB slot
+  // 5 Tab Items
   const visibleTabs = [
     { name: 'index', label: 'Home', icon: Home, slotIndex: 0 },
     { name: 'transactions', label: 'Trans', icon: ArrowDownLeft, slotIndex: 1 },
-    { name: 'settlements', label: 'Scan', icon: QrCode, isFab: true, slotIndex: 2 },
+    { name: 'settlements', label: 'Scan', icon: QrCode, slotIndex: 2, isQr: true },
     { name: 'lents', label: 'Loans', icon: Users, slotIndex: 3 },
     { name: 'insights', label: 'Analytics', icon: BarChart3, slotIndex: 4 },
   ];
 
-  // Update sliding oval position whenever active route or layouts change
-  const activeRouteName = state.routes[state.index]?.name;
-  const activeTabItem = visibleTabs.find((t) => t.name === activeRouteName);
+  const currentRouteName = state.routes[state.index]?.name;
+  const activeTabItem = visibleTabs.find((t) => t.name === currentRouteName);
+  const activeSlotIndex = activeTabItem ? activeTabItem.slotIndex : 0;
 
+  // Slide pill smoothly when active tab changes or layout is measured
   useEffect(() => {
-    if (activeTabItem && !activeTabItem.isFab) {
-      const layout = tabLayouts[activeTabItem.slotIndex];
-      if (layout && layout.width > 0) {
-        const ovalWidth = Math.min(layout.width, 68);
-        const centerOffset = layout.x + (layout.width - ovalWidth) / 2;
-        indicatorX.value = withSpring(centerOffset, SPRING_CONFIG);
-        indicatorWidth.value = withSpring(ovalWidth, SPRING_CONFIG);
-        indicatorOpacity.value = withTiming(1, { duration: 160 });
-      }
-    } else {
-      indicatorOpacity.value = withTiming(0, { duration: 120 });
+    if (navWidth > 0 && activeTabItem) {
+      const tabWidth = navWidth / 5;
+      const targetX = activeSlotIndex * tabWidth + 3;
+      indicatorX.value = withSpring(targetX, SPRING_CONFIG);
+      indicatorOpacity.value = withTiming(1, { duration: 150 });
     }
-  }, [state.index, activeTabItem, tabLayouts]);
+  }, [activeSlotIndex, navWidth, activeTabItem]);
 
   const indicatorAnimStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: indicatorX.value }],
-    width: indicatorWidth.value,
     opacity: indicatorOpacity.value,
   }));
 
-  const handleNavigate = (routeKey: string, routeName: string, isFocused: boolean) => {
-    Haptics.selectionAsync();
+  const triggerIconPop = (slotIndex: number) => {
+    'worklet';
+    const s = iconScales[slotIndex];
+    if (s) {
+      s.value = withSequence(
+        withTiming(0.78, { duration: 60 }),
+        withSpring(1.28, { damping: 9, stiffness: 450 }),
+        withSpring(1.0, { damping: 14, stiffness: 350 })
+      );
+    }
+  };
+
+  const handleNavigate = (routeKey: string, routeName: string, isFocused: boolean, slotIndex: number) => {
+    // 120Hz Delightful icon pop animation
+    triggerIconPop(slotIndex);
+
+    // Smooth pill glide
+    if (navWidth > 0) {
+      const tabWidth = navWidth / 5;
+      indicatorX.value = withSpring(slotIndex * tabWidth + 3, SPRING_CONFIG);
+    }
+
     if (isExpanded) {
       closeDrawer();
     }
+
     const event = navigation.emit({
       type: 'tabPress',
       target: routeKey,
@@ -202,397 +193,322 @@ export function FloatingBottomNav({ state, descriptors, navigation }: BottomTabB
   };
 
   const handleExtraOptionPress = (path: string) => {
-    Haptics.selectionAsync();
     closeDrawer();
-    navigation.navigate(path);
+    navigation.navigate(path as any);
   };
 
-  const handleTabLayout = (slotIndex: number, event: LayoutChangeEvent) => {
-    const { x, width } = event.nativeEvent.layout;
-    setTabLayouts((prev) => ({
-      ...prev,
-      [slotIndex]: { x, width },
-    }));
+  const onNavRowLayout = (e: LayoutChangeEvent) => {
+    const width = e.nativeEvent.layout.width;
+    if (width > 0 && width !== navWidth) {
+      setNavWidth(width);
+    }
   };
+
+  const tabWidth = navWidth > 0 ? navWidth / 5 : 0;
+  const pillWidth = Math.max(0, tabWidth - 6);
 
   return (
-    <>
-      {/* Blurred Backdrop when Drawer is open */}
-      <Animated.View style={[styles.backdrop, backdropAnimStyle]}>
-        <Pressable
-          style={StyleSheet.absoluteFill}
-          onPress={closeDrawer}
-        />
-      </Animated.View>
-
-      {/* Floating Bottom Nav Outer Wrapper */}
-      <View style={styles.outerContainer} pointerEvents="box-none">
-        {/* Detached Center QR Button - Positioned in the notch, elevates synchronously with drawer */}
-        <Animated.View style={[styles.floatingFabWrapper, fabAnimStyle]} pointerEvents="box-none">
-          <Pressable
-            style={({ pressed }) => [
-              styles.fabButton,
-              pressed && styles.fabPressed,
-              state.routes[state.index]?.name === 'settlements' && styles.fabActive,
-            ]}
-            onPress={() => {
-              Haptics.selectionAsync();
-              if (isExpanded) closeDrawer();
-              navigation.navigate('settlements');
-            }}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <QrCode size={25} color="#FFFFFF" strokeWidth={2.4} />
-          </Pressable>
-        </Animated.View>
-
-        {/* Pill Shaped Navigation Capsule */}
+    <View style={styles.outerContainer} pointerEvents="box-none">
+      <GestureDetector gesture={panGesture}>
         <Animated.View style={styles.capsule}>
-          {/* Top Notch Cradle Dip in the center */}
-          <View style={styles.notchCradleCutout} pointerEvents="none" />
-
-          {/* Top Drag Handle Indicator - Equipped with Pan Gesture */}
-          <GestureDetector gesture={panGesture}>
-            <Pressable
-              onPress={() => {
-                Haptics.selectionAsync();
-                if (isExpanded) closeDrawer();
-                else openDrawer();
-              }}
-              hitSlop={{ top: 12, bottom: 12, left: 24, right: 24 }}
-              style={styles.handleContainer}
-            >
-              <Animated.View style={[styles.handlePill, handleIndicatorStyle]} />
-            </Pressable>
-          </GestureDetector>
-
-          {/* Swipe-Up Extra Options Drawer (Web App Ledgers Parity) */}
-          <Animated.View style={[styles.drawerContent, drawerAnimStyle]}>
-            <View style={styles.drawerGrid}>
-              {/* 1. Cash on Hand */}
-              <Pressable
-                style={({ pressed }) => [
-                  styles.drawerCard,
-                  pressed && styles.drawerCardPressed,
-                ]}
-                onPress={() => handleExtraOptionPress('ledgers')}
-              >
-                <View style={[styles.drawerIconBadge, { backgroundColor: 'rgba(46, 148, 75, 0.15)' }]}>
-                  <Banknote size={15} color="#2E944B" strokeWidth={2.4} />
-                </View>
-                <Text style={styles.drawerCardTitle}>Cash on Hand</Text>
-                <Text style={styles.drawerCardSub}>Ledger & Vault</Text>
-              </Pressable>
-
-              {/* 2. Personal Spends */}
-              <Pressable
-                style={({ pressed }) => [
-                  styles.drawerCard,
-                  pressed && styles.drawerCardPressed,
-                ]}
-                onPress={() => handleExtraOptionPress('ledgers')}
-              >
-                <View style={[styles.drawerIconBadge, { backgroundColor: 'rgba(217, 119, 6, 0.15)' }]}>
-                  <Receipt size={15} color="#D97706" strokeWidth={2.4} />
-                </View>
-                <Text style={styles.drawerCardTitle}>Personal Spends</Text>
-                <Text style={styles.drawerCardSub}>Card & Cash Logs</Text>
-              </Pressable>
-
-              {/* 3. Pocket Advances */}
-              <Pressable
-                style={({ pressed }) => [
-                  styles.drawerCard,
-                  pressed && styles.drawerCardPressed,
-                ]}
-                onPress={() => handleExtraOptionPress('ledgers')}
-              >
-                <View style={[styles.drawerIconBadge, { backgroundColor: 'rgba(125, 90, 224, 0.15)' }]}>
-                  <Coins size={15} color="#7D5AE0" strokeWidth={2.4} />
-                </View>
-                <Text style={styles.drawerCardTitle}>Pocket Advance</Text>
-                <Text style={styles.drawerCardSub}>Cross Reclaim</Text>
-              </Pressable>
-
-              {/* 4. Vault Cards */}
-              <Pressable
-                style={({ pressed }) => [
-                  styles.drawerCard,
-                  pressed && styles.drawerCardPressed,
-                ]}
-                onPress={() => handleExtraOptionPress('cards')}
-              >
-                <View style={[styles.drawerIconBadge, { backgroundColor: 'rgba(10, 38, 28, 0.15)' }]}>
-                  <CreditCard size={15} color={CedarColors.forest800} strokeWidth={2.4} />
-                </View>
-                <Text style={styles.drawerCardTitle}>My Cards</Text>
-                <Text style={styles.drawerCardSub}>Limits & Dates</Text>
-              </Pressable>
-            </View>
-          </Animated.View>
-
-          {/* Primary Bottom Bar Tab Items Row */}
-          <View style={styles.navRow}>
-            {/* 120Hz Reanimated Sliding Oval Indicator */}
-            <Animated.View
-              style={[styles.slidingOvalIndicator, indicatorAnimStyle]}
-              pointerEvents="none"
-            />
-
-            {visibleTabs.map((item) => {
-              if (item.isFab) {
-                // Central spacer slot for the detached circular FAB
-                return (
-                  <View
-                    key={item.name}
-                    style={styles.fabSpacerSlot}
-                    pointerEvents="none"
-                  >
-                    <Text style={styles.fabLabel}>Scan</Text>
-                  </View>
-                );
-              }
-
-              const routeIndex = state.routes.findIndex((r) => r.name === item.name);
-              const isFocused = state.index === routeIndex;
-              const route = state.routes[routeIndex];
-              const IconComponent = item.icon;
-
-              return (
+          <View style={styles.blurContent}>
+            {/* Swipe-Up Extra Options Drawer (Compact Micro-Chips without Shadows) */}
+            <Animated.View style={[styles.drawerContent, drawerAnimStyle]}>
+              <View style={styles.drawerGrid}>
+                {/* 1. Cash on Hand */}
                 <Pressable
-                  key={item.name}
-                  onLayout={(e) => handleTabLayout(item.slotIndex, e)}
                   style={({ pressed }) => [
-                    styles.tabButton,
-                    pressed && { opacity: 0.75 },
+                    styles.drawerChip,
+                    pressed && styles.drawerChipPressed,
                   ]}
-                  onPress={() => {
-                    if (route) handleNavigate(route.key, route.name, isFocused);
-                    else navigation.navigate(item.name);
-                  }}
-                  hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                  onPress={() => handleExtraOptionPress('ledgers')}
                 >
-                  <View style={styles.iconWrapper}>
-                    <IconComponent
-                      size={20}
-                      color={isFocused ? CedarColors.forest800 : CedarColors.ink500}
-                      strokeWidth={isFocused ? 2.6 : 2}
-                    />
+                  <View style={[styles.chipIconBadge, { backgroundColor: 'rgba(16, 185, 129, 0.16)' }]}>
+                    <Banknote size={14} color="#0D532F" strokeWidth={2.4} />
                   </View>
-                  <Text
-                    style={[
-                      styles.tabLabel,
-                      isFocused ? styles.activeTabLabel : styles.inactiveTabLabel,
-                    ]}
-                  >
-                    {item.label}
-                  </Text>
+                  <View style={styles.chipTextCol}>
+                    <Text style={styles.chipTitle} numberOfLines={1}>Cash on Hand</Text>
+                    <Text style={styles.chipSub} numberOfLines={1}>Vault</Text>
+                  </View>
                 </Pressable>
-              );
-            })}
+
+                {/* 2. Personal Spends */}
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.drawerChip,
+                    pressed && styles.drawerChipPressed,
+                  ]}
+                  onPress={() => handleExtraOptionPress('ledgers')}
+                >
+                  <View style={[styles.chipIconBadge, { backgroundColor: 'rgba(245, 158, 11, 0.16)' }]}>
+                    <Receipt size={14} color="#B45309" strokeWidth={2.4} />
+                  </View>
+                  <View style={styles.chipTextCol}>
+                    <Text style={styles.chipTitle} numberOfLines={1}>Personal Spends</Text>
+                    <Text style={styles.chipSub} numberOfLines={1}>Cards & Logs</Text>
+                  </View>
+                </Pressable>
+
+                {/* 3. Pocket Advances */}
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.drawerChip,
+                    pressed && styles.drawerChipPressed,
+                  ]}
+                  onPress={() => handleExtraOptionPress('ledgers')}
+                >
+                  <View style={[styles.chipIconBadge, { backgroundColor: 'rgba(125, 90, 224, 0.16)' }]}>
+                    <Coins size={14} color="#6D28D9" strokeWidth={2.4} />
+                  </View>
+                  <View style={styles.chipTextCol}>
+                    <Text style={styles.chipTitle} numberOfLines={1}>Pocket Advance</Text>
+                    <Text style={styles.chipSub} numberOfLines={1}>Reclaim</Text>
+                  </View>
+                </Pressable>
+
+                {/* 4. Vault Cards */}
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.drawerChip,
+                    pressed && styles.drawerChipPressed,
+                  ]}
+                  onPress={() => handleExtraOptionPress('cards')}
+                >
+                  <View style={[styles.chipIconBadge, { backgroundColor: 'rgba(14, 165, 233, 0.16)' }]}>
+                    <CreditCard size={14} color="#0369A1" strokeWidth={2.4} />
+                  </View>
+                  <View style={styles.chipTextCol}>
+                    <Text style={styles.chipTitle} numberOfLines={1}>My Cards</Text>
+                    <Text style={styles.chipSub} numberOfLines={1}>Families</Text>
+                  </View>
+                </Pressable>
+              </View>
+            </Animated.View>
+
+            {/* Primary Bottom Bar Tab Items Row */}
+            <View style={styles.navRow} onLayout={onNavRowLayout}>
+              {/* 120Hz Sliding Dark Green Selection Pill */}
+              {tabWidth > 0 && (
+                <Animated.View
+                  style={[
+                    styles.slidingSelectionPill,
+                    { width: pillWidth },
+                    indicatorAnimStyle,
+                  ]}
+                  pointerEvents="none"
+                />
+              )}
+
+              {visibleTabs.map((item) => {
+                const routeIndex = state.routes.findIndex((r) => r.name === item.name);
+                const isFocused = currentRouteName === item.name;
+                const route = routeIndex >= 0 ? state.routes[routeIndex] : null;
+                const IconComponent = item.icon;
+                const iconScale = iconScales[item.slotIndex];
+
+                const iconPopStyle = useAnimatedStyle(() => ({
+                  transform: [{ scale: iconScale.value }],
+                }));
+
+                // Special Circular Styling for QR button when not selected
+                if (item.isQr && !isFocused) {
+                  return (
+                    <Pressable
+                      key={item.name}
+                      style={styles.tabButton}
+                      onPress={() => {
+                        if (route) handleNavigate(route.key, route.name, isFocused, item.slotIndex);
+                        else navigation.navigate(item.name as any);
+                      }}
+                      hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                    >
+                      <Animated.View style={[styles.specialQrCircle, iconPopStyle]}>
+                        <QrCode size={19} color="#072C1C" strokeWidth={2.6} />
+                      </Animated.View>
+                      <Text style={styles.inactiveTabLabel}>
+                        {item.label}
+                      </Text>
+                    </Pressable>
+                  );
+                }
+
+                return (
+                  <Pressable
+                    key={item.name}
+                    style={styles.tabButton}
+                    onPress={() => {
+                      if (route) handleNavigate(route.key, route.name, isFocused, item.slotIndex);
+                      else navigation.navigate(item.name as any);
+                    }}
+                    hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                  >
+                    <Animated.View style={[styles.iconWrapper, iconPopStyle]}>
+                      <IconComponent
+                        size={19}
+                        color={isFocused ? '#FFFFFF' : '#072C1C'}
+                        strokeWidth={isFocused ? 2.6 : 2.2}
+                      />
+                    </Animated.View>
+                    <Text
+                      style={[
+                        styles.tabLabel,
+                        isFocused ? styles.activeTabLabel : styles.inactiveTabLabel,
+                      ]}
+                    >
+                      {item.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
           </View>
         </Animated.View>
-      </View>
-    </>
+      </GestureDetector>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  backdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#071A12',
-    zIndex: 40,
-  },
   outerContainer: {
     position: 'absolute',
-    bottom: Platform.OS === 'android' ? 16 : 24,
-    left: 16,
-    right: 16,
+    bottom: Platform.OS === 'android' ? 12 : 20,
+    left: 14,
+    right: 14,
     zIndex: 50,
     alignItems: 'center',
   },
-  // Pill Shaped Navigation Capsule with ambient luxury shadow
+  // Sleek, Compact Frosted Glassmorphism Capsule (No Hint Arrow)
   capsule: {
     width: '100%',
-    maxWidth: 420,
-    backgroundColor: '#FFFFFF', // Soft clean luxury elevated surface
-    borderRadius: 36,
-    borderWidth: 1.5,
-    borderColor: '#DFE7DE',
-    paddingTop: 8,
-    paddingBottom: Platform.OS === 'android' ? 8 : 6,
+    maxWidth: 440,
+    backgroundColor: 'rgba(238, 247, 240, 0.82)', // Translucent Light Green Glass
+    borderRadius: 26,
+    borderWidth: 1.2,
+    borderColor: 'rgba(46, 148, 75, 0.22)', // Subtle thin emerald border
+    shadowColor: '#072C1C',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.1,
+    shadowRadius: 16,
+    elevation: 8,
+    overflow: 'hidden',
+  },
+  blurContent: {
+    paddingTop: 3,
+    paddingBottom: Platform.OS === 'android' ? 4 : 3,
     paddingHorizontal: 8,
-    shadowColor: '#071A12',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.14,
-    shadowRadius: 24,
-    elevation: 16,
-    overflow: 'visible',
-  },
-  // Center Top Notch Cradle Cutout
-  notchCradleCutout: {
-    position: 'absolute',
-    top: -2,
-    left: '50%',
-    transform: [{ translateX: -36 }],
-    width: 72,
-    height: 18,
-    borderBottomLeftRadius: 36,
-    borderBottomRightRadius: 36,
-    backgroundColor: '#EFF3EE', // Blends with screen canvas creating contoured dip
-    borderWidth: 1.5,
-    borderTopWidth: 0,
-    borderColor: '#DFE7DE',
-    zIndex: 2,
-  },
-  // Detached Floating Center QR FAB
-  floatingFabWrapper: {
-    position: 'absolute',
-    top: -26,
-    left: '50%',
-    transform: [{ translateX: -30 }],
-    zIndex: 60,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  fabButton: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: '#071A12', // Deep luxury forest
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2.5,
-    borderColor: '#2E944B', // Vivid emerald contour highlight
-    shadowColor: '#071A12',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.38,
-    shadowRadius: 14,
-    elevation: 18,
-  },
-  fabPressed: {
-    transform: [{ scale: 0.92 }],
-  },
-  fabActive: {
-    backgroundColor: '#0A261C',
-    borderColor: '#34D399',
-  },
-  handleContainer: {
-    alignItems: 'center',
-    paddingVertical: 4,
-    marginBottom: 2,
-    zIndex: 10,
-  },
-  handlePill: {
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: CedarColors.forest800,
-    opacity: 0.35,
   },
   drawerContent: {
     overflow: 'hidden',
-    paddingHorizontal: 4,
-    marginBottom: 8,
+    paddingHorizontal: 2,
+    marginTop: 2,
+    marginBottom: 4,
   },
   drawerGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'space-between',
-    gap: 8,
-    paddingVertical: 6,
+    gap: 6,
+    paddingVertical: 2,
   },
-  drawerCard: {
+  // Compact Mini Chips (No Heavy Shadows)
+  drawerChip: {
     width: '48.5%',
-    borderRadius: 20,
-    paddingVertical: 12,
-    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderRadius: 14,
+    paddingVertical: 7,
+    paddingHorizontal: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.82)',
+    borderWidth: 1,
+    borderColor: 'rgba(46, 148, 75, 0.16)',
+    minHeight: 40,
+    elevation: 0, // No shadow
+  },
+  drawerChipPressed: {
     backgroundColor: '#FFFFFF',
-    borderWidth: 1.2,
-    borderColor: '#DCE7DD',
-    alignItems: 'flex-start',
-    minHeight: 80,
-    shadowColor: '#071A12',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    elevation: 3,
+    transform: [{ scale: 0.98 }],
   },
-  drawerCardPressed: {
-    transform: [{ scale: 0.97 }],
-  },
-  drawerIconBadge: {
-    width: 32,
-    height: 32,
-    borderRadius: 10,
+  chipIconBadge: {
+    width: 24,
+    height: 24,
+    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 6,
   },
-  drawerCardTitle: {
-    fontSize: 12,
+  chipTextCol: {
+    flex: 1,
+  },
+  chipTitle: {
+    fontSize: 11,
     fontFamily: CedarTypography.bodySemiBold,
-    color: CedarColors.ink900,
+    color: '#072C1C',
     fontWeight: '800',
   },
-  drawerCardSub: {
-    fontSize: 10,
+  chipSub: {
+    fontSize: 9,
     fontFamily: CedarTypography.body,
-    color: CedarColors.ink500,
-    marginTop: 1,
+    color: '#4A6B56',
+    marginTop: 0.5,
   },
   navRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    height: 52,
+    height: 48,
     position: 'relative',
   },
-  // 120Hz Sliding Oval Highlight Pill
-  slidingOvalIndicator: {
+  // 120Hz Gliding Dark Green Selection Pill
+  slidingSelectionPill: {
     position: 'absolute',
+    top: 2,
+    bottom: 2,
     height: 44,
     borderRadius: 22,
-    backgroundColor: '#E2F1E6', // Soft mint oval background matching screenshot
-    borderWidth: 1,
-    borderColor: 'rgba(46, 148, 75, 0.22)',
+    backgroundColor: '#072C1C', // Dark Green Pill
     zIndex: 1,
+    shadowColor: '#072C1C',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    elevation: 3,
   },
   tabButton: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    height: 48,
+    height: 46,
     zIndex: 2,
+    paddingVertical: 3,
   },
   iconWrapper: {
     alignItems: 'center',
     justifyContent: 'center',
   },
+  // Special Circular QR Button when not selected
+  specialQrCircle: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(16, 185, 129, 0.18)',
+    borderWidth: 1.8,
+    borderColor: '#072C1C',
+  },
   tabLabel: {
     fontSize: 10,
-    marginTop: 2,
+    marginTop: 1.5,
     letterSpacing: 0.2,
   },
   activeTabLabel: {
     fontFamily: CedarTypography.bodySemiBold,
     fontWeight: '800',
-    color: CedarColors.forest800,
+    color: '#FFFFFF', // Crisp white on dark green pill
   },
   inactiveTabLabel: {
-    fontFamily: CedarTypography.body,
-    color: CedarColors.ink500,
-  },
-  fabSpacerSlot: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    height: 48,
-    paddingBottom: 2,
-  },
-  fabLabel: {
-    fontSize: 10,
-    fontFamily: CedarTypography.body,
-    color: CedarColors.ink500,
-    letterSpacing: 0.2,
+    fontFamily: CedarTypography.bodySemiBold,
+    color: '#072C1C', // Deep green on frosted glass
+    fontWeight: '700',
   },
 });
