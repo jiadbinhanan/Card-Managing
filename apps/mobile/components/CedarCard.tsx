@@ -91,22 +91,22 @@ export function CedarCard({
 
       {/* Card Quick Actions: Freeze, Limits, PIN, Details */}
       <View style={styles.actionsRow}>
-        <HapticButton style={styles.actionBtn} onPress={onFreeze} feedbackType="rigid">
+        <HapticButton style={styles.actionBtn} onPress={onFreeze}>
           <Snowflake size={18} color={CedarColors.forest800} />
           <Text style={styles.actionLabel}>Freeze</Text>
         </HapticButton>
 
-        <HapticButton style={styles.actionBtn} onPress={onLimits} feedbackType="rigid">
+        <HapticButton style={styles.actionBtn} onPress={onLimits}>
           <Sliders size={18} color={CedarColors.forest800} />
           <Text style={styles.actionLabel}>Limits</Text>
         </HapticButton>
 
-        <HapticButton style={styles.actionBtn} onPress={onPin} feedbackType="rigid">
+        <HapticButton style={styles.actionBtn} onPress={onPin}>
           <Lock size={18} color={CedarColors.forest800} />
           <Text style={styles.actionLabel}>PIN</Text>
         </HapticButton>
 
-        <HapticButton style={styles.actionBtn} onPress={onDetails} feedbackType="rigid">
+        <HapticButton style={styles.actionBtn} onPress={onDetails}>
           <Info size={18} color={CedarColors.forest800} />
           <Text style={styles.actionLabel}>Details</Text>
         </HapticButton>

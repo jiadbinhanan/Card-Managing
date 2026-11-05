@@ -97,7 +97,7 @@ export function UrgentBillBottomSheet({
                     {daysLeft <= 1 ? 'BILL DUE IN 24 HOURS' : `BILL DUE IN ${daysLeft} DAYS`}
                   </Text>
                 </View>
-                <HapticButton onPress={handleDismiss} style={styles.closeBtn} feedbackType="rigid">
+                <HapticButton onPress={handleDismiss} style={styles.closeBtn}>
                   <X size={20} color={CedarColors.ink700} />
                 </HapticButton>
               </View>
@@ -116,7 +116,6 @@ export function UrgentBillBottomSheet({
                 <HapticButton
                   style={[styles.btn, styles.payBtn]}
                   onPress={onPayNow || handleDismiss}
-                  feedbackType="rigid"
                 >
                   <Text style={styles.payBtnText}>Pay Bill Now</Text>
                   <ArrowRight size={18} color="#F6F9F5" strokeWidth={2.4} />
@@ -125,7 +124,6 @@ export function UrgentBillBottomSheet({
                 <HapticButton
                   style={[styles.btn, styles.rotateBtn]}
                   onPress={onRotateLimit || handleDismiss}
-                  feedbackType="rigid"
                 >
                   <RefreshCw size={16} color={CedarColors.forest800} strokeWidth={2.2} />
                   <Text style={styles.rotateBtnText}>Rotate Limit</Text>
@@ -136,7 +134,6 @@ export function UrgentBillBottomSheet({
               <HapticButton
                 style={styles.overlayPermBtn}
                 onPress={requestOverlayPermission}
-                feedbackType="rigid"
               >
                 <ShieldAlert size={14} color="#2E944B" />
                 <Text style={styles.overlayPermText}>

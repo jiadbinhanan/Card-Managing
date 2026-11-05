@@ -16,7 +16,6 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { CedarColors, CedarTypography } from '@credics/core';
 import { supabase } from '../lib/supabase';
-import * as Haptics from 'expo-haptics';
 import {
   Lock,
   Mail,

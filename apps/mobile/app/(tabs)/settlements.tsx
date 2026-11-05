@@ -37,6 +37,9 @@ import {
 } from 'lucide-react-native';
 
 import { supabase } from '../../lib/supabase';
+import NetInfo from '@react-native-community/netinfo';
+import { computeSettlementTransition, executeSettlementTransaction } from '@credics/core';
+import { useOfflineQueueStore } from '../../lib/offlineQueue';
 import { QRVaultTab, ActiveCooldown } from '../../components/settlements/QRVaultTab';
 import { InTransitTab, InTransitTransaction } from '../../components/settlements/InTransitTab';
 import { SettledHistoryTab, SettledTransaction } from '../../components/settlements/SettledHistoryTab';
@@ -403,32 +406,83 @@ export default function SettlementsScreen() {
     remarks: string;
   }) => {
     const today = new Date().toISOString().slice(0, 10);
-    const nowISO = new Date().toISOString();
+    const originalCreatedAt = new Date().toISOString();
+    const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
 
-    const { error: txError } = await supabase.from('card_transactions').insert({
-      card_id: cardId,
-      qr_id: qrId,
-      amount,
-      transaction_date: today,
-      type: 'withdrawal',
-      status: 'pending_settlement',
-      recorded_by: currentUser?.id,
-      remarks,
-    });
-    if (txError) throw txError;
+    const netState = await NetInfo.fetch();
+    const isOnline = !!netState.isConnected;
 
-    await supabase.from('qrs').update({ last_used_date: nowISO }).eq('id', qrId);
+    if (!isOnline) {
+      useOfflineQueueStore.getState().enqueueMutation({
+        type: 'rotate',
+        payload: {
+          activeCardId: cardId,
+          numAmount: amount,
+          selectedQrId: qrId,
+          remarks,
+          actingUserId: currentUser?.id,
+        },
+        original_created_at: originalCreatedAt,
+        transaction_date: today,
+        timeStr,
+      });
 
-    // Haptics on save
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setSuccessTitle('Rotation Recorded (Offline)');
+      setSuccessSubtitle('Saved locally. Will sync to ledger when connected.');
+      setSuccessAmount(amount);
+      setSuccessModalVisible(true);
+      return;
+    }
 
-    // Show Therapeutic Success Checkmark Celebration
-    setSuccessTitle('Rotation Recorded');
-    setSuccessSubtitle('Queued into In-Transit ledger for settlement');
-    setSuccessAmount(amount);
-    setSuccessModalVisible(true);
+    try {
+      const { error: txError } = await supabase.from('card_transactions').insert({
+        card_id: cardId,
+        qr_id: qrId,
+        amount,
+        transaction_date: today,
+        created_at: originalCreatedAt,
+        type: 'withdrawal',
+        status: 'pending_settlement',
+        recorded_by: currentUser?.id,
+        remarks,
+      });
+      if (txError) throw txError;
 
-    await fetchCoreData();
+      await supabase.from('qrs').update({ last_used_date: originalCreatedAt }).eq('id', qrId);
+
+      // Rule 4: Haptics on save
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+      // Show Therapeutic Success Checkmark Celebration
+      setSuccessTitle('Rotation Recorded');
+      setSuccessSubtitle('Queued into In-Transit ledger for settlement');
+      setSuccessAmount(amount);
+      setSuccessModalVisible(true);
+
+      await fetchCoreData();
+    } catch (onlineError) {
+      console.warn('Online rotation failed, saving to offline queue:', onlineError);
+      useOfflineQueueStore.getState().enqueueMutation({
+        type: 'rotate',
+        payload: {
+          activeCardId: cardId,
+          numAmount: amount,
+          selectedQrId: qrId,
+          remarks,
+          actingUserId: currentUser?.id,
+        },
+        original_created_at: originalCreatedAt,
+        transaction_date: today,
+        timeStr,
+      });
+
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setSuccessTitle('Rotation Recorded (Offline)');
+      setSuccessSubtitle('Saved locally. Will auto-sync when online.');
+      setSuccessAmount(amount);
+      setSuccessModalVisible(true);
+    }
   };
 
   // Confirm Settlement (Full or Partial)
@@ -446,73 +500,98 @@ export default function SettlementsScreen() {
     remarks: string;
   }) => {
     const today = new Date().toISOString().slice(0, 10);
-    const prevHistory = Array.isArray(tx.settlement_details?.history)
-      ? tx.settlement_details.history
-      : [];
-    const prevSettled = Number(tx.settlement_details?.total_settled || 0);
-    const newSettled = prevSettled + amtToSettle;
-    const newDue = Math.max(0, Number(tx.amount) - newSettled);
+    const originalCreatedAt = new Date().toISOString();
+    const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
 
-    const newHistoryEntry = {
-      settle_id: `settle-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      amount: amtToSettle,
-      settled_date: today,
-      settled_to_user: cashReceiverId,
-      card_id: settleTargetCardId,
-      remarks: remarks || undefined,
-    };
-
-    const updatedSettlementDetails = {
-      total_settled: newSettled,
-      total_due: newDue,
-      history: [...prevHistory, newHistoryEntry],
-    };
-
-    if (newDue <= 0) {
-      await supabase
-        .from('card_transactions')
-        .update({
-          card_id: settleTargetCardId,
-          status: 'settled',
-          settled_date: today,
-          settled_to_user: cashReceiverId,
-          settlement_details: updatedSettlementDetails,
-        })
-        .eq('id', tx.id);
-    } else {
-      await supabase
-        .from('card_transactions')
-        .update({
-          status: 'partially_settled',
-          settlement_details: updatedSettlementDetails,
-        })
-        .eq('id', tx.id);
-    }
-
-    const baseRemark = `Settlement received from ${tx.merchant_name || 'Rotation Entry'}`;
-    const finalRemark = remarks ? `${baseRemark} - ${remarks}` : baseRemark;
-
-    await supabase.from('cash_on_hand_ledger').insert({
-      user_id: cashReceiverId,
-      card_id: settleTargetCardId,
-      amount: amtToSettle,
-      transaction_type: 'credit',
-      remarks: finalRemark,
-      transaction_date: new Date().toISOString(),
-      linked_card_transaction_id: tx.id,
+    // Pure state transition calculation via @credics/core
+    const currentDue = tx.settlement_details?.total_due !== undefined ? tx.settlement_details.total_due : tx.amount;
+    const isFullSettlement = amtToSettle >= currentDue;
+    const settlementResult = computeSettlementTransition({
+      transaction: {
+        id: tx.id,
+        amount: tx.amount,
+        settlement_details: tx.settlement_details,
+        qrMerchantName: tx.merchant_name,
+        remarks,
+      },
+      settlementType: isFullSettlement ? 'full' : 'partial',
+      partialAmount: amtToSettle,
+      cashReceiverId,
+      targetCardId: settleTargetCardId,
+      customRemarks: remarks,
+      todayDateStr: today,
+      nowIsoString: originalCreatedAt,
     });
 
-    // Success Haptics on settlement
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    const netState = await NetInfo.fetch();
+    const isOnline = !!netState.isConnected;
 
-    // Show Therapeutic Success Checkmark Celebration
-    setSuccessTitle('Settlement Completed');
-    setSuccessSubtitle('Successfully credited into Cash on Hand balance');
-    setSuccessAmount(amtToSettle);
-    setSuccessModalVisible(true);
+    if (!isOnline) {
+      useOfflineQueueStore.getState().enqueueMutation({
+        type: 'settlement',
+        payload: {
+          transactionId: tx.id,
+          settleTargetCardId,
+          cashReceiverId,
+          settlementResult,
+          todayDateStr: today,
+        },
+        original_created_at: originalCreatedAt,
+        transaction_date: today,
+        timeStr,
+      });
 
-    await fetchCoreData();
-    await fetchSettledHistoryPage(0, true);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setSuccessTitle('Settlement Recorded (Offline)');
+      setSuccessSubtitle('Saved locally. Will auto-sync when network returns.');
+      setSuccessAmount(amtToSettle);
+      setSuccessModalVisible(true);
+      return;
+    }
+
+    try {
+      // Execute atomic settlement via @credics/core service
+      await executeSettlementTransaction(supabase, {
+        transactionId: tx.id,
+        settleTargetCardId,
+        cashReceiverId,
+        settlementResult,
+        todayDateStr: today,
+      });
+
+      // Rule 4: Success Haptics on settlement save
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+      // Show Therapeutic Success Checkmark Celebration
+      setSuccessTitle('Settlement Completed');
+      setSuccessSubtitle('Successfully credited into Cash on Hand balance');
+      setSuccessAmount(amtToSettle);
+      setSuccessModalVisible(true);
+
+      await fetchCoreData();
+      await fetchSettledHistoryPage(0, true);
+    } catch (onlineError) {
+      console.warn('Online settlement failed, saving to offline queue:', onlineError);
+      useOfflineQueueStore.getState().enqueueMutation({
+        type: 'settlement',
+        payload: {
+          transactionId: tx.id,
+          settleTargetCardId,
+          cashReceiverId,
+          settlementResult,
+          todayDateStr: today,
+        },
+        original_created_at: originalCreatedAt,
+        transaction_date: today,
+        timeStr,
+      });
+
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setSuccessTitle('Settlement Recorded (Offline)');
+      setSuccessSubtitle('Saved locally. Will auto-sync when online.');
+      setSuccessAmount(amtToSettle);
+      setSuccessModalVisible(true);
+    }
   };
 
   // Save New QR (Dynamic or Static)

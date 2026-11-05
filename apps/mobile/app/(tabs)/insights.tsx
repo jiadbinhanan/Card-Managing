@@ -183,7 +183,6 @@ export default function InsightsScreen() {
           </View>
           <HapticButton
             style={styles.calendarBtn}
-            feedbackType="rigid"
             onPress={() => {
             }}
           >

@@ -57,7 +57,6 @@ export default function SendMoneyModal() {
         <HapticButton
           style={styles.backBtn}
           onPress={() => router.back()}
-          feedbackType="light"
         >
           <ArrowLeft size={20} color={CedarColors.ink900} />
         </HapticButton>
@@ -143,7 +142,6 @@ export default function SendMoneyModal() {
           <HapticButton
             style={styles.reviewBtn}
             onPress={handleReviewPayment}
-            feedbackType="heavy"
           >
             <Text style={styles.reviewBtnText}>Continue to Review</Text>
           </HapticButton>

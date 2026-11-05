@@ -6,10 +6,6 @@ const monorepoRoot = path.resolve(projectRoot, '../..');
 
 const config = getDefaultConfig(projectRoot);
 
-config.projectRoot = projectRoot;
-if (config.server) {
-  config.server.unstable_serverRoot = projectRoot;
-}
 
 // 1. Watch all files within the monorepo
 config.watchFolders = [monorepoRoot];

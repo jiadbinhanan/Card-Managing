@@ -756,7 +756,6 @@ export function RecordEntryDrawer({
           ]}
           onPress={handleSubmit}
           disabled={isSubmitting || (isCashSourceMode && !allocationValid)}
-          feedbackType="rigid"
         >
           {isSubmitting ? (
             <ActivityIndicator size="small" color="#FFFFFF" />

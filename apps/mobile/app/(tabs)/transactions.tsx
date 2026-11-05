@@ -38,6 +38,9 @@ import {
 } from 'lucide-react-native';
 
 import { supabase } from '../../lib/supabase';
+import NetInfo from '@react-native-community/netinfo';
+import { processBillPaymentFIFO, deductCashFromSources } from '@credics/core';
+import { useOfflineQueueStore } from '../../lib/offlineQueue';
 import {
   TransactionItemCard,
   UnifiedTransactionItem,
@@ -498,56 +501,7 @@ export default function TransactionsScreen() {
     fetchTransactionsPage(page + 1, false);
   };
 
-  // FIFO Bill Payment Processor
-  const processBillPaymentFIFO = async (cardId: string, amt: number) => {
-    const result = { cycleId: null as string | null, status: null as string | null };
-
-    const { data: dueCycles } = await supabase
-      .from('billing_cycles')
-      .select('*')
-      .eq('card_id', cardId)
-      .in('status', ['unpaid', 'partially_paid'])
-      .order('billing_month', { ascending: true });
-
-    let targetCycle = dueCycles && dueCycles.length > 0 ? dueCycles[0] : null;
-
-    if (!targetCycle) {
-      const { data: latestCycles } = await supabase
-        .from('billing_cycles')
-        .select('*')
-        .eq('card_id', cardId)
-        .order('billing_month', { ascending: false })
-        .limit(1);
-      if (latestCycles && latestCycles.length > 0) {
-        targetCycle = latestCycles[0];
-      }
-    }
-
-    if (targetCycle) {
-      const genAmt = Number(targetCycle.generated_amount || 0);
-      const paidAmt = Number(targetCycle.paid_amount || 0);
-      const newPaid = paidAmt + amt;
-      let newStatus = targetCycle.status;
-
-      if (newPaid >= genAmt) {
-        newStatus = 'paid';
-      } else if (newPaid > 0) {
-        newStatus = 'partially_paid';
-      }
-
-      await supabase
-        .from('billing_cycles')
-        .update({ paid_amount: newPaid, status: newStatus })
-        .eq('id', targetCycle.id);
-
-      result.cycleId = targetCycle.id;
-      result.status = newStatus;
-    }
-
-    return result;
-  };
-
-  // Submit Handler for RecordEntryDrawer
+  // Submit Handler for RecordEntryDrawer with Offline Queue & Exact Timestamp Preservation
   const handleSaveRecord = async (payload: RecordEntrySubmitPayload) => {
     const {
       recordType,
@@ -563,6 +517,9 @@ export default function TransactionsScreen() {
       validCashSources,
     } = payload;
 
+    const originalCreatedAt = new Date().toISOString();
+    const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+
     const isSpendCash = recordType === 'spend' && spendMethod === 'cash_on_hand';
     const isBillCash = recordType === 'bill' && billMethod === 'cash_on_hand';
     const breakdownForInsert =
@@ -570,119 +527,178 @@ export default function TransactionsScreen() {
         ? validCashSources.map((s) => ({ card_id: s.cardId, amount: s.amount }))
         : null;
 
-    if (recordType === 'rotate') {
-      await supabase.from('card_transactions').insert({
-        card_id: activeCardId,
-        type: 'withdrawal',
-        amount: numAmount,
-        qr_id: selectedQrId || null,
-        remarks: remarks || 'Rotation Withdrawal',
-        status: 'pending_settlement',
+    // Check connectivity first
+    const netState = await NetInfo.fetch();
+    const isOnline = !!netState.isConnected;
+
+    if (!isOnline) {
+      // Offline: Enqueue mutation with EXACT original timestamp
+      useOfflineQueueStore.getState().enqueueMutation({
+        type: recordType,
+        payload: {
+          activeCardId,
+          numAmount,
+          selectedQrId,
+          remarks,
+          actingUserId,
+          spendMethod,
+          billMethod,
+          isDebtRepayment,
+          breakdownForInsert,
+          validCashSources,
+        },
+        original_created_at: originalCreatedAt,
         transaction_date: finalDate,
-        recorded_by: actingUserId || null,
-      });
-    } else if (recordType === 'spend') {
-      await supabase.from('spends').insert({
-        user_id: actingUserId,
-        card_id: activeCardId,
-        amount: numAmount,
-        spend_type: 'personal',
-        payment_method: spendMethod,
-        remarks: remarks || 'Personal Spend',
-        spend_date: finalDate,
-        cash_source_breakdown: breakdownForInsert,
+        timeStr,
       });
 
-      if (spendMethod === 'cash_on_hand' && validCashSources.length > 0) {
-        for (const src of validCashSources) {
-          await supabase.from('cash_on_hand_ledger').insert({
-            card_id: src.cardId,
-            user_id: actingUserId,
-            amount: src.amount,
-            transaction_type: 'debit',
-            remarks: `Personal spend ${remarks ? '- ' + remarks : ''}`,
-            transaction_date: new Date().toISOString(),
-          });
-        }
-      }
-    } else if (recordType === 'bill') {
-      const billCycleResult = await processBillPaymentFIFO(activeCardId, numAmount);
+      // Allowed haptics on submit
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setIsRecordModalOpen(false);
+      return;
+    }
 
-      const { data: billTx } = await supabase
-        .from('card_transactions')
-        .insert({
+    try {
+      if (recordType === 'rotate') {
+        await supabase.from('card_transactions').insert({
           card_id: activeCardId,
-          type: 'bill_payment',
+          type: 'withdrawal',
           amount: numAmount,
-          status: 'settled',
-          payment_method: billMethod,
-          remarks: remarks || 'Card Bill Repayment',
+          qr_id: selectedQrId || null,
+          remarks: remarks || 'Rotation Withdrawal',
+          status: 'pending_settlement',
           transaction_date: finalDate,
+          created_at: originalCreatedAt,
           recorded_by: actingUserId || null,
-          billing_cycle_id: billCycleResult.cycleId,
-          cash_source_breakdown: billMethod === 'cash_on_hand' ? breakdownForInsert : null,
-        })
-        .select('id')
-        .single();
-
-      if (billMethod === 'cash_on_hand' && validCashSources.length > 0) {
-        for (const src of validCashSources) {
-          await supabase.from('cash_on_hand_ledger').insert({
-            card_id: src.cardId,
-            user_id: actingUserId,
-            amount: src.amount,
-            transaction_type: 'debit',
-            remarks: `Bill payment ${remarks ? '- ' + remarks : ''}`,
-            transaction_date: new Date().toISOString(),
-            linked_card_transaction_id: billTx?.id || null,
-          });
-        }
-      } else if (billMethod === 'own_pocket') {
-        await supabase.from('pocket_advances_ledger').insert({
-          user_id: actingUserId,
-          card_id: activeCardId,
-          amount: -numAmount,
-          entry_type: 'advance',
-          transaction_date: finalDate,
-          linked_card_transaction_id: billTx?.id || null,
-          remarks: `Card bill payment advanced from pocket ${remarks ? '- ' + remarks : ''}`,
         });
-
-        const { data: curAdv } = await supabase
-          .from('pocket_advances')
-          .select('current_balance')
-          .eq('user_id', actingUserId)
-          .eq('card_id', activeCardId)
-          .maybeSingle();
-
-        const nextAdv = (Number(curAdv?.current_balance) || 0) - numAmount;
-        await supabase.from('pocket_advances').upsert({
-          user_id: actingUserId,
-          card_id: activeCardId,
-          current_balance: nextAdv,
-        });
-      }
-
-      if (isDebtRepayment) {
+      } else if (recordType === 'spend') {
         await supabase.from('spends').insert({
           user_id: actingUserId,
           card_id: activeCardId,
-          amount: -numAmount,
-          spend_type: 'repayment',
-          payment_method: billMethod,
-          remarks: `Debt Cleared ${remarks ? ': ' + remarks : ''}`,
+          amount: numAmount,
+          spend_type: 'personal',
+          payment_method: spendMethod,
+          remarks: remarks || 'Personal Spend',
           spend_date: finalDate,
-          linked_card_transaction_id: billTx?.id || null,
+          created_at: originalCreatedAt,
+          cash_source_breakdown: breakdownForInsert,
         });
+
+        if (spendMethod === 'cash_on_hand' && validCashSources.length > 0) {
+          await deductCashFromSources(supabase, {
+            userId: actingUserId,
+            sources: validCashSources,
+            note: `Personal spend ${remarks ? '- ' + remarks : ''}`,
+            txDate: finalDate,
+            createdAt: originalCreatedAt,
+          });
+        }
+      } else if (recordType === 'bill') {
+        // FIFO Bill allocation via @credics/core
+        const billCycleResult = await processBillPaymentFIFO(supabase, activeCardId, numAmount);
+
+        const { data: billTx, error: txErr } = await supabase
+          .from('card_transactions')
+          .insert({
+            card_id: activeCardId,
+            type: 'bill_payment',
+            amount: numAmount,
+            status: 'settled',
+            payment_method: billMethod,
+            remarks: remarks || 'Card Bill Repayment',
+            transaction_date: finalDate,
+            created_at: originalCreatedAt,
+            recorded_by: actingUserId || null,
+            billing_cycle_id: billCycleResult.cycleId,
+            cash_source_breakdown: billMethod === 'cash_on_hand' ? breakdownForInsert : null,
+          })
+          .select('id')
+          .single();
+
+        if (txErr) throw txErr;
+
+        if (billMethod === 'cash_on_hand' && validCashSources.length > 0) {
+          await deductCashFromSources(supabase, {
+            userId: actingUserId,
+            sources: validCashSources,
+            note: `Bill payment ${remarks ? '- ' + remarks : ''}`,
+            linkedCardTxId: billTx?.id || null,
+            txDate: finalDate,
+            createdAt: originalCreatedAt,
+          });
+        } else if (billMethod === 'own_pocket') {
+          await supabase.from('pocket_advances_ledger').insert({
+            user_id: actingUserId,
+            card_id: activeCardId,
+            amount: -numAmount,
+            entry_type: 'advance',
+            transaction_date: finalDate,
+            created_at: originalCreatedAt,
+            linked_card_transaction_id: billTx?.id || null,
+            remarks: `Card bill payment advanced from pocket ${remarks ? '- ' + remarks : ''}`,
+          });
+
+          const { data: curAdv } = await supabase
+            .from('pocket_advances')
+            .select('current_balance')
+            .eq('user_id', actingUserId)
+            .eq('card_id', activeCardId)
+            .maybeSingle();
+
+          const nextAdv = (Number(curAdv?.current_balance) || 0) - numAmount;
+          await supabase.from('pocket_advances').upsert({
+            user_id: actingUserId,
+            card_id: activeCardId,
+            current_balance: nextAdv,
+          });
+        }
+
+        if (isDebtRepayment) {
+          await supabase.from('spends').insert({
+            user_id: actingUserId,
+            card_id: activeCardId,
+            amount: -numAmount,
+            spend_type: 'repayment',
+            payment_method: billMethod,
+            remarks: `Debt Cleared ${remarks ? ': ' + remarks : ''}`,
+            spend_date: finalDate,
+            created_at: originalCreatedAt,
+            linked_card_transaction_id: billTx?.id || null,
+          });
+        }
       }
+
+      // Success Haptics on save as permitted by rule
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+      setIsRecordModalOpen(false);
+      await fetchTransactionsPage(0, true);
+      await fetchAuxiliaryData();
+    } catch (onlineError) {
+      console.warn('Online transaction failed, falling back to offline mutation queue:', onlineError);
+      // Fallback to queue if network drops mid-flight
+      useOfflineQueueStore.getState().enqueueMutation({
+        type: recordType,
+        payload: {
+          activeCardId,
+          numAmount,
+          selectedQrId,
+          remarks,
+          actingUserId,
+          spendMethod,
+          billMethod,
+          isDebtRepayment,
+          breakdownForInsert,
+          validCashSources,
+        },
+        original_created_at: originalCreatedAt,
+        transaction_date: finalDate,
+        timeStr,
+      });
+
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setIsRecordModalOpen(false);
     }
-
-    // Success Haptics on save as permitted by rule
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-
-    setIsRecordModalOpen(false);
-    await fetchTransactionsPage(0, true);
-    await fetchAuxiliaryData();
   };
 
   const renderTransactionItem = useCallback(

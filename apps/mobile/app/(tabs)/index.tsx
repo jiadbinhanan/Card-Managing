@@ -29,7 +29,7 @@ import Animated, {
   FadeInDown,
   FadeInUp,
 } from 'react-native-reanimated';
-import { CedarColors, CedarTypography } from '@credics/core';
+import { CedarColors, CedarTypography, generateAntiFraudAmounts } from '@credics/core';
 import { QuickActions } from '../../components/QuickActions';
 import { NotificationSidePanel } from '../../components/NotificationSidePanel';
 import { SwipeDownDrawer, DrawerScrollView } from '../../components/SwipeDownDrawer';
@@ -37,6 +37,15 @@ import { HapticButton } from '../../components/HapticButton';
 import { HomeSkeleton } from '../../components/Skeleton';
 import { HeroCardLimitChart, CardLimitStat } from '../../components/HeroCardLimitChart';
 import { supabase } from '../../lib/supabase';
+import {
+  useDashboardStore,
+  CardData,
+  UserStat,
+  BillingCycle,
+  QRItem,
+  ActiveCooldown,
+  RecentTx,
+} from '../../lib/dashboardStore';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import {
@@ -70,95 +79,44 @@ import {
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-interface CardData {
-  id: string;
-  card_name: string;
-  last_4_digits: string;
-  total_limit: number;
-  is_primary: boolean;
-  bill_gen_day: number;
-  bill_due_day: number;
-  parent_card_id?: string;
-}
-
-interface UserStat {
-  id: string;
-  name: string;
-  cash: number;
-  due: number;
-  pocket: number;
-  avatar_url?: string;
-  cardBreakdown: Array<{ cardId: string; cardName: string; cardLast4: string; balance: number }>;
-}
-
-interface BillingCycle {
-  id: string;
-  card_id: string;
-  billing_month: string;
-  generated_amount: number;
-  paid_amount: number;
-  status: string;
-  bill_gen_day?: number;
-  bill_due_day?: number;
-}
-
-interface ActiveCooldown {
-  qrId: string;
-  merchantName: string;
-  expiresAt: number;
-}
-
-interface QRItem {
-  id: string;
-  merchant_name: string;
-  platform: string;
-  qr_image_url: string;
-  last_used_date: string | null;
-  upi_id: string;
-  base_payment_link?: string | null;
-}
-
-interface RecentTx {
-  id: string;
-  title: string;
-  category: string;
-  amount: number;
-  date: string;
-  isCredit: boolean;
-}
-
 export default function HomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
-  // Loading & Refresh State
-  const [isLoading, setIsLoading] = useState(true);
+  // Connect to global dashboardStore for instant hydration from parallel background pre-fetch
+  const {
+    isInitialized,
+    currentUser,
+    userName,
+    firstName,
+    userAvatar,
+    accessibleCards,
+    selectedCardId,
+    cardLimitStats,
+    availableLimit,
+    totalLimit,
+    inTransit,
+    usersCash,
+    daysToBill,
+    nextBillDate,
+    activeBills,
+    userStats,
+    suggestedQrs,
+    activeCooldowns,
+    recentTransactions,
+    setSelectedCardId,
+    fetchDashboardData,
+  } = useDashboardStore();
+
+  const isLoading = !isInitialized;
   const [refreshing, setRefreshing] = useState(false);
 
-  // Authenticated User Info
-  const [currentUser, setCurrentUser] = useState<any>(null);
-  const [userName, setUserName] = useState('User');
-  const [firstName, setFirstName] = useState('');
-  const [userAvatar, setUserAvatar] = useState<string | null>(null);
-
-  // Card & Vault State
-  const [accessibleCards, setAccessibleCards] = useState<CardData[]>([]);
-  const [selectedCardId, setSelectedCardId] = useState<string>('all');
+  // Card & Vault Modal State
   const [cardModalVisible, setCardModalVisible] = useState(false);
-  const [cardLimitStats, setCardLimitStats] = useState<CardLimitStat[]>([]);
-
-  // Metrics State
-  const [availableLimit, setAvailableLimit] = useState<number>(0);
-  const [totalLimit, setTotalLimit] = useState<number>(0);
-  const [inTransit, setInTransit] = useState<number>(0);
-  const [usersCash, setUsersCash] = useState<number>(0);
   const [showBalance, setShowBalance] = useState<boolean>(true);
 
   // Billing Cycle State
-  const [daysToBill, setDaysToBill] = useState<number>(26);
-  const [nextBillDate, setNextBillDate] = useState<string>('');
   const [showNotificationPanel, setShowNotificationPanel] = useState<boolean>(false);
-  const [activeBills, setActiveBills] = useState<BillingCycle[]>([]);
   const [isBillModalOpen, setIsBillModalOpen] = useState(false);
   const [billFormCardId, setBillFormCardId] = useState('');
   const [billFormMonth, setBillFormMonth] = useState('');
@@ -167,7 +125,6 @@ export default function HomeScreen() {
   const [isSavingBill, setIsSavingBill] = useState(false);
 
   // Cash & Repayment Analytics State
-  const [userStats, setUserStats] = useState<UserStat[]>([]);
   const [selectedUserStat, setSelectedUserStat] = useState<UserStat | null>(null);
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
   const [userModalTab, setUserModalTab] = useState<'summary' | 'cash_ledger' | 'due_ledger' | 'pocket_advance'>('summary');
@@ -190,8 +147,6 @@ export default function HomeScreen() {
   const [isTransferring, setIsTransferring] = useState(false);
 
   // Smart Suggestions QR Module State
-  const [suggestedQrs, setSuggestedQrs] = useState<QRItem[]>([]);
-  const [activeCooldowns, setActiveCooldowns] = useState<ActiveCooldown[]>([]);
   const [nowTimestamp, setNowTimestamp] = useState(Date.now());
   const [selectedQr, setSelectedQr] = useState<QRItem | null>(null);
   const [isQrModalOpen, setIsQrModalOpen] = useState(false);
@@ -199,9 +154,6 @@ export default function HomeScreen() {
   const [generatedAmounts, setGeneratedAmounts] = useState<number[]>([]);
   const [qrPaymentMode, setQrPaymentMode] = useState<'once' | 'multiple'>('once');
   const [isMarkingUsed, setIsMarkingUsed] = useState(false);
-
-  // Recent Transactions
-  const [recentTransactions, setRecentTransactions] = useState<RecentTx[]>([]);
 
   // 120Hz Spring micro-bounce and playful ring for Notification Bell
   const bellScale = useSharedValue(1);
@@ -286,397 +238,10 @@ export default function HomeScreen() {
     return () => clearInterval(timer);
   }, []);
 
-  // Calculate Remaining Days to Bill Due Date
-  const calculateBillDays = (cards: CardData[], selectedId: string) => {
-    let targetDay = 26;
-    if (selectedId !== 'all') {
-      const card = cards.find((c) => c.id === selectedId);
-      if (card?.bill_due_day) targetDay = card.bill_due_day;
-    } else if (cards.length > 0) {
-      targetDay = cards[0].bill_due_day || 26;
-    }
-
-    const now = new Date();
-    let target = new Date(now.getFullYear(), now.getMonth(), targetDay);
-    if (now > target) target = new Date(now.getFullYear(), now.getMonth() + 1, targetDay);
-    const diff = Math.ceil((target.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-    setDaysToBill(diff);
-
-    const nth = (d: number) => {
-      if (d > 3 && d < 21) return 'th';
-      switch (d % 10) {
-        case 1:
-          return 'st';
-        case 2:
-          return 'nd';
-        case 3:
-          return 'rd';
-        default:
-          return 'th';
-      }
-    };
-    const month = target.toLocaleString('default', { month: 'short' });
-    setNextBillDate(`${targetDay}${nth(targetDay)} ${month}`);
-  };
-
-  // Fetch Complete Real Data from Supabase
-  const fetchDashboardData = useCallback(async () => {
-    try {
-      // 1. Authenticated User & Profiles
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const authUser = session?.user;
-
-      if (!authUser) {
-        router.replace('/login');
-        return;
-      }
-
-      setCurrentUser(authUser);
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', authUser.id)
-        .maybeSingle();
-
-      if (profile) {
-        setUserName(profile.name);
-        const fName = profile.name.split(' ')[0];
-        setFirstName(fName);
-        if (profile.avatar_url) setUserAvatar(profile.avatar_url);
-      }
-
-      // 2. Fetch Accessible Cards
-      const { data: accessData } = await supabase
-        .from('card_access')
-        .select('card_id')
-        .eq('user_id', authUser.id);
-
-      let myCards: CardData[] = [];
-      if (accessData && accessData.length > 0) {
-        const cardIds = accessData.map((a) => a.card_id);
-        const { data: cardsData } = await supabase
-          .from('cards')
-          .select('*')
-          .in('id', cardIds)
-          .order('is_primary', { ascending: false });
-        if (cardsData) myCards = cardsData;
-      } else {
-        const { data: fallbackCards } = await supabase
-          .from('cards')
-          .select('*')
-          .order('is_primary', { ascending: false });
-        if (fallbackCards) myCards = fallbackCards;
-      }
-
-      setAccessibleCards(myCards);
-      calculateBillDays(myCards, selectedCardId);
-
-      // Determine active card IDs for calculations
-      let currentLimit = 0;
-      let activeCardIds: string[] = [];
-
-      if (selectedCardId === 'all') {
-        currentLimit = myCards.filter((c) => c.is_primary).reduce((sum, c) => sum + Number(c.total_limit || 0), 0);
-        activeCardIds = myCards.map((c) => c.id);
-      } else {
-        const selected = myCards.find((c) => c.id === selectedCardId);
-        if (selected) {
-          const primaryId = selected.is_primary ? selected.id : selected.parent_card_id;
-          const primaryCard = myCards.find((c) => c.id === primaryId);
-          currentLimit = primaryCard ? Number(primaryCard.total_limit) : Number(selected.total_limit);
-          const familyCards = myCards.filter((c) => c.id === primaryId || c.parent_card_id === primaryId);
-          activeCardIds = familyCards.map((c) => c.id);
-        }
-      }
-      if (currentLimit === 0 && myCards.length > 0) {
-        currentLimit = myCards.reduce((sum, c) => sum + Number(c.total_limit || 0), 0);
-      }
-      setTotalLimit(currentLimit);
-
-      // 3. Transactions & Spends Calculation
-      let txQuery = supabase.from('card_transactions').select('*');
-      let spendsQuery = supabase.from('spends').select('*');
-      let billsQuery = supabase
-        .from('billing_cycles')
-        .select('*, cards(card_name, last_4_digits, bill_gen_day, bill_due_day)')
-        .order('billing_month', { ascending: false });
-
-      if (activeCardIds.length > 0) {
-        txQuery = txQuery.in('card_id', activeCardIds);
-        spendsQuery = spendsQuery.in('card_id', activeCardIds);
-        billsQuery = billsQuery.in('card_id', activeCardIds);
-      }
-
-      const [{ data: txs }, { data: spends }, { data: bills }] = await Promise.all([
-        txQuery,
-        spendsQuery,
-        billsQuery,
-      ]);
-
-      // Calculate Available Limit
-      const withdrawals =
-        txs
-          ?.filter((t) => {
-            if (t.type !== 'withdrawal') return false;
-            const isRotation = t.qr_id || t.settled_to_user || (t.remarks || '').toLowerCase().includes('rotation');
-            if (isRotation) return true;
-            return t.status === 'pending_settlement' || t.status === 'partially_settled';
-          })
-          .reduce((sum, t) => sum + Number(t.amount || 0), 0) || 0;
-
-      const billPayments =
-        txs?.filter((t) => t.type === 'bill_payment').reduce((sum, t) => sum + Number(t.amount || 0), 0) || 0;
-      const ccSpends =
-        spends?.filter((s) => s.payment_method === 'credit_card').reduce((sum, s) => sum + Number(s.amount || 0), 0) || 0;
-
-      setAvailableLimit(Math.max(0, currentLimit - withdrawals - ccSpends + billPayments));
-
-      // In Transit Rotations
-      const inTransitAmt =
-        txs
-          ?.filter(
-            (t) =>
-              t.type === 'withdrawal' &&
-              (t.qr_id || (t.remarks || '').toLowerCase().includes('rotation')) &&
-              t.status !== 'settled'
-          )
-          .reduce((sum, t) => {
-            const due =
-              t.status === 'partially_settled' && t.settlement_details?.total_due !== undefined
-                ? Number(t.settlement_details.total_due)
-                : Number(t.amount);
-            return sum + due;
-          }, 0) || 0;
-      setInTransit(inTransitAmt);
-
-      // Card Family Limit & Utilization Stats for Hero Chart & Card Selector
-      const primaryCards = myCards.filter((c) => c.is_primary || !c.parent_card_id);
-      const orphanSubCards = myCards.filter(
-        (c) => !c.is_primary && c.parent_card_id && !primaryCards.some((p) => p.id === c.parent_card_id)
-      );
-      const familyRoots = [...primaryCards, ...orphanSubCards];
-
-      const statsList: CardLimitStat[] = familyRoots.map((rootCard) => {
-        const subCards = myCards.filter((c) => c.parent_card_id === rootCard.id);
-        const familyCardIds = [rootCard.id, ...subCards.map((s) => s.id)];
-        const cardLimit = Number(rootCard.total_limit || 0);
-
-        const familyWithdrawals =
-          txs
-            ?.filter(
-              (t) =>
-                familyCardIds.includes(t.card_id) &&
-                t.type === 'withdrawal' &&
-                (t.qr_id ||
-                  t.settled_to_user ||
-                  (t.remarks || '').toLowerCase().includes('rotation') ||
-                  t.status === 'pending_settlement' ||
-                  t.status === 'partially_settled')
-            )
-            .reduce((sum, t) => sum + Number(t.amount || 0), 0) || 0;
-
-        const familyBillPayments =
-          txs
-            ?.filter((t) => familyCardIds.includes(t.card_id) && t.type === 'bill_payment')
-            .reduce((sum, t) => sum + Number(t.amount || 0), 0) || 0;
-
-        const familySpends =
-          spends
-            ?.filter((s) => familyCardIds.includes(s.card_id) && s.payment_method === 'credit_card')
-            .reduce((sum, s) => sum + Number(s.amount || 0), 0) || 0;
-
-        const used = Math.max(0, familyWithdrawals + familySpends - familyBillPayments);
-        const avail = Math.max(0, cardLimit - used);
-        const ratio = cardLimit > 0 ? used / cardLimit : 0;
-
-        return {
-          id: rootCard.id,
-          name: rootCard.card_name,
-          last4: rootCard.last_4_digits,
-          hasSubCards: subCards.length > 0,
-          subCardsCount: subCards.length,
-          subCardsLast4: subCards.map((s) => s.last_4_digits),
-          totalLimit: cardLimit,
-          usedLimit: used,
-          availableLimit: avail,
-          utilizationRatio: ratio,
-        };
-      });
-      setCardLimitStats(statsList);
-
-      // Active Bills (Web App Parity: Deduplicate to latest bill per card)
-      if (bills) {
-        const latestPerCard = new Map<string, any>();
-        bills.forEach((b: any) => {
-          if (!latestPerCard.has(b.card_id)) latestPerCard.set(b.card_id, b);
-        });
-        setActiveBills(
-          Array.from(latestPerCard.values()).map((b: any) => ({
-            ...b,
-            bill_gen_day: b.cards?.bill_gen_day,
-            bill_due_day: b.cards?.bill_due_day,
-          }))
-        );
-      }
-
-      // 4. User Stats & Cash Breakdown
-      const { data: allProfiles } = await supabase.from('profiles').select('*').order('name');
-      const { data: allCoh } = await supabase.from('cash_on_hand').select('*');
-
-      let usersCashTotal = 0;
-      if (allCoh) {
-        usersCashTotal = allCoh
-          .filter((c) => activeCardIds.includes(c.card_id))
-          .reduce((sum, c) => sum + Number(c.current_balance || 0), 0);
-      }
-      setUsersCash(usersCashTotal);
-
-      if (allProfiles) {
-        const stats: UserStat[] = [];
-        for (const p of allProfiles) {
-          const userCohRows = allCoh?.filter((c) => c.user_id === p.id && activeCardIds.includes(c.card_id)) || [];
-          const cashTotal = userCohRows.reduce((sum, c) => sum + Number(c.current_balance || 0), 0);
-
-          const totalPersonalSpends =
-            spends
-              ?.filter((s) => s.user_id === p.id && ['credit_card', 'from_card_limit', 'lent_recovery'].includes(s.payment_method))
-              .reduce((sum, s) => sum + Number(s.amount), 0) || 0;
-          const totalRepayments =
-            txs
-              ?.filter((t) => t.recorded_by === p.id && t.type === 'bill_payment' && t.payment_method === 'own_pocket')
-              .reduce((sum, t) => sum + Number(t.amount), 0) || 0;
-          const due = Math.max(0, totalPersonalSpends - totalRepayments);
-
-          const cardBreakdown = myCards.map((c) => ({
-            cardId: c.id,
-            cardName: c.card_name,
-            cardLast4: c.last_4_digits,
-            balance: Number(userCohRows.find((r) => r.card_id === c.id)?.current_balance || 0),
-          }));
-
-          // Fetch active pocket advance balance
-          const { data: paData } = await supabase
-            .from('pocket_advances')
-            .select('current_balance')
-            .eq('user_id', p.id);
-          const pocketBal = (paData || []).reduce((sum, r) => sum + Number(r.current_balance || 0), 0);
-
-          stats.push({
-            id: p.id,
-            name: p.name.split(' ')[0],
-            cash: cashTotal,
-            due,
-            pocket: pocketBal,
-            avatar_url: p.avatar_url,
-            cardBreakdown,
-          });
-        }
-        setUserStats(stats);
-      }
-
-      // 5. Smart Suggestions QR Module
-      const { data: qrData } = await supabase.from('qrs').select('*').eq('status', 'active');
-      if (qrData) {
-        const fiveDaysAgo = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString();
-        const { data: recentQrTxs } = await supabase
-          .from('card_transactions')
-          .select('qr_id, created_at')
-          .eq('recorded_by', authUser.id)
-          .not('qr_id', 'is', null)
-          .gte('created_at', fiveDaysAgo)
-          .order('created_at', { ascending: false });
-
-        const cooldownList: ActiveCooldown[] = [];
-        const processedQrIds = new Set<string>();
-
-        if (recentQrTxs) {
-          recentQrTxs.forEach((t) => {
-            if (!t.qr_id || processedQrIds.has(t.qr_id)) return;
-            const qrInfo = qrData.find((q) => q.id === t.qr_id);
-            if (!qrInfo) return;
-            const expiresAt = new Date(t.created_at).getTime() + 24 * 60 * 60 * 1000;
-            if (expiresAt > Date.now()) {
-              cooldownList.push({
-                qrId: t.qr_id,
-                merchantName: qrInfo.merchant_name,
-                expiresAt,
-              });
-            }
-            processedQrIds.add(t.qr_id);
-          });
-        }
-        setActiveCooldowns(cooldownList);
-
-        // Filter operational QRs (exclude current user's name, BharatPe 5-day rule, active cooling)
-        const operational = qrData.filter((q) => {
-          const nameLower = q.merchant_name.toLowerCase();
-          const firstWord = nameLower.split(/\s+/)[0];
-          if (firstName && firstWord === firstName.toLowerCase()) return false;
-
-          const isBharatPe = nameLower.includes('bharatpe') || (q.platform || '').toLowerCase().includes('bharatpe');
-          if (isBharatPe && q.last_used_date) {
-            const daysSinceUsed = (Date.now() - new Date(q.last_used_date).getTime()) / (1000 * 60 * 60 * 24);
-            if (daysSinceUsed < 5) return false;
-          }
-
-          if (cooldownList.some((c) => c.qrId === q.id)) return false;
-          return true;
-        });
-
-        operational.sort((a, b) => {
-          const timeA = a.last_used_date ? new Date(a.last_used_date).getTime() : 0;
-          const timeB = b.last_used_date ? new Date(b.last_used_date).getTime() : 0;
-          return timeA - timeB;
-        });
-
-        setSuggestedQrs(operational.slice(0, 3));
-      }
-
-      // 6. Form Real Recent Transactions Feed from card_transactions table (Item 5 Parity)
-      const { data: latestCardTxs } = await supabase
-        .from('card_transactions')
-        .select('*, cards(card_name, last_4_digits)')
-        .order('transaction_date', { ascending: false })
-        .limit(6);
-
-      const txFeed: RecentTx[] = [];
-      if (latestCardTxs && latestCardTxs.length > 0) {
-        latestCardTxs.forEach((t: any) => {
-          const isPayment = t.type === 'bill_payment';
-          txFeed.push({
-            id: t.id,
-            title: isPayment
-              ? `Bill Payment Repaid (${t.cards?.card_name || 'Card'})`
-              : t.remarks || 'Rotation Withdrawal',
-            category: isPayment
-              ? 'Repayment'
-              : t.cards?.card_name
-              ? `${t.cards.card_name} Rotation`
-              : 'Card Rotation',
-            amount: Number(t.amount),
-            date: t.transaction_date
-              ? new Date(t.transaction_date).toLocaleDateString('en-IN', {
-                  month: 'short',
-                  day: 'numeric',
-                })
-              : 'Recent',
-            isCredit: isPayment,
-          });
-        });
-      }
-      setRecentTransactions(txFeed);
-    } catch (err) {
-      console.error('Error fetching dashboard data:', err);
-    } finally {
-      setIsLoading(false);
-      setRefreshing(false);
-    }
-  }, [selectedCardId, firstName]);
-
   useEffect(() => {
-    fetchDashboardData();
+    if (!isInitialized) {
+      fetchDashboardData();
+    }
 
     const channel = supabase
       .channel('mobile-dashboard-live')
@@ -690,11 +255,12 @@ export default function HomeScreen() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [fetchDashboardData]);
+  }, [fetchDashboardData, isInitialized]);
 
-  const onRefresh = () => {
+  const onRefresh = async () => {
     setRefreshing(true);
-    fetchDashboardData();
+    await fetchDashboardData();
+    setRefreshing(false);
   };
 
   const getActiveCardName = () => {
@@ -906,17 +472,9 @@ export default function HomeScreen() {
     }
   };
 
-  // QR Modal: Generate Dynamic Links
+  // QR Modal: Generate Dynamic Links via @credics/core
   const handleGeneratePaymentAmounts = () => {
-    if (qrPaymentMode === 'once') {
-      const high = Math.random() < 0.9;
-      setGeneratedAmounts([high ? Math.floor(Math.random() * 100 + 1900) : Math.floor(Math.random() * 50 + 1850)]);
-    } else {
-      const target = Math.floor(Math.random() * 100 + 1900);
-      const first = Math.floor(Math.random() * (target - 1000) + 500);
-      const second = target - first;
-      setGeneratedAmounts([first, second]);
-    }
+    setGeneratedAmounts(generateAntiFraudAmounts(qrPaymentMode, 2));
   };
 
   // QR Modal: Mark as Used and Record Transaction
@@ -1306,7 +864,7 @@ export default function HomeScreen() {
                             {isPaid ? (
                               <View style={styles.paidBadge}>
                                 <CheckCircle2 size={11} color="#15803D" strokeWidth={2.5} style={{ marginRight: 3 }} />
-                                <Text style={styles.paidBadgeText}>✓ PAID</Text>
+                                <Text style={styles.paidBadgeText}>PAID</Text>
                               </View>
                             ) : (
                               <View

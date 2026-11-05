@@ -402,7 +402,6 @@ export default function SettingsScreen() {
             <HapticButton
               style={styles.addCardBtn}
               onPress={openAddCardModal}
-              feedbackType="rigid"
             >
               <Plus size={14} color="#FFFFFF" strokeWidth={2.5} />
               <Text style={styles.addCardBtnText}>Add Card</Text>
@@ -512,7 +511,6 @@ export default function SettingsScreen() {
             <HapticButton
               style={styles.logoutBtn}
               onPress={handleLogout}
-              feedbackType="rigid"
             >
               <LogOut size={16} color="#E05D52" />
               <Text style={styles.logoutBtnText}>Sign Out</Text>
@@ -562,7 +560,6 @@ export default function SettingsScreen() {
                 style={[styles.saveBtn, isSavingProfile && styles.saveBtnDisabled]}
                 onPress={handleSaveProfile}
                 disabled={isSavingProfile}
-                feedbackType="rigid"
               >
                 {isSavingProfile ? (
                   <ActivityIndicator size="small" color="#FFFFFF" />
@@ -815,7 +812,6 @@ export default function SettingsScreen() {
                 style={[styles.saveBtn, isSavingCard && styles.saveBtnDisabled]}
                 onPress={handleSaveCard}
                 disabled={isSavingCard}
-                feedbackType="rigid"
               >
                 {isSavingCard ? (
                   <ActivityIndicator size="small" color="#FFFFFF" />

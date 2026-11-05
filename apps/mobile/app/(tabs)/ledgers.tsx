@@ -189,7 +189,6 @@ export default function LedgersScreen() {
           onPress={() => {
             setIsTransferModalOpen(true);
           }}
-          feedbackType="rigid"
         >
           <Plus size={16} color="#F6F9F5" strokeWidth={2.4} />
           <Text style={styles.addBtnText}>Transfer</Text>
@@ -403,7 +402,6 @@ export default function LedgersScreen() {
             <HapticButton
               style={styles.closeBtn}
               onPress={() => setIsTransferModalOpen(false)}
-              feedbackType="rigid"
             >
               <Text style={styles.closeBtnText}>Understood</Text>
             </HapticButton>

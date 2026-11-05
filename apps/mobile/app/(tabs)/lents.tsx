@@ -24,6 +24,10 @@ import Animated, {
 } from 'react-native-reanimated';
 import Svg, { Path } from 'react-native-svg';
 import { useRouter } from 'expo-router';
+import * as Haptics from 'expo-haptics';
+import NetInfo from '@react-native-community/netinfo';
+import { recordLentCollectedCreditCardPaydown, computeBorrowerSummaries } from '@credics/core';
+import { useOfflineQueueStore } from '../../lib/offlineQueue';
 import { supabase } from '../../lib/supabase';
 import {
   Users,
@@ -521,73 +525,134 @@ export default function LentsScreen() {
   }: LentGiveSubmitParams) => {
     if (!currentUser || !selectedBorrower) return;
 
-    let linkedCashLedgerId: string | null = null;
-    let linkedCardTransactionId: string | null = null;
+    const originalCreatedAt = new Date().toISOString();
+    const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
 
-    const isPocket = sourceType === 'pocket';
-    const tableName = isPocket ? 'pocket_lent_ledger' : 'card_lent_ledger';
+    const netState = await NetInfo.fetch();
+    const isOnline = !!netState.isConnected;
 
-    if (!isPocket && cardId) {
-      if (sourceType === 'cash_on_hand') {
-        const { data: cohRow, error: cohErr } = await supabase
-          .from('cash_on_hand_ledger')
-          .insert({
-            user_id: currentUser.id,
-            card_id: cardId,
-            amount,
-            transaction_type: 'debit',
-            remarks: `Lent given to ${selectedBorrower.name}`,
-            transaction_date: new Date().toISOString(),
-          })
-          .select('id')
-          .single();
-        if (cohErr) throw cohErr;
-        linkedCashLedgerId = cohRow?.id || null;
-      } else if (sourceType === 'credit_card') {
-        const { data: txRow, error: txErr } = await supabase
-          .from('card_transactions')
-          .insert({
-            card_id: cardId,
-            amount,
-            type: 'withdrawal',
-            status: 'pending_settlement',
-            transaction_date: date,
-            recorded_by: currentUser.id,
-            remarks: `Lent given to ${selectedBorrower.name}`,
-          })
-          .select('id')
-          .single();
-        if (txErr) throw txErr;
-        linkedCardTransactionId = txRow?.id || null;
-      }
+    if (!isOnline) {
+      // Offline queue enqueue
+      useOfflineQueueStore.getState().enqueueMutation({
+        type: 'lent_give',
+        payload: {
+          borrowerId: selectedBorrower.id,
+          amount,
+          sourceType,
+          cardId,
+          remarks,
+          userId: currentUser.id,
+        },
+        original_created_at: originalCreatedAt,
+        transaction_date: date,
+        timeStr,
+      });
+
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setSuccessTitle('Loan Given Recorded (Offline)');
+      setSuccessSubtitle(`Saved locally. Will auto-sync to ledger when connected.`);
+      setSuccessAmount(amount);
+      setSuccessModalVisible(true);
+      return;
     }
 
-    const { error: insertErr } = await supabase.from(tableName).insert({
-      borrower_id: selectedBorrower.id,
-      entry_type: 'given',
-      amount,
-      transaction_date: date,
-      ...(!isPocket
-        ? {
-            source_type: sourceType,
-            card_id: cardId,
-            linked_cash_ledger_id: linkedCashLedgerId,
-            linked_card_transaction_id: linkedCardTransactionId,
-          }
-        : {}),
-      remarks: remarks || null,
-      recorded_by: currentUser.id,
-    });
-    if (insertErr) throw insertErr;
+    try {
+      let linkedCashLedgerId: string | null = null;
+      let linkedCardTransactionId: string | null = null;
 
-    // Celebration modal
-    setSuccessTitle('Loan Given Recorded');
-    setSuccessSubtitle(`Advanced ₹${amount.toLocaleString('en-IN')} to ${selectedBorrower.name}`);
-    setSuccessAmount(amount);
-    setSuccessModalVisible(true);
+      const isPocket = sourceType === 'pocket';
+      const tableName = isPocket ? 'pocket_lent_ledger' : 'card_lent_ledger';
 
-    await fetchData();
-    await fetchBorrowerLedger(selectedBorrower.id);
+      if (!isPocket && cardId) {
+        if (sourceType === 'cash_on_hand') {
+          const { data: cohRow, error: cohErr } = await supabase
+            .from('cash_on_hand_ledger')
+            .insert({
+              user_id: currentUser.id,
+              card_id: cardId,
+              amount,
+              transaction_type: 'debit',
+              remarks: `Lent given to ${selectedBorrower.name}`,
+              transaction_date: date,
+              created_at: originalCreatedAt,
+            })
+            .select('id')
+            .single();
+          if (cohErr) throw cohErr;
+          linkedCashLedgerId = cohRow?.id || null;
+        } else if (sourceType === 'credit_card') {
+          const { data: txRow, error: txErr } = await supabase
+            .from('card_transactions')
+            .insert({
+              card_id: cardId,
+              amount,
+              type: 'withdrawal',
+              status: 'pending_settlement',
+              transaction_date: date,
+              created_at: originalCreatedAt,
+              recorded_by: currentUser.id,
+              remarks: `Lent given to ${selectedBorrower.name}`,
+            })
+            .select('id')
+            .single();
+          if (txErr) throw txErr;
+          linkedCardTransactionId = txRow?.id || null;
+        }
+      }
+
+      const { error: insertErr } = await supabase.from(tableName).insert({
+        borrower_id: selectedBorrower.id,
+        entry_type: 'given',
+        amount,
+        transaction_date: date,
+        created_at: originalCreatedAt,
+        ...(!isPocket
+          ? {
+              source_type: sourceType,
+              card_id: cardId,
+              linked_cash_ledger_id: linkedCashLedgerId,
+              linked_card_transaction_id: linkedCardTransactionId,
+            }
+          : {}),
+        remarks: remarks || null,
+        recorded_by: currentUser.id,
+      });
+      if (insertErr) throw insertErr;
+
+      // Rule 4: Success haptics on submit
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+      // Celebration modal
+      setSuccessTitle('Loan Given Recorded');
+      setSuccessSubtitle(`Advanced ₹${amount.toLocaleString('en-IN')} to ${selectedBorrower.name}`);
+      setSuccessAmount(amount);
+      setSuccessModalVisible(true);
+
+      await fetchData();
+      await fetchBorrowerLedger(selectedBorrower.id);
+    } catch (onlineError) {
+      console.warn('Online loan give failed, saving to offline queue:', onlineError);
+      useOfflineQueueStore.getState().enqueueMutation({
+        type: 'lent_give',
+        payload: {
+          borrowerId: selectedBorrower.id,
+          amount,
+          sourceType,
+          cardId,
+          remarks,
+          userId: currentUser.id,
+        },
+        original_created_at: originalCreatedAt,
+        transaction_date: date,
+        timeStr,
+      });
+
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setSuccessTitle('Loan Given Recorded (Offline)');
+      setSuccessSubtitle(`Saved locally. Will auto-sync when network returns.`);
+      setSuccessAmount(amount);
+      setSuccessModalVisible(true);
+    }
   };
 
   // ================= SAVE: YOU GOT PAYMENT =================
@@ -600,114 +665,135 @@ export default function LentsScreen() {
   }: LentCollectSubmitParams) => {
     if (!currentUser || !selectedBorrower) return;
 
-    let linkedCashLedgerId: string | null = null;
-    let linkedCardTransactionId: string | null = null;
-    let linkedBillingCycleId: string | null = null;
+    const originalCreatedAt = new Date().toISOString();
+    const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
 
-    const isPocket = sourceType === 'pocket';
-    const tableName = isPocket ? 'pocket_lent_ledger' : 'card_lent_ledger';
+    const netState = await NetInfo.fetch();
+    const isOnline = !!netState.isConnected;
 
-    if (!isPocket && cardId) {
-      if (sourceType === 'cash_on_hand') {
-        const { data: cohRow, error: cohErr } = await supabase
-          .from('cash_on_hand_ledger')
-          .insert({
-            user_id: currentUser.id,
-            card_id: cardId,
-            amount,
-            transaction_type: 'credit',
-            remarks: `Collected lent from ${selectedBorrower.name}`,
-            transaction_date: new Date().toISOString(),
-          })
-          .select('id')
-          .single();
-        if (cohErr) throw cohErr;
-        linkedCashLedgerId = cohRow?.id || null;
-      } else if (sourceType === 'credit_card') {
-        // Bill paydown check
-        const now = new Date();
-        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toLocaleDateString(
-          'en-CA',
-          { timeZone: 'Asia/Kolkata' }
-        );
-        const endOfMonth = new Date(
-          now.getFullYear(),
-          now.getMonth() + 1,
-          0
-        ).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    if (!isOnline) {
+      useOfflineQueueStore.getState().enqueueMutation({
+        type: 'lent_collect',
+        payload: {
+          borrowerId: selectedBorrower.id,
+          borrowerName: selectedBorrower.name,
+          cardId,
+          amount,
+          userId: currentUser.id,
+          sourceType,
+        },
+        original_created_at: originalCreatedAt,
+        transaction_date: date,
+        timeStr,
+      });
 
-        const { data: cycles } = await supabase
-          .from('billing_cycles')
-          .select('*')
-          .eq('card_id', cardId)
-          .gte('billing_month', startOfMonth)
-          .lte('billing_month', endOfMonth);
-
-        if (cycles && cycles.length > 0) {
-          const cycle = cycles[0];
-          const generatedAmt = Number(cycle.generated_amount || 0);
-          const paidAmt = Number(cycle.paid_amount || 0);
-          if (paidAmt < generatedAmt) {
-            const newPaidAmt = paidAmt + amount;
-            let cycleStatus = cycle.status;
-            if (newPaidAmt >= generatedAmt) cycleStatus = 'paid';
-            else if (newPaidAmt > 0) cycleStatus = 'partially_paid';
-            await supabase
-              .from('billing_cycles')
-              .update({ paid_amount: newPaidAmt, status: cycleStatus })
-              .eq('id', cycle.id);
-            linkedBillingCycleId = cycle.id;
-          }
-        }
-
-        const { data: txRow, error: txErr } = await supabase
-          .from('card_transactions')
-          .insert({
-            card_id: cardId,
-            amount,
-            transaction_date: date,
-            type: 'bill_payment',
-            status: 'settled',
-            recorded_by: currentUser.id,
-            payment_method: 'lent_recovery',
-            remarks: `Collected lent from ${selectedBorrower.name}`,
-            billing_cycle_id: linkedBillingCycleId,
-          })
-          .select('id')
-          .single();
-        if (txErr) throw txErr;
-        linkedCardTransactionId = txRow?.id || null;
-      }
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setSuccessTitle('Payment Recovery Recorded (Offline)');
+      setSuccessSubtitle(`Saved locally. Will auto-sync to ledger when connected.`);
+      setSuccessAmount(amount);
+      setSuccessModalVisible(true);
+      return;
     }
 
-    const { error: insertErr } = await supabase.from(tableName).insert({
-      borrower_id: selectedBorrower.id,
-      entry_type: 'collected',
-      amount,
-      transaction_date: date,
-      ...(!isPocket
-        ? {
-            source_type: sourceType,
-            card_id: cardId,
-            linked_cash_ledger_id: linkedCashLedgerId,
-            linked_card_transaction_id: linkedCardTransactionId,
-            linked_billing_cycle_id: linkedBillingCycleId,
-            billing_cycle_delta_amount: linkedBillingCycleId ? amount : null,
-          }
-        : {}),
-      remarks: remarks || null,
-      recorded_by: currentUser.id,
-    });
-    if (insertErr) throw insertErr;
+    try {
+      let linkedCashLedgerId: string | null = null;
+      let linkedCardTransactionId: string | null = null;
+      let linkedBillingCycleId: string | null = null;
 
-    // Celebration modal
-    setSuccessTitle('Payment Recovery Recorded');
-    setSuccessSubtitle(`Received ₹${amount.toLocaleString('en-IN')} from ${selectedBorrower.name}`);
-    setSuccessAmount(amount);
-    setSuccessModalVisible(true);
+      const isPocket = sourceType === 'pocket';
+      const tableName = isPocket ? 'pocket_lent_ledger' : 'card_lent_ledger';
 
-    await fetchData();
-    await fetchBorrowerLedger(selectedBorrower.id);
+      if (!isPocket && cardId) {
+        if (sourceType === 'cash_on_hand') {
+          const { data: cohRow, error: cohErr } = await supabase
+            .from('cash_on_hand_ledger')
+            .insert({
+              user_id: currentUser.id,
+              card_id: cardId,
+              amount,
+              transaction_type: 'credit',
+              remarks: `Collected lent from ${selectedBorrower.name}`,
+              transaction_date: date,
+              created_at: originalCreatedAt,
+            })
+            .select('id')
+            .single();
+          if (cohErr) throw cohErr;
+          linkedCashLedgerId = cohRow?.id || null;
+        } else if (sourceType === 'credit_card') {
+          // Bill paydown check via @credics/core service
+          const paydownRes = await recordLentCollectedCreditCardPaydown(supabase, {
+            borrowerId: selectedBorrower.id,
+            borrowerName: selectedBorrower.name,
+            cardId,
+            amount,
+            txDate: date,
+            userId: currentUser.id,
+            createdAt: originalCreatedAt,
+          });
+
+          linkedBillingCycleId = paydownRes.cycleId;
+          linkedCardTransactionId = paydownRes.cardTxId;
+        }
+      }
+
+      if (sourceType !== 'credit_card' || isPocket) {
+        const { error: insertErr } = await supabase.from(tableName).insert({
+          borrower_id: selectedBorrower.id,
+          entry_type: 'collected',
+          amount,
+          transaction_date: date,
+          created_at: originalCreatedAt,
+          ...(!isPocket
+            ? {
+                source_type: sourceType,
+                card_id: cardId,
+                linked_cash_ledger_id: linkedCashLedgerId,
+                linked_card_transaction_id: linkedCardTransactionId,
+                linked_billing_cycle_id: linkedBillingCycleId,
+                billing_cycle_delta_amount: linkedBillingCycleId ? amount : null,
+              }
+            : {}),
+          remarks: remarks || null,
+          recorded_by: currentUser.id,
+        });
+        if (insertErr) throw insertErr;
+      }
+
+      // Rule 4: Success haptics on submit
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+      // Celebration modal
+      setSuccessTitle('Payment Recovery Recorded');
+      setSuccessSubtitle(`Received ₹${amount.toLocaleString('en-IN')} from ${selectedBorrower.name}`);
+      setSuccessAmount(amount);
+      setSuccessModalVisible(true);
+
+      await fetchData();
+      await fetchBorrowerLedger(selectedBorrower.id);
+    } catch (onlineError) {
+      console.warn('Online loan collect failed, saving to offline queue:', onlineError);
+      useOfflineQueueStore.getState().enqueueMutation({
+        type: 'lent_collect',
+        payload: {
+          borrowerId: selectedBorrower.id,
+          borrowerName: selectedBorrower.name,
+          cardId,
+          amount,
+          userId: currentUser.id,
+          sourceType,
+        },
+        original_created_at: originalCreatedAt,
+        transaction_date: date,
+        timeStr,
+      });
+
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setSuccessTitle('Payment Recovery Recorded (Offline)');
+      setSuccessSubtitle(`Saved locally. Will auto-sync when network returns.`);
+      setSuccessAmount(amount);
+      setSuccessModalVisible(true);
+    }
   };
 
   // Add Borrower

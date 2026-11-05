@@ -132,11 +132,6 @@ export function LentGiveModal({
         remarks: remarks.trim() || undefined,
       });
 
-      // Strict Haptics rule: Haptic feedback ONLY upon saving/submitting data
-      try {
-        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      } catch (_) {}
-
       onClose();
     } catch (err: any) {
       Alert.alert('Error', err?.message || 'Failed to record loan');

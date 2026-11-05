@@ -16,12 +16,11 @@ export default function TxDetailModal() {
         <HapticButton
           style={styles.backBtn}
           onPress={() => router.back()}
-          feedbackType="light"
         >
           <ArrowLeft size={20} color={CedarColors.ink900} />
         </HapticButton>
         <Text style={styles.headerTitle}>Transaction</Text>
-        <HapticButton style={styles.backBtn} feedbackType="light">
+        <HapticButton style={styles.backBtn}>
           <Share2 size={18} color={CedarColors.ink900} />
         </HapticButton>
       </View>

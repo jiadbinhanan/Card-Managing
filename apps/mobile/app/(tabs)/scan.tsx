@@ -21,7 +21,6 @@ export default function ScanScreen() {
         <HapticButton
           style={styles.iconCircle}
           onPress={() => router.back()}
-          feedbackType="light"
         >
           <ArrowLeft size={20} color={CedarColors.ink900} />
         </HapticButton>
@@ -31,7 +30,6 @@ export default function ScanScreen() {
           onPress={() => {
             setTorchOn(!torchOn);
           }}
-          feedbackType="medium"
         >
           <Flashlight size={20} color={torchOn ? '#FFFFFF' : CedarColors.ink900} />
         </HapticButton>
