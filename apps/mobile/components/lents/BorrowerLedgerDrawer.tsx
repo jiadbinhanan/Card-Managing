@@ -5,6 +5,9 @@ import {
   StyleSheet,
   TouchableOpacity,
   Dimensions,
+  TextInput,
+  Alert,
+  ActivityIndicator,
 } from 'react-native';
 import Animated, {
   useSharedValue,
@@ -13,6 +16,7 @@ import Animated, {
   withTiming,
   withSequence,
 } from 'react-native-reanimated';
+import * as Haptics from 'expo-haptics';
 import { SwipeDownDrawer, DrawerScrollView } from '../SwipeDownDrawer';
 import {
   User,
@@ -26,7 +30,12 @@ import {
   Calendar,
   Layers,
   ChevronDown,
+  Trash2,
+  X,
+  AlertCircle,
+  MoreVertical,
 } from 'lucide-react-native';
+import { supabase } from '../../lib/supabase';
 import { BorrowerSummary } from './BorrowerCard';
 
 export interface LedgerEntry {
@@ -56,6 +65,7 @@ interface BorrowerLedgerDrawerProps {
   onGivePress: () => void;
   onCollectPress: () => void;
   onEditBorrowerPress: () => void;
+  onEntriesChanged?: () => void;
   getCardName: (cardId?: string | null) => string;
   getRecorderName: (userId?: string | null) => string;
 }
@@ -101,11 +111,103 @@ export function BorrowerLedgerDrawer({
   onGivePress,
   onCollectPress,
   onEditBorrowerPress,
+  onEntriesChanged,
   getCardName,
   getRecorderName,
 }: BorrowerLedgerDrawerProps) {
   const [groupBy, setGroupBy] = useState<GroupByMode>('daily');
   const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  // Edit / Delete Entry States
+  const [editingEntry, setEditingEntry] = useState<LedgerEntry | null>(null);
+  const [editAmount, setEditAmount] = useState('');
+  const [editDate, setEditDate] = useState('');
+  const [editRemarks, setEditRemarks] = useState('');
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+
+  const handleStartEdit = (entry: LedgerEntry) => {
+    setEditingEntry(entry);
+    setEditAmount(String(entry.amount));
+    setEditDate(entry.transaction_date || '');
+    setEditRemarks(entry.remarks || '');
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingEntry) return;
+    const amt = Number(editAmount);
+    if (!amt || amt <= 0 || !editDate) {
+      Alert.alert('Invalid Input', 'Please enter a valid amount and date.');
+      return;
+    }
+
+    setIsSavingEdit(true);
+    try {
+      const isPocket = editingEntry.ledgerSource === 'pocket' || editingEntry.source_type === 'pocket';
+      if (isPocket) {
+        const { error } = await supabase
+          .from('pocket_lent_ledger')
+          .update({
+            amount: amt,
+            transaction_date: editDate,
+            remarks: editRemarks || null,
+          })
+          .eq('id', editingEntry.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.rpc('edit_card_lent_entry', {
+          p_entry_id: editingEntry.id,
+          p_new_amount: amt,
+          p_new_date: editDate,
+          p_new_remarks: editRemarks || null,
+        });
+        if (error) throw error;
+      }
+
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setEditingEntry(null);
+      onEntriesChanged?.();
+    } catch (err: any) {
+      Alert.alert('Edit Error', err?.message || 'Failed to update entry.');
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
+  const handleDeleteEntry = (entry: LedgerEntry) => {
+    Alert.alert(
+      'Delete Entry',
+      `Delete this loan ${entry.entry_type === 'given' ? 'given' : 'collected'} entry of ₹${Number(entry.amount).toLocaleString('en-IN')}? This will reverse all linked cash & card balance adjustments.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const isPocket = entry.ledgerSource === 'pocket' || entry.source_type === 'pocket';
+              if (isPocket) {
+                const { error } = await supabase
+                  .from('pocket_lent_ledger')
+                  .delete()
+                  .eq('id', entry.id);
+                if (error) throw error;
+              } else {
+                const { error } = await supabase.rpc('delete_card_lent_entry', {
+                  p_entry_id: entry.id,
+                });
+                if (error) throw error;
+              }
+
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              onEntriesChanged?.();
+            } catch (err: any) {
+              Alert.alert('Delete Error', err?.message || 'Failed to delete entry.');
+            }
+          },
+        },
+      ]
+    );
+  };
 
   // Chronological running balance calculation (ascending by date then created_at)
   const chronologicalWithBalance = useMemo(() => {
@@ -494,6 +596,27 @@ export function BorrowerLedgerDrawer({
                               </Text>
                             </View>
                           ) : null}
+
+                          {/* Entry Actions: Edit & Delete */}
+                          <View style={styles.entryActionRow}>
+                            <TouchableOpacity
+                              style={styles.entryEditBtn}
+                              onPress={() => handleStartEdit(item)}
+                              activeOpacity={0.7}
+                            >
+                              <Pencil size={12} color="#0B3F28" strokeWidth={2.2} />
+                              <Text style={styles.entryEditBtnText}>Edit Entry</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                              style={styles.entryDeleteBtn}
+                              onPress={() => handleDeleteEntry(item)}
+                              activeOpacity={0.7}
+                            >
+                              <Trash2 size={12} color="#EF4444" strokeWidth={2.2} />
+                              <Text style={styles.entryDeleteBtnText}>Delete Entry</Text>
+                            </TouchableOpacity>
+                          </View>
                         </View>
                       )}
                     </TouchableOpacity>
@@ -524,6 +647,71 @@ export function BorrowerLedgerDrawer({
             <Text style={styles.actionBtnText}>YOU GOT</Text>
           </TouchableOpacity>
         </View>
+
+        {/* Edit Entry Modal */}
+        {editingEntry && (
+          <View style={styles.editEntryOverlay}>
+            <View style={styles.editEntryModal}>
+              <View style={styles.editEntryHeader}>
+                <Text style={styles.editEntryTitle}>
+                  Edit {editingEntry.entry_type === 'given' ? 'Given Loan' : 'Loan Collection'}
+                </Text>
+                <TouchableOpacity onPress={() => setEditingEntry(null)}>
+                  <X size={16} color="#072C1C" />
+                </TouchableOpacity>
+              </View>
+
+              <View style={{ gap: 8, marginVertical: 10 }}>
+                <View>
+                  <Text style={styles.inputLabel}>Amount (₹)</Text>
+                  <TextInput
+                    style={styles.modalTextInput}
+                    placeholder="Amount"
+                    placeholderTextColor="#7E9185"
+                    keyboardType="numeric"
+                    value={editAmount}
+                    onChangeText={setEditAmount}
+                  />
+                </View>
+
+                <View>
+                  <Text style={styles.inputLabel}>Date (YYYY-MM-DD)</Text>
+                  <TextInput
+                    style={styles.modalTextInput}
+                    placeholder="YYYY-MM-DD"
+                    placeholderTextColor="#7E9185"
+                    value={editDate}
+                    onChangeText={setEditDate}
+                  />
+                </View>
+
+                <View>
+                  <Text style={styles.inputLabel}>Remarks / Note</Text>
+                  <TextInput
+                    style={styles.modalTextInput}
+                    placeholder="Optional note"
+                    placeholderTextColor="#7E9185"
+                    value={editRemarks}
+                    onChangeText={setEditRemarks}
+                  />
+                </View>
+              </View>
+
+              <TouchableOpacity
+                style={styles.saveEditBtn}
+                onPress={handleSaveEdit}
+                disabled={isSavingEdit}
+                activeOpacity={0.8}
+              >
+                {isSavingEdit ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.saveEditBtnText}>Save & Sync</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
       </View>
     </SwipeDownDrawer>
   );
@@ -905,5 +1093,107 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     color: '#FFFFFF',
     letterSpacing: 0.6,
+  },
+  entryActionRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#DFE8E0',
+  },
+  entryEditBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    backgroundColor: '#E4ECE3',
+    borderRadius: 8,
+    paddingVertical: 6,
+  },
+  entryEditBtnText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#0B3F28',
+  },
+  entryDeleteBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+    borderRadius: 8,
+    paddingVertical: 6,
+  },
+  entryDeleteBtnText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#EF4444',
+  },
+  editEntryOverlay: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    zIndex: 999,
+  },
+  editEntryModal: {
+    width: '100%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+  editEntryHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#DFE8E0',
+  },
+  editEntryTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#072C1C',
+  },
+  inputLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#4A6B56',
+    marginBottom: 4,
+  },
+  modalTextInput: {
+    backgroundColor: '#EFF3EE',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#DFE8E0',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    fontSize: 12,
+    color: '#072C1C',
+  },
+  saveEditBtn: {
+    backgroundColor: '#0B3F28',
+    borderRadius: 12,
+    paddingVertical: 10,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  saveEditBtnText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#F6F9F5',
   },
 });

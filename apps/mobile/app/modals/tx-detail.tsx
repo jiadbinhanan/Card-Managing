@@ -1,119 +1,273 @@
-import React from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  ActivityIndicator,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { CedarColors } from '@credics/core';
-import { HapticButton } from '../../components/HapticButton';
-import { ArrowLeft, Share2, Check, Split, Receipt, Flag } from 'lucide-react-native';
-import { useRouter } from 'expo-router';
+import { CedarColors, CedarTypography } from '@credics/core';
+import {
+  ArrowLeft,
+  Share2,
+  Check,
+  CreditCard,
+  QrCode,
+  CheckCircle2,
+  Receipt,
+  User,
+  Clock,
+  ChevronRight,
+  ShieldCheck,
+  Banknote,
+  Coins,
+  ArrowLeftRight,
+} from 'lucide-react-native';
+import { useRouter, useLocalSearchParams } from 'expo-router';
+import { supabase } from '../../lib/supabase';
 
 export default function TxDetailModal() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ id?: string; type?: string }>();
+  const [loading, setLoading] = useState(true);
+  const [txRecord, setTxRecord] = useState<any>(null);
+  const [cashLedgers, setCashLedgers] = useState<any[]>([]);
+
+  useEffect(() => {
+    async function loadTx() {
+      if (!params.id) {
+        setLoading(false);
+        return;
+      }
+
+      setLoading(true);
+      try {
+        const rawId = params.id.startsWith('tx-') || params.id.startsWith('sp-')
+          ? params.id.slice(3)
+          : params.id;
+
+        const isSpend = params.type === 'spend' || params.id.startsWith('sp-');
+
+        if (isSpend) {
+          const { data: sp } = await supabase
+            .from('spends')
+            .select(`
+              *,
+              cards (id, card_name, last_4_digits),
+              profiles:user_id (id, name)
+            `)
+            .eq('id', rawId)
+            .maybeSingle();
+
+          setTxRecord(sp ? { ...sp, recordType: 'spend' } : null);
+        } else {
+          const { data: ct } = await supabase
+            .from('card_transactions')
+            .select(`
+              *,
+              cards (id, card_name, last_4_digits),
+              qrs (id, merchant_name, upi_id),
+              recorded_profile:recorded_by (id, name),
+              settled_profile:settled_by (id, name)
+            `)
+            .eq('id', rawId)
+            .maybeSingle();
+
+          if (ct) {
+            const { data: clList } = await supabase
+              .from('cash_on_hand_ledger')
+              .select('*, profiles:user_id(name)')
+              .eq('linked_card_transaction_id', rawId);
+
+            setTxRecord({ ...ct, recordType: 'card_transaction' });
+            setCashLedgers(clList || []);
+          }
+        }
+      } catch (err) {
+        console.error('Error fetching tx details:', err);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadTx();
+  }, [params.id, params.type]);
+
+  const isSpend = txRecord?.recordType === 'spend';
+  const isWithdrawal = txRecord?.type === 'withdrawal';
+  const amount = Number(txRecord?.amount || 0);
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      {/* Header */}
+    <SafeAreaView style={styles.safeArea} edges={['top']}>
+      {/* Header with zero haptics */}
       <View style={styles.header}>
-        <HapticButton
+        <TouchableOpacity
           style={styles.backBtn}
           onPress={() => router.back()}
+          activeOpacity={0.7}
         >
           <ArrowLeft size={20} color={CedarColors.ink900} />
-        </HapticButton>
-        <Text style={styles.headerTitle}>Transaction</Text>
-        <HapticButton style={styles.backBtn}>
-          <Share2 size={18} color={CedarColors.ink900} />
-        </HapticButton>
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Transaction Details</Text>
+        <View style={{ width: 36 }} />
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        {/* Merchant Hero */}
-        <View style={styles.heroSection}>
-          <View style={styles.merchantLogo}>
-            <Text style={styles.merchantInitial}>H</Text>
+        {loading ? (
+          <View style={styles.loadingBox}>
+            <ActivityIndicator size="small" color={CedarColors.forest800} />
+            <Text style={styles.loadingText}>Loading live transaction record...</Text>
           </View>
-          <Text style={styles.merchantName}>HDFC Credit Rotation</Text>
-          <Text style={styles.categoryLabel}>• Card Rotation</Text>
-          <Text style={styles.amountText}>-₹25,000.00</Text>
-
-          <View style={styles.statusBadge}>
-            <View style={styles.statusDot} />
-            <Text style={styles.statusText}>Completed • Today • 3:42 PM</Text>
+        ) : !txRecord ? (
+          <View style={styles.heroSection}>
+            <Text style={styles.merchantName}>Transaction</Text>
+            <Text style={styles.categoryLabel}>No transaction data available.</Text>
           </View>
-        </View>
+        ) : (
+          <>
+            {/* Merchant / Purpose Hero */}
+            <View style={styles.heroSection}>
+              <View style={styles.merchantLogo}>
+                <Text style={styles.merchantInitial}>
+                  {(txRecord.cards?.card_name || txRecord.qrs?.merchant_name || 'C').charAt(0)}
+                </Text>
+              </View>
+              <Text style={styles.merchantName}>
+                {isWithdrawal
+                  ? txRecord.qrs?.merchant_name || 'Rotation Withdrawal'
+                  : isSpend
+                  ? txRecord.remarks || txRecord.spend_type || 'Personal Spend'
+                  : 'Card Bill Payment'}
+              </Text>
+              <Text style={styles.categoryLabel}>
+                {isWithdrawal
+                  ? `• Card Rotation (${txRecord.cards?.card_name || 'Card'})`
+                  : isSpend
+                  ? `• Spend (${txRecord.payment_method === 'credit_card' ? 'Credit Card' : 'Cash on Hand'})`
+                  : `• Bill Payment (${txRecord.cards?.card_name || 'Card'})`}
+              </Text>
+              <Text style={styles.amountText}>
+                {isWithdrawal || isSpend ? '-' : '+'}₹{amount.toLocaleString('en-IN')}
+              </Text>
 
-        {/* 3-Step Progress Tracker */}
-        <View style={styles.trackerContainer}>
-          <View style={styles.stepCol}>
-            <View style={[styles.stepCircle, styles.completedStep]}>
-              <Check size={14} color="#FFFFFF" strokeWidth={3} />
+              <View style={styles.statusBadge}>
+                <View style={styles.statusDot} />
+                <Text style={styles.statusText}>
+                  {txRecord.status || 'Settled'} • {txRecord.transaction_date || txRecord.spend_date}
+                </Text>
+              </View>
             </View>
-            <Text style={styles.stepTitle}>Authorized</Text>
-            <Text style={styles.stepTime}>3:42:01</Text>
-          </View>
 
-          <View style={styles.stepLine} />
+            {/* Journey Flow Trace Card */}
+            <View style={styles.journeyCard}>
+              <View style={styles.journeyNode}>
+                <View style={[styles.nodeDot, { backgroundColor: '#2E944B' }]} />
+                <Text style={styles.nodeLabel}>ORIGIN</Text>
+                <Text style={styles.nodeValue} numberOfLines={1}>
+                  {isWithdrawal
+                    ? `${txRecord.cards?.card_name || 'Card'} (••${txRecord.cards?.last_4_digits || '0000'})`
+                    : txRecord.payment_method === 'own_pocket'
+                    ? 'Personal Pocket'
+                    : 'Cash on Hand'}
+                </Text>
+              </View>
 
-          <View style={styles.stepCol}>
-            <View style={[styles.stepCircle, styles.completedStep]}>
-              <Check size={14} color="#FFFFFF" strokeWidth={3} />
+              <ChevronRight size={14} color={CedarColors.ink500} />
+
+              <View style={styles.journeyNode}>
+                <View style={[styles.nodeDot, { backgroundColor: '#D97706' }]} />
+                <Text style={styles.nodeLabel}>MEDIUM</Text>
+                <Text style={styles.nodeValue} numberOfLines={1}>
+                  {isWithdrawal
+                    ? txRecord.qrs?.merchant_name ? `QR: ${txRecord.qrs.merchant_name}` : 'Rotation'
+                    : isSpend
+                    ? 'Personal'
+                    : 'Bill Paydown'}
+                </Text>
+              </View>
+
+              <ChevronRight size={14} color={CedarColors.ink500} />
+
+              <View style={styles.journeyNode}>
+                <View style={[styles.nodeDot, { backgroundColor: '#2B84D2' }]} />
+                <Text style={styles.nodeLabel}>DESTINATION</Text>
+                <Text style={styles.nodeValue} numberOfLines={1}>
+                  {isWithdrawal
+                    ? txRecord.settled_profile?.name ? `Vault (${txRecord.settled_profile.name})` : 'Settlement Vault'
+                    : `${txRecord.cards?.card_name || 'Card'} Cleared`}
+                </Text>
+              </View>
             </View>
-            <Text style={styles.stepTitle}>Processing</Text>
-            <Text style={styles.stepTime}>3:42:03</Text>
-          </View>
 
-          <View style={styles.stepLine} />
+            {/* Receipt Details Box */}
+            <View style={styles.receiptBox}>
+              <Text style={styles.receiptTitle}>RECORD SPECIFICATIONS</Text>
 
-          <View style={styles.stepCol}>
-            <View style={[styles.stepCircle, styles.completedStep]}>
-              <Check size={14} color="#FFFFFF" strokeWidth={3} />
+              <View style={styles.receiptRow}>
+                <Text style={styles.receiptLabel}>Transaction Date</Text>
+                <Text style={styles.receiptValue}>
+                  {txRecord.transaction_date || txRecord.spend_date}
+                </Text>
+              </View>
+
+              {txRecord.cards && (
+                <View style={styles.receiptRow}>
+                  <Text style={styles.receiptLabel}>Card</Text>
+                  <Text style={styles.receiptValue}>
+                    {txRecord.cards.card_name} (••{txRecord.cards.last_4_digits})
+                  </Text>
+                </View>
+              )}
+
+              {txRecord.recorded_profile && (
+                <View style={styles.receiptRow}>
+                  <Text style={styles.receiptLabel}>Recorded By</Text>
+                  <Text style={styles.receiptValue}>{txRecord.recorded_profile.name}</Text>
+                </View>
+              )}
+
+              {txRecord.remarks && (
+                <View style={styles.receiptRow}>
+                  <Text style={styles.receiptLabel}>Remarks</Text>
+                  <Text style={styles.receiptValue}>{txRecord.remarks}</Text>
+                </View>
+              )}
+
+              <View style={styles.receiptRow}>
+                <Text style={styles.receiptLabel}>Database ID</Text>
+                <Text style={[styles.receiptValue, { fontSize: 10, fontFamily: CedarTypography.body }]}>
+                  {txRecord.id}
+                </Text>
+              </View>
             </View>
-            <Text style={styles.stepTitle}>Completed</Text>
-            <Text style={styles.stepTime}>3:42:05</Text>
-          </View>
-        </View>
 
-        {/* Action Row: Split, Receipt, Report */}
-        <View style={styles.actionsRow}>
-          <TouchableOpacity style={styles.actionBtn}>
-            <Split size={18} color={CedarColors.forest800} />
-            <Text style={styles.actionBtnText}>Split</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.actionBtn}>
-            <Receipt size={18} color={CedarColors.forest800} />
-            <Text style={styles.actionBtnText}>Receipt</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.actionBtn}>
-            <Flag size={18} color={CedarColors.forest800} />
-            <Text style={styles.actionBtnText}>Report</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Receipt Details Box */}
-        <View style={styles.receiptBox}>
-          <Text style={styles.receiptTitle}>TRANSACTION DETAILS</Text>
-
-          <View style={styles.receiptRow}>
-            <Text style={styles.receiptLabel}>Amount</Text>
-            <Text style={styles.receiptValue}>₹25,000.00</Text>
-          </View>
-
-          <View style={styles.receiptRow}>
-            <Text style={styles.receiptLabel}>Platform / Fee</Text>
-            <Text style={styles.receiptValue}>₹0.00</Text>
-          </View>
-
-          <View style={styles.receiptRow}>
-            <Text style={styles.receiptLabel}>Payment Method</Text>
-            <Text style={styles.receiptValue}>HDFC Regalia •••• 4921</Text>
-          </View>
-
-          <View style={styles.receiptRow}>
-            <Text style={styles.receiptLabel}>Reference ID</Text>
-            <Text style={styles.receiptValue}>TXN-98421872</Text>
-          </View>
-        </View>
+            {/* Linked Cash On Hand Entries */}
+            {cashLedgers.length > 0 && (
+              <View style={styles.receiptBox}>
+                <Text style={styles.receiptTitle}>LINKED CASH VAULT ENTRIES ({cashLedgers.length})</Text>
+                {cashLedgers.map((cl) => (
+                  <View key={cl.id} style={styles.subItemBox}>
+                    <View style={styles.receiptRow}>
+                      <Text style={styles.receiptLabel}>{cl.profiles?.name || 'Vault'}</Text>
+                      <Text
+                        style={[
+                          styles.receiptValue,
+                          { color: cl.transaction_type === 'credit' ? '#2E944B' : '#D97706' },
+                        ]}
+                      >
+                        {cl.transaction_type === 'credit' ? '+' : '-'}₹
+                        {Number(cl.amount).toLocaleString('en-IN')}
+                      </Text>
+                    </View>
+                    <Text style={styles.subNote}>{cl.remarks || 'Cash Ledger entry'}</Text>
+                  </View>
+                ))}
+              </View>
+            )}
+          </>
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -122,10 +276,7 @@ export default function TxDetailModal() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: CedarColors.canvas, // #F4F6F2
-  },
-  scrollContent: {
-    paddingBottom: 40,
+    backgroundColor: CedarColors.canvas,
   },
   header: {
     flexDirection: 'row',
@@ -133,193 +284,175 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingTop: 10,
-    paddingBottom: 14,
+    paddingBottom: 8,
   },
   backBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     backgroundColor: CedarColors.card,
+    alignItems: 'center',
+    justifyContent: 'center',
     borderWidth: 1,
     borderColor: CedarColors.border,
-    justifyContent: 'center',
-    alignItems: 'center',
   },
   headerTitle: {
-    color: CedarColors.ink900,
-    fontSize: 18,
+    fontSize: 16,
+    fontFamily: CedarTypography.bodySemiBold,
     fontWeight: '800',
-    fontFamily: 'SpaceGrotesk-Bold',
+    color: CedarColors.ink900,
+  },
+  scrollContent: {
+    paddingHorizontal: 20,
+    paddingBottom: 40,
+    paddingTop: 8,
+  },
+  loadingBox: {
+    paddingVertical: 50,
+    alignItems: 'center',
+    gap: 8,
+  },
+  loadingText: {
+    fontSize: 12,
+    fontFamily: CedarTypography.body,
+    color: CedarColors.ink500,
   },
   heroSection: {
     alignItems: 'center',
-    paddingVertical: 24,
+    marginVertical: 12,
   },
   merchantLogo: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
     backgroundColor: CedarColors.forest800,
-    justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 12,
-    shadowColor: '#0F382A',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 4,
+    justifyContent: 'center',
+    marginBottom: 8,
   },
   merchantInitial: {
-    color: '#FFFFFF',
-    fontSize: 26,
-    fontWeight: '900',
+    fontSize: 22,
+    fontFamily: CedarTypography.display,
+    fontWeight: '800',
+    color: '#F6F9F5',
   },
   merchantName: {
-    color: CedarColors.ink900,
-    fontSize: 20,
+    fontSize: 18,
+    fontFamily: CedarTypography.display,
     fontWeight: '800',
-    fontFamily: 'SpaceGrotesk-Bold',
+    color: CedarColors.ink900,
   },
   categoryLabel: {
-    color: CedarColors.ink700,
-    fontSize: 13,
-    fontWeight: '500',
+    fontSize: 11,
+    fontFamily: CedarTypography.body,
+    color: CedarColors.ink500,
     marginTop: 2,
+    marginBottom: 6,
   },
   amountText: {
+    fontSize: 26,
+    fontFamily: CedarTypography.display,
+    fontWeight: '800',
     color: CedarColors.ink900,
-    fontSize: 34,
-    fontWeight: '900',
-    fontFamily: 'SpaceGrotesk-Bold',
-    marginVertical: 12,
   },
   statusBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: '#E8F5E9',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 14,
+    backgroundColor: 'rgba(46, 148, 75, 0.12)',
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    marginTop: 8,
   },
   statusDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: CedarColors.mint500,
+    backgroundColor: '#2E944B',
   },
   statusText: {
-    color: CedarColors.forest800,
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  trackerContainer: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: CedarColors.card,
-    marginHorizontal: 18,
-    borderRadius: 20,
-    padding: 18,
-    borderWidth: 1,
-    borderColor: CedarColors.border,
-    marginBottom: 16,
-  },
-  stepCol: {
-    alignItems: 'center',
-  },
-  stepCircle: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  completedStep: {
-    backgroundColor: CedarColors.mint500,
-  },
-  stepTitle: {
-    color: CedarColors.ink900,
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  stepTime: {
-    color: CedarColors.ink500,
     fontSize: 10,
-    marginTop: 2,
+    fontFamily: CedarTypography.bodySemiBold,
+    color: '#2E944B',
+    fontWeight: '700',
   },
-  stepLine: {
-    flex: 1,
-    height: 2,
-    backgroundColor: CedarColors.mint500,
-    marginHorizontal: 8,
-    top: -12,
-  },
-  actionsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingHorizontal: 18,
-    gap: 12,
-    marginBottom: 16,
-  },
-  actionBtn: {
-    flex: 1,
+  journeyCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    backgroundColor: CedarColors.card,
-    borderWidth: 1,
-    borderColor: CedarColors.border,
-    paddingVertical: 14,
+    justifyContent: 'space-between',
+    backgroundColor: CedarColors.forest900,
     borderRadius: 18,
-    shadowColor: '#0F382A',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 4,
-    elevation: 2,
+    padding: 14,
+    marginVertical: 10,
   },
-  actionBtnText: {
-    color: CedarColors.ink900,
-    fontSize: 13,
+  journeyNode: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  nodeDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginBottom: 4,
+  },
+  nodeLabel: {
+    fontSize: 8,
+    fontFamily: CedarTypography.bodySemiBold,
     fontWeight: '700',
+    color: '#A3D9B5',
+    letterSpacing: 0.5,
+  },
+  nodeValue: {
+    fontSize: 10,
+    fontFamily: CedarTypography.body,
+    color: '#F6F9F5',
+    marginTop: 2,
+    textAlign: 'center',
   },
   receiptBox: {
     backgroundColor: CedarColors.card,
-    marginHorizontal: 18,
-    borderRadius: 22,
-    padding: 20,
+    borderRadius: 18,
+    padding: 16,
+    marginBottom: 10,
     borderWidth: 1,
     borderColor: CedarColors.border,
-    shadowColor: '#0F382A',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 3,
   },
   receiptTitle: {
-    color: CedarColors.ink700,
     fontSize: 11,
+    fontFamily: CedarTypography.bodySemiBold,
     fontWeight: '800',
-    letterSpacing: 0.8,
-    marginBottom: 14,
+    color: CedarColors.ink500,
+    letterSpacing: 0.5,
+    marginBottom: 12,
   },
   receiptRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F2F6F3',
+    alignItems: 'center',
+    paddingVertical: 5,
   },
   receiptLabel: {
-    color: CedarColors.ink700,
-    fontSize: 13,
-    fontWeight: '500',
+    fontSize: 12,
+    fontFamily: CedarTypography.body,
+    color: CedarColors.ink500,
   },
   receiptValue: {
-    color: CedarColors.ink900,
-    fontSize: 13,
+    fontSize: 12,
+    fontFamily: CedarTypography.bodySemiBold,
     fontWeight: '700',
+    color: CedarColors.ink900,
+  },
+  subItemBox: {
+    backgroundColor: CedarColors.cardAlt,
+    borderRadius: 12,
+    padding: 10,
+    marginTop: 6,
+  },
+  subNote: {
+    fontSize: 10,
+    fontFamily: CedarTypography.body,
+    color: CedarColors.ink500,
+    marginTop: 2,
   },
 });

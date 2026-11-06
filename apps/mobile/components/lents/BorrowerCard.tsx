@@ -9,6 +9,7 @@ export interface BorrowerSummary {
   netDue: number;
   totalGiven: number;
   lastActivity: string;
+  rawActivity?: string;
 }
 
 interface BorrowerCardProps {

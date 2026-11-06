@@ -5,6 +5,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   Switch,
+  Image,
 } from 'react-native';
 import {
   QrCode,
@@ -15,6 +16,7 @@ import {
   ShieldCheck,
   CreditCard,
   Layers,
+  Pencil,
 } from 'lucide-react-native';
 import { QRData } from './QRPaymentModal';
 
@@ -31,6 +33,7 @@ interface QRVaultTabProps {
   currentUserName: string;
   onSelectQr: (qr: QRData) => void;
   onToggleStatus: (qrId: string, currentStatus: string) => void;
+  onEditQr?: (qr: QRData) => void;
 }
 
 export function QRVaultTab({
@@ -39,6 +42,7 @@ export function QRVaultTab({
   currentUserName,
   onSelectQr,
   onToggleStatus,
+  onEditQr,
 }: QRVaultTabProps) {
   const firstName = currentUserName.trim().split(/\s+/)[0].toLowerCase();
 
@@ -124,37 +128,57 @@ export function QRVaultTab({
         </View>
       ) : (
         <View style={styles.recGrid}>
-          {recommendedQrs.map((qr) => (
-            <TouchableOpacity
-              key={qr.id}
-              style={styles.recCard}
-              onPress={() => onSelectQr(qr)}
-              activeOpacity={0.85}
-            >
-              <View style={styles.recCardTop}>
-                <View style={styles.recIconCircle}>
-                  <QrCode size={16} color="#0B3F28" strokeWidth={2.4} />
+          {recommendedQrs.map((qr) => {
+            const hasPhoto = Boolean((qr as any).qr_image_url);
+            return (
+              <TouchableOpacity
+                key={qr.id}
+                style={styles.recCard}
+                onPress={() => onSelectQr(qr)}
+                activeOpacity={0.85}
+              >
+                <View style={styles.recCardTop}>
+                  <View style={styles.recIconCircle}>
+                    {hasPhoto ? (
+                      <Image source={{ uri: (qr as any).qr_image_url }} style={styles.recThumbnail} />
+                    ) : (
+                      <QrCode size={16} color="#0B3F28" strokeWidth={2.4} />
+                    )}
+                  </View>
+                  <View style={styles.recTopActions}>
+                    <View style={styles.readyBadge}>
+                      <Text style={styles.readyBadgeText}>READY</Text>
+                    </View>
+                    {onEditQr && (
+                      <TouchableOpacity
+                        style={styles.cardEditPencil}
+                        onPress={(e) => {
+                          e.stopPropagation();
+                          onEditQr(qr);
+                        }}
+                      >
+                        <Pencil size={11} color="#658270" />
+                      </TouchableOpacity>
+                    )}
+                  </View>
                 </View>
-                <View style={styles.readyBadge}>
-                  <Text style={styles.readyBadgeText}>READY</Text>
+
+                <Text style={styles.recMerchantName} numberOfLines={1}>
+                  {qr.merchant_name}
+                </Text>
+                <Text style={styles.recPlatform}>{qr.platform || 'UPI QR'}</Text>
+
+                <View style={styles.recCardDivider} />
+
+                <View style={styles.recFooter}>
+                  <Text style={styles.recSettlement}>{qr.settlement_time || 'T+0 Instant'}</Text>
+                  <View style={styles.recActionArrow}>
+                    <ArrowRight size={12} color="#0B3F28" />
+                  </View>
                 </View>
-              </View>
-
-              <Text style={styles.recMerchantName} numberOfLines={1}>
-                {qr.merchant_name}
-              </Text>
-              <Text style={styles.recPlatform}>{qr.platform || 'UPI QR'}</Text>
-
-              <View style={styles.recCardDivider} />
-
-              <View style={styles.recFooter}>
-                <Text style={styles.recSettlement}>{qr.settlement_time || 'T+0 Instant'}</Text>
-                <View style={styles.recActionArrow}>
-                  <ArrowRight size={12} color="#0B3F28" />
-                </View>
-              </View>
-            </TouchableOpacity>
-          ))}
+              </TouchableOpacity>
+            );
+          })}
         </View>
       )}
 
@@ -172,6 +196,7 @@ export function QRVaultTab({
           const cooldown = activeCooldowns.find((c) => c.qrId === qr.id && c.expiresAt > Date.now());
           const isCooling = !!cooldown;
           const isActive = qr.status === 'active';
+          const hasPhoto = Boolean((qr as any).qr_image_url);
 
           return (
             <TouchableOpacity
@@ -181,7 +206,11 @@ export function QRVaultTab({
               activeOpacity={0.88}
             >
               <View style={styles.dynamicIconBox}>
-                <QrCode size={18} color={isActive ? '#0B3F28' : '#8CA394'} />
+                {hasPhoto ? (
+                  <Image source={{ uri: (qr as any).qr_image_url }} style={styles.dynamicThumbnail} />
+                ) : (
+                  <QrCode size={18} color={isActive ? '#0B3F28' : '#8CA394'} />
+                )}
               </View>
 
               <View style={styles.dynamicInfoCol}>
@@ -203,13 +232,26 @@ export function QRVaultTab({
                 </Text>
               </View>
 
-              <View style={styles.switchWrapper}>
-                <Switch
-                  value={isActive}
-                  onValueChange={() => onToggleStatus(qr.id, qr.status || 'active')}
-                  trackColor={{ false: '#DFE8E0', true: '#10B981' }}
-                  thumbColor="#FFFFFF"
-                />
+              <View style={styles.rowRightActions}>
+                {onEditQr && (
+                  <TouchableOpacity
+                    style={styles.rowEditBtn}
+                    onPress={(e) => {
+                      e.stopPropagation();
+                      onEditQr(qr);
+                    }}
+                  >
+                    <Pencil size={12} color="#4A6B56" />
+                  </TouchableOpacity>
+                )}
+                <View style={styles.switchWrapper}>
+                  <Switch
+                    value={isActive}
+                    onValueChange={() => onToggleStatus(qr.id, qr.status || 'active')}
+                    trackColor={{ false: '#DFE8E0', true: '#10B981' }}
+                    thumbColor="#FFFFFF"
+                  />
+                </View>
               </View>
             </TouchableOpacity>
           );
@@ -228,23 +270,43 @@ export function QRVaultTab({
           </View>
 
           <View style={styles.listContainer}>
-            {staticQrs.map((qr) => (
-              <TouchableOpacity
-                key={qr.id}
-                style={styles.staticCard}
-                onPress={() => onSelectQr(qr)}
-                activeOpacity={0.88}
-              >
-                <View style={styles.staticIconBox}>
-                  <ShieldCheck size={20} color="#0B3F28" />
-                </View>
-                <View style={styles.staticInfoCol}>
-                  <Text style={styles.staticTitle}>{qr.merchant_name}</Text>
-                  <Text style={styles.staticSub}>Offline Merchant Standee • Direct Scan</Text>
-                </View>
-                <ArrowRight size={14} color="#0B3F28" />
-              </TouchableOpacity>
-            ))}
+            {staticQrs.map((qr) => {
+              const hasPhoto = Boolean((qr as any).qr_image_url);
+              return (
+                <TouchableOpacity
+                  key={qr.id}
+                  style={styles.staticCard}
+                  onPress={() => onSelectQr(qr)}
+                  activeOpacity={0.88}
+                >
+                  <View style={styles.staticIconBox}>
+                    {hasPhoto ? (
+                      <Image source={{ uri: (qr as any).qr_image_url }} style={styles.dynamicThumbnail} />
+                    ) : (
+                      <ShieldCheck size={20} color="#0B3F28" />
+                    )}
+                  </View>
+                  <View style={styles.staticInfoCol}>
+                    <Text style={styles.staticTitle}>{qr.merchant_name}</Text>
+                    <Text style={styles.staticSub}>Offline Merchant Standee • Direct Scan</Text>
+                  </View>
+                  <View style={styles.rowRightActions}>
+                    {onEditQr && (
+                      <TouchableOpacity
+                        style={styles.rowEditBtn}
+                        onPress={(e) => {
+                          e.stopPropagation();
+                          onEditQr(qr);
+                        }}
+                      >
+                        <Pencil size={12} color="#4A6B56" />
+                      </TouchableOpacity>
+                    )}
+                    <ArrowRight size={14} color="#0B3F28" />
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
           </View>
         </>
       )}
@@ -352,6 +414,19 @@ const styles = StyleSheet.create({
     backgroundColor: '#EFF3EE',
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  recThumbnail: {
+    width: '100%',
+    height: '100%',
+  },
+  recTopActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  cardEditPencil: {
+    padding: 4,
   },
   readyBadge: {
     backgroundColor: '#DCFCE7',
@@ -423,6 +498,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#EFF3EE',
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  dynamicThumbnail: {
+    width: '100%',
+    height: '100%',
   },
   dynamicInfoCol: {
     flex: 1,
@@ -450,34 +530,45 @@ const styles = StyleSheet.create({
   coolingPillText: {
     fontSize: 9,
     fontWeight: '800',
-    color: '#92400E',
+    color: '#D97706',
   },
   dynamicUpi: {
     fontSize: 10,
-    color: '#4A6B56',
     fontWeight: '600',
+    color: '#658270',
     marginTop: 2,
   },
+  rowRightActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  rowEditBtn: {
+    padding: 6,
+    backgroundColor: '#EFF3EE',
+    borderRadius: 8,
+  },
   switchWrapper: {
-    transform: [{ scale: 0.85 }],
+    transform: [{ scaleX: 0.8 }, { scaleY: 0.8 }],
   },
   staticCard: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
     borderRadius: 16,
-    padding: 14,
+    padding: 12,
     borderWidth: 1.2,
     borderColor: '#DFE8E0',
     gap: 12,
   },
   staticIconBox: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: '#EFF3EE',
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    backgroundColor: '#E8F5E9',
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
   },
   staticInfoCol: {
     flex: 1,
@@ -489,8 +580,8 @@ const styles = StyleSheet.create({
   },
   staticSub: {
     fontSize: 10,
-    color: '#4A6B56',
     fontWeight: '600',
+    color: '#658270',
     marginTop: 2,
   },
 });

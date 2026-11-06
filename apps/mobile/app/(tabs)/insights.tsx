@@ -6,136 +6,89 @@ import {
   ScrollView,
   RefreshControl,
   TouchableOpacity,
-  ActivityIndicator,
+  Modal,
+  Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CedarColors, CedarTypography } from '@credics/core';
 import { DonutChart, CategorySlice } from '../../components/DonutChart';
-import { HapticButton } from '../../components/HapticButton';
 import { InsightsSkeleton } from '../../components/Skeleton';
-import { Calendar, ChevronRight, TrendingDown, TrendingUp, Layers, CheckCircle2 } from 'lucide-react-native';
+import {
+  Layers,
+  ChevronDown,
+  X,
+  Check,
+  CreditCard,
+  CheckCircle2,
+  ChevronRight,
+  TrendingUp,
+} from 'lucide-react-native';
 import { supabase } from '../../lib/supabase';
-import * as Haptics from 'expo-haptics';
 
-interface MonthlyBarData {
-  month: string;
+interface CardData {
+  id: string;
+  card_name: string;
+  last_4_digits: string;
+  total_limit: number;
+  is_primary: boolean;
+  parent_card_id?: string;
+}
+
+interface TrendBarData {
+  label: string;
   height: number;
   amount: number;
   formattedAmount: string;
   isCurrent: boolean;
 }
 
+const LUXURY_PALETTE = [
+  CedarColors.forest800,
+  '#2E944B',
+  '#71A387',
+  '#D97706',
+  '#9BB8A7',
+  '#10B981',
+  '#DCEEE2',
+];
+
 export default function InsightsScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [activeSegment, setActiveSegment] = useState<'spending' | 'income' | 'savings' | 'goals'>('spending');
-  const [selectedMonth, setSelectedMonth] = useState('Current Period');
 
+  // Card Family Filtering
+  const [cards, setCards] = useState<CardData[]>([]);
+  const [selectedCardId, setSelectedCardId] = useState<string>('all');
+  const [isCardModalOpen, setIsCardModalOpen] = useState(false);
+
+  // Trend Mode Toggle: Weekly vs Monthly
+  const [trendMode, setTrendMode] = useState<'monthly' | 'weekly'>('monthly');
+
+  // Aggregated Data State
+  const [rawSpends, setRawSpends] = useState<any[]>([]);
+  const [rawTxs, setRawTxs] = useState<any[]>([]);
   const [totalSpent, setTotalSpent] = useState<number>(0);
   const [categorySlices, setCategorySlices] = useState<CategorySlice[]>([]);
-  const [monthlyBars, setMonthlyBars] = useState<MonthlyBarData[]>([]);
-  const [budgetUnderPct, setBudgetUnderPct] = useState<number>(14);
+  const [trendBars, setTrendBars] = useState<TrendBarData[]>([]);
+  const [selectedPeriodLabel, setSelectedPeriodLabel] = useState('Current Period');
 
+  // Fetch Base Spends, Transactions, and Cards
   const fetchInsightsData = useCallback(async () => {
     try {
-      // 1. Fetch real spends & transactions
-      const [spendsRes, txsRes] = await Promise.all([
-        supabase.from('spends').select('amount, spend_type, spend_date'),
-        supabase.from('card_transactions').select('amount, type, transaction_date'),
+      const [cardsRes, spendsRes, txsRes] = await Promise.all([
+        supabase.from('cards').select('id, card_name, last_4_digits, total_limit, is_primary, parent_card_id').order('is_primary', { ascending: false }),
+        supabase.from('spends').select('id, amount, spend_type, spend_date, card_id'),
+        supabase.from('card_transactions').select('id, amount, type, transaction_date, card_id'),
       ]);
 
-      const spends = spendsRes.data || [];
-      const txs = txsRes.data || [];
+      const fetchedCards = (cardsRes.data || []) as CardData[];
+      const fetchedSpends = spendsRes.data || [];
+      const fetchedTxs = txsRes.data || [];
 
-      // 2. Real Category Breakdown from spends
-      const catMap: Record<string, number> = {};
-      let total = 0;
-
-      spends.forEach((s) => {
-        const amt = Number(s.amount || 0);
-        total += amt;
-        const cat = s.spend_type || 'Personal';
-        catMap[cat] = (catMap[cat] || 0) + amt;
-      });
-
-      // Also account for card rotations
-      const rotationWithdrawals = txs.filter((t) => t.type === 'withdrawal');
-      const totalRotations = rotationWithdrawals.reduce((sum, t) => sum + Number(t.amount || 0), 0);
-      if (totalRotations > 0) {
-        catMap['Rotations'] = totalRotations;
-        total += totalRotations;
-      }
-
-      setTotalSpent(total);
-
-      const luxuryPalette = [
-        CedarColors.forest800,
-        '#2E944B',
-        '#71A387',
-        '#D97706',
-        '#9BB8A7',
-        '#DCEEE2',
-      ];
-
-      const slices: CategorySlice[] = Object.keys(catMap).map((k, idx) => ({
-        label: k,
-        amount: catMap[k],
-        percentage: total > 0 ? Math.round((catMap[k] / total) * 100) : 0,
-        color: luxuryPalette[idx % luxuryPalette.length],
-      }));
-
-      setCategorySlices(slices.length > 0 ? slices : [{ label: 'Personal', amount: 0, percentage: 100, color: CedarColors.forest800 }]);
-
-      // 3. Dynamic Last 6 Months Spending Bars
-      const now = new Date();
-      const monthsList: MonthlyBarData[] = [];
-
-      for (let i = 5; i >= 0; i--) {
-        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-        const mName = d.toLocaleString('en-US', { month: 'short' });
-        const mYear = d.getFullYear();
-        const mMonth = d.getMonth();
-
-        // Calculate sum for this specific month
-        let monthTotal = 0;
-
-        spends.forEach((s) => {
-          if (s.spend_date) {
-            const sd = new Date(s.spend_date);
-            if (sd.getFullYear() === mYear && sd.getMonth() === mMonth) {
-              monthTotal += Number(s.amount || 0);
-            }
-          }
-        });
-
-        txs.forEach((t) => {
-          if (t.transaction_date && t.type === 'withdrawal') {
-            const td = new Date(t.transaction_date);
-            if (td.getFullYear() === mYear && td.getMonth() === mMonth) {
-              monthTotal += Number(t.amount || 0);
-            }
-          }
-        });
-
-        monthsList.push({
-          month: mName,
-          amount: monthTotal,
-          height: 10, // normalized later
-          formattedAmount: monthTotal >= 1000 ? `₹${(monthTotal / 1000).toFixed(1)}k` : `₹${monthTotal}`,
-          isCurrent: i === 0,
-        });
-      }
-
-      // Normalize bar heights (max height = 100)
-      const maxAmt = Math.max(...monthsList.map((m) => m.amount), 1);
-      monthsList.forEach((m) => {
-        m.height = Math.max(12, Math.round((m.amount / maxAmt) * 96));
-      });
-
-      setMonthlyBars(monthsList);
-
-      const curMonthName = now.toLocaleString('en-US', { month: 'short', year: 'numeric' });
-      setSelectedMonth(curMonthName);
+      setCards(fetchedCards);
+      setRawSpends(fetchedSpends);
+      setRawTxs(fetchedTxs);
     } catch (err) {
       console.error('Error fetching insights data:', err);
     } finally {
@@ -152,6 +105,159 @@ export default function InsightsScreen() {
     setRefreshing(true);
     fetchInsightsData();
   };
+
+  // Re-compute Analytics whenever selectedCardId, trendMode, rawSpends, or rawTxs change
+  useEffect(() => {
+    // 1. Resolve Card Family IDs
+    let filteredSpends = rawSpends;
+    let filteredTxs = rawTxs;
+
+    if (selectedCardId !== 'all') {
+      const selected = cards.find((c) => c.id === selectedCardId);
+      const primaryId = selected?.is_primary ? selected.id : (selected?.parent_card_id || selectedCardId);
+      const familyIds = cards
+        .filter((c) => c.id === primaryId || c.parent_card_id === primaryId)
+        .map((c) => c.id);
+
+      filteredSpends = rawSpends.filter(
+        (s) => s.card_id && (s.card_id === selectedCardId || familyIds.includes(s.card_id))
+      );
+      filteredTxs = rawTxs.filter(
+        (t) => t.card_id && (t.card_id === selectedCardId || familyIds.includes(t.card_id))
+      );
+    }
+
+    // 2. Category Breakdown
+    const catMap: Record<string, number> = {};
+    let total = 0;
+
+    filteredSpends.forEach((s) => {
+      const amt = Number(s.amount || 0);
+      total += amt;
+      const cat = s.spend_type || 'Personal';
+      catMap[cat] = (catMap[cat] || 0) + amt;
+    });
+
+    const rotationWithdrawals = filteredTxs.filter((t) => t.type === 'withdrawal');
+    const totalRotations = rotationWithdrawals.reduce((sum, t) => sum + Number(t.amount || 0), 0);
+    if (totalRotations > 0) {
+      catMap['Rotations'] = (catMap['Rotations'] || 0) + totalRotations;
+      total += totalRotations;
+    }
+
+    setTotalSpent(total);
+
+    const slices: CategorySlice[] = Object.keys(catMap).map((k, idx) => ({
+      label: k,
+      amount: catMap[k],
+      percentage: total > 0 ? Math.round((catMap[k] / total) * 100) : 0,
+      color: LUXURY_PALETTE[idx % LUXURY_PALETTE.length],
+    }));
+
+    slices.sort((a, b) => b.amount - a.amount);
+
+    setCategorySlices(
+      slices.length > 0
+        ? slices
+        : [{ label: 'Personal', amount: 0, percentage: 100, color: CedarColors.forest800 }]
+    );
+
+    // 3. Spending Trend Bars (Weekly vs Monthly)
+    const now = new Date();
+    const bars: TrendBarData[] = [];
+
+    if (trendMode === 'monthly') {
+      // Last 6 Months
+      for (let i = 5; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const mName = d.toLocaleString('en-US', { month: 'short' });
+        const mYear = d.getFullYear();
+        const mMonth = d.getMonth();
+
+        let monthTotal = 0;
+
+        filteredSpends.forEach((s) => {
+          if (s.spend_date) {
+            const sd = new Date(s.spend_date);
+            if (sd.getFullYear() === mYear && sd.getMonth() === mMonth) {
+              monthTotal += Number(s.amount || 0);
+            }
+          }
+        });
+
+        filteredTxs.forEach((t) => {
+          if (t.transaction_date && t.type === 'withdrawal') {
+            const td = new Date(t.transaction_date);
+            if (td.getFullYear() === mYear && td.getMonth() === mMonth) {
+              monthTotal += Number(t.amount || 0);
+            }
+          }
+        });
+
+        bars.push({
+          label: mName,
+          amount: monthTotal,
+          height: 12,
+          formattedAmount:
+            monthTotal >= 1000 ? `₹${(monthTotal / 1000).toFixed(1)}k` : `₹${monthTotal}`,
+          isCurrent: i === 0,
+        });
+      }
+
+      setSelectedPeriodLabel(now.toLocaleString('en-US', { month: 'short', year: 'numeric' }));
+    } else {
+      // Last 6 Weeks
+      for (let i = 5; i >= 0; i--) {
+        const endDay = new Date(now.getTime() - i * 7 * 24 * 60 * 60 * 1000);
+        const startDay = new Date(endDay.getTime() - 7 * 24 * 60 * 60 * 1000);
+        const weekLabel = i === 0 ? 'This Wk' : `W-${i}`;
+
+        let weekTotal = 0;
+
+        filteredSpends.forEach((s) => {
+          if (s.spend_date) {
+            const sd = new Date(s.spend_date).getTime();
+            if (sd >= startDay.getTime() && sd <= endDay.getTime()) {
+              weekTotal += Number(s.amount || 0);
+            }
+          }
+        });
+
+        filteredTxs.forEach((t) => {
+          if (t.transaction_date && t.type === 'withdrawal') {
+            const td = new Date(t.transaction_date).getTime();
+            if (td >= startDay.getTime() && td <= endDay.getTime()) {
+              weekTotal += Number(t.amount || 0);
+            }
+          }
+        });
+
+        bars.push({
+          label: weekLabel,
+          amount: weekTotal,
+          height: 12,
+          formattedAmount:
+            weekTotal >= 1000 ? `₹${(weekTotal / 1000).toFixed(1)}k` : `₹${weekTotal}`,
+          isCurrent: i === 0,
+        });
+      }
+
+      setSelectedPeriodLabel('Last 6 Weeks');
+    }
+
+    // Normalize bar heights (max height = 96)
+    const maxAmt = Math.max(...bars.map((b) => b.amount), 1);
+    bars.forEach((b) => {
+      b.height = Math.max(12, Math.round((b.amount / maxAmt) * 96));
+    });
+
+    setTrendBars(bars);
+  }, [selectedCardId, trendMode, rawSpends, rawTxs, cards]);
+
+  const activeCardObj = useMemo(() => {
+    if (selectedCardId === 'all') return null;
+    return cards.find((c) => c.id === selectedCardId) || null;
+  }, [selectedCardId, cards]);
 
   if (isLoading) {
     return (
@@ -175,22 +281,32 @@ export default function InsightsScreen() {
           />
         }
       >
-        {/* Top Header */}
+        {/* ================= 1. TOP HEADER WITH CARD FAMILY FILTER ================= */}
         <View style={styles.header}>
-          <View>
+          <View style={styles.headerLeftCol}>
             <Text style={styles.title}>Analytics</Text>
             <Text style={styles.subtitle}>Real-Time Spending & Vault Intelligence</Text>
           </View>
-          <HapticButton
-            style={styles.calendarBtn}
-            onPress={() => {
-            }}
+
+          {/* Card Family Selector Pill */}
+          <TouchableOpacity
+            style={styles.cardFilterPill}
+            onPress={() => setIsCardModalOpen(true)}
+            activeOpacity={0.8}
           >
-            <Calendar size={18} color={CedarColors.ink900} />
-          </HapticButton>
+            <Layers size={13} color={CedarColors.forest800} />
+            <Text style={styles.cardFilterPillText} numberOfLines={1}>
+              {selectedCardId === 'all'
+                ? 'All Cards'
+                : activeCardObj
+                ? `${activeCardObj.card_name} (**${activeCardObj.last_4_digits})`
+                : 'Card'}
+            </Text>
+            <ChevronDown size={12} color={CedarColors.forest800} />
+          </TouchableOpacity>
         </View>
 
-        {/* 4 Segmented Control Pills */}
+        {/* ================= 2. 4-SEGMENTED DOMAIN CONTROL PILLS ================= */}
         <View style={styles.segmentedRow}>
           {(['spending', 'income', 'savings', 'goals'] as const).map((seg) => {
             const isActive = activeSegment === seg;
@@ -198,9 +314,7 @@ export default function InsightsScreen() {
               <TouchableOpacity
                 key={seg}
                 style={[styles.segmentBtn, isActive && styles.activeSegmentBtn]}
-                onPress={() => {
-                  setActiveSegment(seg);
-                }}
+                onPress={() => setActiveSegment(seg)}
                 activeOpacity={0.8}
               >
                 <Text style={[styles.segmentText, isActive && styles.activeSegmentText]}>
@@ -211,54 +325,114 @@ export default function InsightsScreen() {
           })}
         </View>
 
-        {/* Spending Card with Vector Donut Chart */}
+        {/* ================= 3. DONUT CHART WITH CATEGORY DRILL-DOWN ================= */}
         <View style={styles.chartCard}>
           <View style={styles.chartHeader}>
-            <Text style={styles.chartTitle}>Vault & Card Spending</Text>
-            <TouchableOpacity
-              style={styles.chartMonthBtn}
-              onPress={() => {}}
-            >
-              <Text style={styles.chartMonthText}>{selectedMonth}</Text>
-            </TouchableOpacity>
+            <View>
+              <Text style={styles.chartTitle}>Vault & Card Spending</Text>
+              <Text style={styles.chartSub}>
+                {selectedCardId === 'all'
+                  ? 'All vault cards combined'
+                  : `${activeCardObj?.card_name || 'Card'} Family`}
+              </Text>
+            </View>
+            <View style={styles.chartPeriodBadge}>
+              <Text style={styles.chartPeriodText}>{selectedPeriodLabel}</Text>
+            </View>
           </View>
 
+          {/* Vector Donut Chart */}
           <DonutChart totalAmount={totalSpent} slices={categorySlices} />
+
+          {/* Category Drill-Down Detailed List */}
+          <View style={styles.categoryList}>
+            <View style={styles.categoryListHeader}>
+              <Text style={styles.categoryListTitle}>Category Breakdown</Text>
+              <Text style={styles.categoryListSub}>Total {categorySlices.length} categories</Text>
+            </View>
+
+            {categorySlices.map((slice, idx) => (
+              <View key={idx} style={styles.categoryRow}>
+                <View style={styles.categoryLeft}>
+                  <View style={[styles.categoryColorDot, { backgroundColor: slice.color }]} />
+                  <Text style={styles.categoryName}>{slice.label}</Text>
+                </View>
+                <View style={styles.categoryRight}>
+                  <Text style={styles.categoryAmount}>
+                    ₹{slice.amount.toLocaleString('en-IN')}
+                  </Text>
+                  <View style={styles.categoryPctBadge}>
+                    <Text style={styles.categoryPctText}>{slice.percentage}%</Text>
+                  </View>
+                </View>
+              </View>
+            ))}
+          </View>
         </View>
 
-        {/* Eye-Friendly Budget Health Banner (No emojis - Clean micro-icon) */}
-        <TouchableOpacity
-          style={styles.healthBanner}
-          activeOpacity={0.85}
-          onPress={() => {}}
-        >
+        {/* ================= 4. EYE-FRIENDLY BUDGET HEALTH BANNER ================= */}
+        <View style={styles.healthBanner}>
           <View style={styles.healthIconCircle}>
             <CheckCircle2 size={18} color="#2E944B" strokeWidth={2.4} />
           </View>
           <View style={styles.healthContent}>
             <Text style={styles.healthTitle}>Healthy Vault Utilization</Text>
             <Text style={styles.healthSub}>
-              Card rotation and spends are well within optimal credit cycle.
+              Card rotation and spends are well within optimal credit cycle limit.
             </Text>
           </View>
-          <ChevronRight size={18} color="#2E944B" />
-        </TouchableOpacity>
+        </View>
 
-        {/* Dynamic 6-Month Spending Trend Bar Chart */}
+        {/* ================= 5. SPENDING TREND (WEEKLY VS MONTHLY TOGGLE) ================= */}
         <View style={styles.trendCard}>
           <View style={styles.trendHeader}>
-            <View>
-              <Text style={styles.trendTitle}>Spending Trend (Last 6 Months)</Text>
-              <Text style={styles.trendSub}>Live monthly aggregation from Supabase</Text>
+            <View style={styles.trendTitleCol}>
+              <Text style={styles.trendTitle}>
+                Spending Trend ({trendMode === 'monthly' ? 'Last 6 Months' : 'Last 6 Weeks'})
+              </Text>
+              <Text style={styles.trendSub}>
+                Live {trendMode} aggregation from Supabase
+              </Text>
+            </View>
+
+            {/* Weekly vs Monthly Toggle Switch */}
+            <View style={styles.trendToggleContainer}>
+              <TouchableOpacity
+                style={[styles.trendToggleBtn, trendMode === 'weekly' && styles.trendToggleActive]}
+                onPress={() => setTrendMode('weekly')}
+                activeOpacity={0.8}
+              >
+                <Text
+                  style={[
+                    styles.trendToggleText,
+                    trendMode === 'weekly' && styles.trendToggleTextActive,
+                  ]}
+                >
+                  Weekly
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.trendToggleBtn, trendMode === 'monthly' && styles.trendToggleActive]}
+                onPress={() => setTrendMode('monthly')}
+                activeOpacity={0.8}
+              >
+                <Text
+                  style={[
+                    styles.trendToggleText,
+                    trendMode === 'monthly' && styles.trendToggleTextActive,
+                  ]}
+                >
+                  Monthly
+                </Text>
+              </TouchableOpacity>
             </View>
           </View>
 
+          {/* Bar Chart Area */}
           <View style={styles.barChartWrapper}>
-            {/* Bars Column Area */}
             <View style={styles.barsArea}>
-              {monthlyBars.map((item, index) => (
+              {trendBars.map((item, index) => (
                 <View key={index} style={styles.barCol}>
-                  {/* Tooltip for Current Active Month */}
                   {item.isCurrent && (
                     <View style={styles.tooltipPill}>
                       <Text style={styles.tooltipText}>{item.formattedAmount}</Text>
@@ -278,13 +452,12 @@ export default function InsightsScreen() {
                       item.isCurrent && styles.currentMonthLabel,
                     ]}
                   >
-                    {item.month}
+                    {item.label}
                   </Text>
                 </View>
               ))}
             </View>
 
-            {/* Right Y-Axis Scale */}
             <View style={styles.yAxisCol}>
               <Text style={styles.yAxisLabel}>Max</Text>
               <Text style={styles.yAxisLabel}>75%</Text>
@@ -294,6 +467,88 @@ export default function InsightsScreen() {
           </View>
         </View>
       </ScrollView>
+
+      {/* ================= 6. CARD FAMILY FILTER MODAL ================= */}
+      <Modal visible={isCardModalOpen} transparent animationType="fade">
+        <TouchableOpacity
+          style={styles.modalBackdrop}
+          activeOpacity={1}
+          onPress={() => setIsCardModalOpen(false)}
+        >
+          <View style={styles.filterMenuBox}>
+            <View style={styles.filterMenuHeader}>
+              <Text style={styles.filterMenuTitle}>Select Vault Card</Text>
+              <TouchableOpacity onPress={() => setIsCardModalOpen(false)}>
+                <X size={16} color="#4A6B56" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={{ maxHeight: 280 }} showsVerticalScrollIndicator={false}>
+              <TouchableOpacity
+                style={[
+                  styles.menuOption,
+                  selectedCardId === 'all' && styles.menuOptionActive,
+                ]}
+                onPress={() => {
+                  setSelectedCardId('all');
+                  setIsCardModalOpen(false);
+                }}
+              >
+                <View style={styles.menuOptionLeft}>
+                  <CreditCard
+                    size={14}
+                    color={selectedCardId === 'all' ? CedarColors.forest800 : '#6B7280'}
+                  />
+                  <Text
+                    style={[
+                      styles.menuOptionText,
+                      selectedCardId === 'all' && styles.menuOptionTextActive,
+                    ]}
+                  >
+                    All Vault Cards
+                  </Text>
+                </View>
+                {selectedCardId === 'all' && <Check size={14} color={CedarColors.forest800} />}
+              </TouchableOpacity>
+
+              {cards.map((c) => {
+                const isSelected = selectedCardId === c.id;
+                return (
+                  <TouchableOpacity
+                    key={c.id}
+                    style={[styles.menuOption, isSelected && styles.menuOptionActive]}
+                    onPress={() => {
+                      setSelectedCardId(c.id);
+                      setIsCardModalOpen(false);
+                    }}
+                  >
+                    <View style={styles.menuOptionLeft}>
+                      <CreditCard
+                        size={14}
+                        color={isSelected ? CedarColors.forest800 : '#6B7280'}
+                      />
+                      <View>
+                        <Text
+                          style={[
+                            styles.menuOptionText,
+                            isSelected && styles.menuOptionTextActive,
+                          ]}
+                        >
+                          {c.card_name}
+                        </Text>
+                        <Text style={styles.menuOptionSub}>
+                          **{c.last_4_digits} {c.is_primary ? '• Primary' : '• Add-on'}
+                        </Text>
+                      </View>
+                    </View>
+                    {isSelected && <Check size={14} color={CedarColors.forest800} />}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -313,6 +568,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 12,
     paddingBottom: 12,
+    gap: 12,
+  },
+  headerLeftCol: {
+    flex: 1,
   },
   title: {
     color: CedarColors.ink900,
@@ -327,15 +586,23 @@ const styles = StyleSheet.create({
     color: CedarColors.ink500,
     marginTop: 2,
   },
-  calendarBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: CedarColors.card,
+  cardFilterPill: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    backgroundColor: CedarColors.card,
     borderWidth: 1,
     borderColor: CedarColors.border,
+    maxWidth: 160,
+  },
+  cardFilterPillText: {
+    fontSize: 11,
+    fontFamily: CedarTypography.bodySemiBold,
+    color: CedarColors.forest800,
+    fontWeight: '700',
   },
   segmentedRow: {
     flexDirection: 'row',
@@ -382,7 +649,7 @@ const styles = StyleSheet.create({
   chartHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     marginBottom: 12,
   },
   chartTitle: {
@@ -391,7 +658,13 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: CedarColors.ink900,
   },
-  chartMonthBtn: {
+  chartSub: {
+    fontSize: 11,
+    fontFamily: CedarTypography.body,
+    color: CedarColors.ink500,
+    marginTop: 2,
+  },
+  chartPeriodBadge: {
     paddingVertical: 4,
     paddingHorizontal: 10,
     borderRadius: 12,
@@ -399,10 +672,79 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: CedarColors.border,
   },
-  chartMonthText: {
+  chartPeriodText: {
     fontSize: 11,
     fontFamily: CedarTypography.bodySemiBold,
     color: CedarColors.forest800,
+    fontWeight: '700',
+  },
+  categoryList: {
+    marginTop: 18,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: CedarColors.border,
+  },
+  categoryListHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  categoryListTitle: {
+    fontSize: 13,
+    fontFamily: CedarTypography.bodySemiBold,
+    fontWeight: '800',
+    color: CedarColors.ink900,
+  },
+  categoryListSub: {
+    fontSize: 11,
+    fontFamily: CedarTypography.body,
+    color: CedarColors.ink500,
+  },
+  categoryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  categoryLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  categoryColorDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  categoryName: {
+    fontSize: 12,
+    fontFamily: CedarTypography.body,
+    color: CedarColors.ink900,
+    fontWeight: '600',
+  },
+  categoryRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  categoryAmount: {
+    fontSize: 12,
+    fontFamily: CedarTypography.bodySemiBold,
+    color: CedarColors.ink900,
+    fontWeight: '700',
+  },
+  categoryPctBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    backgroundColor: CedarColors.cardAlt,
+  },
+  categoryPctText: {
+    fontSize: 10,
+    fontFamily: CedarTypography.bodySemiBold,
+    color: CedarColors.forest800,
+    fontWeight: '800',
   },
   healthBanner: {
     marginHorizontal: 20,
@@ -453,10 +795,17 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   trendHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     marginBottom: 14,
+    gap: 8,
+  },
+  trendTitleCol: {
+    flex: 1,
   },
   trendTitle: {
-    fontSize: 15,
+    fontSize: 14,
     fontFamily: CedarTypography.bodySemiBold,
     fontWeight: '700',
     color: CedarColors.ink900,
@@ -466,6 +815,32 @@ const styles = StyleSheet.create({
     fontFamily: CedarTypography.body,
     color: CedarColors.ink500,
     marginTop: 2,
+  },
+  trendToggleContainer: {
+    flexDirection: 'row',
+    backgroundColor: CedarColors.cardAlt,
+    borderRadius: 12,
+    padding: 2,
+    borderWidth: 1,
+    borderColor: CedarColors.border,
+  },
+  trendToggleBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 10,
+  },
+  trendToggleActive: {
+    backgroundColor: CedarColors.forest800,
+  },
+  trendToggleText: {
+    fontSize: 10,
+    fontFamily: CedarTypography.bodySemiBold,
+    color: CedarColors.ink700,
+    fontWeight: '700',
+  },
+  trendToggleTextActive: {
+    color: '#FFFFFF',
+    fontWeight: '800',
   },
   barChartWrapper: {
     flexDirection: 'row',
@@ -483,7 +858,7 @@ const styles = StyleSheet.create({
   },
   barCol: {
     alignItems: 'center',
-    width: 34,
+    width: 38,
   },
   tooltipPill: {
     backgroundColor: CedarColors.forest800,
@@ -532,5 +907,70 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontFamily: CedarTypography.body,
     color: CedarColors.ink500,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  filterMenuBox: {
+    width: '100%',
+    maxWidth: 320,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.15,
+    shadowRadius: 16,
+    elevation: 10,
+  },
+  filterMenuHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#DFE8E0',
+  },
+  filterMenuTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#072C1C',
+  },
+  menuOption: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    marginBottom: 4,
+  },
+  menuOptionActive: {
+    backgroundColor: '#E4ECE3',
+  },
+  menuOptionLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  menuOptionText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1F2937',
+  },
+  menuOptionTextActive: {
+    color: '#0B3F28',
+    fontWeight: '800',
+  },
+  menuOptionSub: {
+    fontSize: 10,
+    color: '#4A6B56',
+    marginTop: 1,
   },
 });

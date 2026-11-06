@@ -20,6 +20,9 @@ import {
   Receipt,
   Coins,
   Trash2,
+  CheckCircle2,
+  AlertCircle,
+  Zap,
 } from 'lucide-react-native';
 
 export interface CardData {
@@ -77,6 +80,7 @@ interface RecordEntryDrawerProps {
   currentUserId?: string;
   cardDueMap: Record<string, number>;
   userCardCashMap: Record<string, Record<string, number>>;
+  userFamilySpendMap?: Record<string, number>;
 }
 
 function uid() {
@@ -94,6 +98,7 @@ export function RecordEntryDrawer({
   currentUserId,
   cardDueMap,
   userCardCashMap,
+  userFamilySpendMap,
 }: RecordEntryDrawerProps) {
   const [recordType, setRecordType] = useState<'rotate' | 'spend' | 'bill'>(initialType);
   const [amount, setAmount] = useState('');
@@ -174,7 +179,7 @@ export function RecordEntryDrawer({
         (c) =>
           !existingIds.includes(c.id) &&
           (currentActorCashByCard[c.id] || 0) > 0
-      ) || allCards[0];
+      ) || allCards.find((c) => !existingIds.includes(c.id)) || allCards[0];
 
     const maxCanTake = Math.min(
       unallocated,
@@ -189,6 +194,17 @@ export function RecordEntryDrawer({
         amount: maxCanTake > 0 ? String(maxCanTake) : '',
       },
     ]);
+  };
+
+  const handleMaxRow = (rowUid: string, cardId: string) => {
+    if (!cardId) return;
+    const cardBal = currentActorCashByCard[cardId] || 0;
+    const otherAllocated = cashSources
+      .filter((s) => s.uid !== rowUid)
+      .reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
+    const unallocated = Math.max(0, numAmount - otherAllocated);
+    const maxAmt = Math.min(unallocated, cardBal);
+    updateCashSourceAmount(rowUid, maxAmt > 0 ? String(maxAmt) : '');
   };
 
   const removeCashSourceRow = (rowUid: string) => {
@@ -640,6 +656,21 @@ export function RecordEntryDrawer({
                 thumbColor="#FFFFFF"
               />
             </View>
+
+            {isDebtRepayment && (
+              <View style={styles.familyDebtBox}>
+                <Receipt size={14} color="#F59E0B" />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.familyDebtTitle}>
+                    Outstanding Personal Debt: ₹
+                    {(userFamilySpendMap?.[actingUserId] || 0).toLocaleString('en-IN')}
+                  </Text>
+                  <Text style={styles.familyDebtSub}>
+                    This payment will offset and reduce your cumulative personal expense debt.
+                  </Text>
+                </View>
+              </View>
+            )}
           </>
         )}
 
@@ -664,15 +695,62 @@ export function RecordEntryDrawer({
               </TouchableOpacity>
             </View>
 
+            {/* Dynamic Allocation Guidance Banner */}
+            {numAmount > 0 && (
+              <View
+                style={[
+                  styles.allocationBanner,
+                  cashAllocatedTotal === numAmount
+                    ? styles.allocationBannerSuccess
+                    : cashAllocatedTotal > numAmount
+                    ? styles.allocationBannerError
+                    : styles.allocationBannerWarning,
+                ]}
+              >
+                {cashAllocatedTotal === numAmount ? (
+                  <CheckCircle2 size={13} color="#10B981" />
+                ) : (
+                  <AlertCircle
+                    size={13}
+                    color={cashAllocatedTotal > numAmount ? '#EF4444' : '#F59E0B'}
+                  />
+                )}
+                <Text
+                  style={[
+                    styles.allocationBannerText,
+                    cashAllocatedTotal === numAmount
+                      ? styles.bannerTextSuccess
+                      : cashAllocatedTotal > numAmount
+                      ? styles.bannerTextError
+                      : styles.bannerTextWarning,
+                  ]}
+                >
+                  {cashAllocatedTotal === numAmount
+                    ? `Fully allocated: ₹${numAmount.toLocaleString('en-IN')}`
+                    : cashAllocatedTotal > numAmount
+                    ? `Over-allocated by: ₹${(cashAllocatedTotal - numAmount).toLocaleString('en-IN')}`
+                    : `Remaining to allocate: ₹${(numAmount - cashAllocatedTotal).toLocaleString('en-IN')}`}
+                </Text>
+              </View>
+            )}
+
             {cashSources.map((row) => {
               const cardBal = currentActorCashByCard[row.cardId] || 0;
+              const rowAmt = Number(row.amount) || 0;
+              const isOverDraft = rowAmt > cardBal;
+
               return (
                 <View key={row.uid} style={styles.sourceRowBox}>
                   <View style={styles.sourceRowTop}>
                     <Text style={styles.sourceRowCardTitle}>
                       {getCardLabel(row.cardId)}
                     </Text>
-                    <Text style={styles.sourceRowBal}>
+                    <Text
+                      style={[
+                        styles.sourceRowBal,
+                        isOverDraft && { color: '#EF4444', fontWeight: '800' },
+                      ]}
+                    >
                       Avail: ₹{cardBal.toLocaleString('en-IN')}
                     </Text>
                   </View>
@@ -682,33 +760,47 @@ export function RecordEntryDrawer({
                     showsHorizontalScrollIndicator={false}
                     style={styles.sourceCardsScroll}
                   >
-                    {allCards.map((c) => {
-                      const isSel = row.cardId === c.id;
-                      const cBal = currentActorCashByCard[c.id] || 0;
-                      return (
-                        <TouchableOpacity
-                          key={c.id}
-                          style={[
-                            styles.sourceCardChip,
-                            isSel && styles.sourceCardChipActive,
-                          ]}
-                          onPress={() => updateCashSourceCard(row.uid, c.id)}
-                          activeOpacity={0.8}
-                        >
-                          <Text
+                    {allCards
+                      .filter((c) => {
+                        const cBal = currentActorCashByCard[c.id] || 0;
+                        const isSel = row.cardId === c.id;
+                        const isUsedElsewhere = cashSources.some(
+                          (s) => s.uid !== row.uid && s.cardId === c.id
+                        );
+                        return isSel || (!isUsedElsewhere && cBal > 0);
+                      })
+                      .map((c) => {
+                        const isSel = row.cardId === c.id;
+                        const cBal = currentActorCashByCard[c.id] || 0;
+                        return (
+                          <TouchableOpacity
+                            key={c.id}
                             style={[
-                              styles.sourceCardChipText,
-                              isSel && styles.sourceCardChipTextActive,
+                              styles.sourceCardChip,
+                              isSel && styles.sourceCardChipActive,
                             ]}
+                            onPress={() => updateCashSourceCard(row.uid, c.id)}
+                            activeOpacity={0.8}
                           >
-                            {c.card_name} (₹{cBal.toLocaleString('en-IN')})
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
+                            <Text
+                              style={[
+                                styles.sourceCardChipText,
+                                isSel && styles.sourceCardChipTextActive,
+                              ]}
+                            >
+                              {c.card_name} (₹{cBal.toLocaleString('en-IN')})
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
                   </ScrollView>
 
-                  <View style={styles.sourceInputRow}>
+                  <View
+                    style={[
+                      styles.sourceInputRow,
+                      isOverDraft && styles.sourceInputRowError,
+                    ]}
+                  >
                     <Text style={styles.sourceInputSymbol}>₹</Text>
                     <TextInput
                       style={styles.sourceInput}
@@ -718,6 +810,14 @@ export function RecordEntryDrawer({
                       value={row.amount}
                       onChangeText={(val) => updateCashSourceAmount(row.uid, val)}
                     />
+                    <TouchableOpacity
+                      style={styles.maxBtn}
+                      onPress={() => handleMaxRow(row.uid, row.cardId)}
+                      activeOpacity={0.7}
+                    >
+                      <Zap size={10} color="#F59E0B" />
+                      <Text style={styles.maxBtnText}>MAX</Text>
+                    </TouchableOpacity>
                     {cashSources.length > 1 && (
                       <TouchableOpacity
                         style={styles.removeSourceBtn}
@@ -1104,5 +1204,87 @@ const styles = StyleSheet.create({
     fontFamily: CedarTypography.bodySemiBold,
     fontWeight: '800',
     color: '#FFFFFF',
+  },
+  allocationBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    marginBottom: 8,
+    borderWidth: 1,
+  },
+  allocationBannerSuccess: {
+    backgroundColor: 'rgba(16, 185, 129, 0.12)',
+    borderColor: 'rgba(16, 185, 129, 0.3)',
+  },
+  allocationBannerError: {
+    backgroundColor: 'rgba(239, 68, 68, 0.12)',
+    borderColor: 'rgba(239, 68, 68, 0.3)',
+  },
+  allocationBannerWarning: {
+    backgroundColor: 'rgba(245, 158, 11, 0.12)',
+    borderColor: 'rgba(245, 158, 11, 0.3)',
+  },
+  allocationBannerText: {
+    fontSize: 11,
+    fontFamily: CedarTypography.bodySemiBold,
+    fontWeight: '700',
+  },
+  bannerTextSuccess: {
+    color: '#34D399',
+  },
+  bannerTextError: {
+    color: '#F87171',
+  },
+  bannerTextWarning: {
+    color: '#FBBF24',
+  },
+  sourceInputRowError: {
+    borderWidth: 1,
+    borderColor: '#EF4444',
+    borderRadius: 12,
+    padding: 2,
+  },
+  maxBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    backgroundColor: 'rgba(245, 158, 11, 0.18)',
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.35)',
+  },
+  maxBtnText: {
+    fontSize: 10,
+    fontFamily: CedarTypography.bodySemiBold,
+    fontWeight: '800',
+    color: '#F59E0B',
+  },
+  familyDebtBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(245, 158, 11, 0.1)',
+    borderRadius: 12,
+    padding: 10,
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.25)',
+  },
+  familyDebtTitle: {
+    fontSize: 11,
+    fontFamily: CedarTypography.bodySemiBold,
+    fontWeight: '700',
+    color: '#F59E0B',
+  },
+  familyDebtSub: {
+    fontSize: 10,
+    fontFamily: CedarTypography.body,
+    color: '#CAD6C9',
+    marginTop: 1,
   },
 });

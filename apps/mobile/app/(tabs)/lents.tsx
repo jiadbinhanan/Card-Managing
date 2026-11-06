@@ -63,6 +63,10 @@ import {
 import { AddBorrowerModal } from '../../components/lents/AddBorrowerModal';
 import { EditBorrowerModal } from '../../components/lents/EditBorrowerModal';
 import { TherapeuticSuccessModal } from '../../components/settlements/TherapeuticSuccessModal';
+import {
+  BorrowerPickerDrawer,
+  BorrowerItem,
+} from '../../components/lents/BorrowerPickerDrawer';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -116,6 +120,7 @@ export default function LentsScreen() {
   const [isCollectModalOpen, setIsCollectModalOpen] = useState(false);
   const [isAddBorrowerOpen, setIsAddBorrowerOpen] = useState(false);
   const [isEditBorrowerOpen, setIsEditBorrowerOpen] = useState(false);
+  const [isBorrowerPickerOpen, setIsBorrowerPickerOpen] = useState(false);
 
   // Therapeutic Celebration
   const [successModalVisible, setSuccessModalVisible] = useState(false);
@@ -421,26 +426,40 @@ export default function LentsScreen() {
 
   // Compute borrower summaries according to active tab and selected vault card
   const borrowerSummaries: BorrowerSummary[] = useMemo(() => {
+    let targetCardIds: string[] = [];
+    if (selectedVaultCardId !== 'all') {
+      const selected = cards.find((c) => c.id === selectedVaultCardId);
+      if (selected) {
+        const primaryId = selected.is_primary ? selected.id : selected.parent_card_id;
+        targetCardIds = cards
+          .filter((c) => c.id === primaryId || c.parent_card_id === primaryId)
+          .map((c) => c.id);
+      } else {
+        targetCardIds = [selectedVaultCardId];
+      }
+    }
+
     return rawBorrowers
       .map((b) => {
         let given = 0;
         let collected = 0;
-        let latestDate = b.created_at || '';
+        let latestTimestamp = b.created_at || '';
 
         // Card Ledger
         if (activeTab === 'combined' || activeTab === 'card') {
           cardEntries
             .filter((e) => e.borrower_id === b.id)
             .forEach((e) => {
-              if (selectedVaultCardId !== 'all' && e.card_id !== selectedVaultCardId) return;
+              if (selectedVaultCardId !== 'all' && !targetCardIds.includes(e.card_id)) return;
 
               const isGiven = e.entry_type === 'given' || e.entry_type === 'lent';
               const isCollect = e.entry_type === 'collected' || e.entry_type === 'return';
               if (isGiven) given += Number(e.amount || 0);
               if (isCollect) collected += Number(e.amount || 0);
 
-              if (e.transaction_date && e.transaction_date > latestDate) {
-                latestDate = e.transaction_date;
+              const actTime = e.updated_at || e.transaction_date || e.created_at || '';
+              if (actTime > latestTimestamp) {
+                latestTimestamp = actTime;
               }
             });
         }
@@ -457,8 +476,9 @@ export default function LentsScreen() {
               if (isGiven) given += Number(e.amount || 0);
               if (isCollect) collected += Number(e.amount || 0);
 
-              if (e.transaction_date && e.transaction_date > latestDate) {
-                latestDate = e.transaction_date;
+              const actTime = e.updated_at || e.transaction_date || e.created_at || '';
+              if (actTime > latestTimestamp) {
+                latestTimestamp = actTime;
               }
             });
         }
@@ -470,22 +490,28 @@ export default function LentsScreen() {
           phone: b.phone,
           netDue,
           totalGiven: given,
-          lastActivity: latestDate
-            ? new Date(latestDate).toLocaleDateString('en-GB', {
+          rawActivity: latestTimestamp,
+          lastActivity: latestTimestamp
+            ? new Date(latestTimestamp).toLocaleDateString('en-GB', {
                 day: '2-digit',
                 month: 'short',
               })
             : 'Recent',
         };
       })
-      .filter((b) => b.totalGiven > 0 || b.netDue !== 0) // only active ledger profiles
-      .sort((a, b) => b.netDue - a.netDue);
+      .filter((b) => b.totalGiven > 0 || b.netDue !== 0) // only active ledger profiles on main screen
+      .sort((a, b) => {
+        const timeDiff = (b.rawActivity || '').localeCompare(a.rawActivity || '');
+        if (timeDiff !== 0) return timeDiff;
+        return b.netDue - a.netDue;
+      });
   }, [
     rawBorrowers,
     cardEntries,
     pocketEntries,
     activeTab,
     selectedVaultCardId,
+    cards,
     currentUser,
   ]);
 
@@ -1005,6 +1031,13 @@ export default function LentsScreen() {
             </TouchableOpacity>
           ) : null}
         </View>
+        <TouchableOpacity
+          style={styles.directoryBtn}
+          onPress={() => setIsBorrowerPickerOpen(true)}
+          activeOpacity={0.8}
+        >
+          <Users size={16} color="#0B3F28" strokeWidth={2.4} />
+        </TouchableOpacity>
       </View>
 
       {isLoading ? (
@@ -1037,17 +1070,27 @@ export default function LentsScreen() {
               <Text style={styles.emptyStateSub}>
                 {searchQuery
                   ? 'Try searching with another name or phone number.'
-                  : 'Tap the + button below to register a borrower and record loan entries.'}
+                  : 'Tap the + button below or directory button to register a borrower.'}
               </Text>
               {!searchQuery && (
-                <TouchableOpacity
-                  style={styles.emptyAddBtn}
-                  onPress={() => setIsAddBorrowerOpen(true)}
-                  activeOpacity={0.85}
-                >
-                  <Plus size={16} color="#FFFFFF" strokeWidth={2.4} />
-                  <Text style={styles.emptyAddBtnText}>Register Borrower</Text>
-                </TouchableOpacity>
+                <View style={styles.emptyActionsRow}>
+                  <TouchableOpacity
+                    style={styles.emptyAddBtn}
+                    onPress={() => setIsAddBorrowerOpen(true)}
+                    activeOpacity={0.85}
+                  >
+                    <Plus size={16} color="#FFFFFF" strokeWidth={2.4} />
+                    <Text style={styles.emptyAddBtnText}>Register Borrower</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.emptyDirectoryBtn}
+                    onPress={() => setIsBorrowerPickerOpen(true)}
+                    activeOpacity={0.85}
+                  >
+                    <Users size={16} color="#0B3F28" strokeWidth={2.4} />
+                    <Text style={styles.emptyDirectoryBtnText}>All Borrowers</Text>
+                  </TouchableOpacity>
+                </View>
               )}
             </View>
           ) : (
@@ -1092,8 +1135,36 @@ export default function LentsScreen() {
         onGivePress={() => setIsGiveModalOpen(true)}
         onCollectPress={() => setIsCollectModalOpen(true)}
         onEditBorrowerPress={() => setIsEditBorrowerOpen(true)}
+        onEntriesChanged={() => {
+          if (selectedBorrower) fetchBorrowerLedger(selectedBorrower.id);
+          fetchData();
+        }}
         getCardName={getCardName}
         getRecorderName={getRecorderName}
+      />
+
+      {/* Borrower Directory Picker Drawer */}
+      <BorrowerPickerDrawer
+        isOpen={isBorrowerPickerOpen}
+        onClose={() => setIsBorrowerPickerOpen(false)}
+        onSelectBorrower={(item) => {
+          setIsBorrowerPickerOpen(false);
+          const existing = borrowerSummaries.find((b) => b.id === item.id);
+          if (existing) {
+            handleBorrowerPress(existing);
+          } else {
+            const newSummary: BorrowerSummary = {
+              id: item.id,
+              name: item.name,
+              phone: item.phone,
+              netDue: 0,
+              totalGiven: 0,
+              lastActivity: 'New',
+            };
+            handleBorrowerPress(newSummary);
+          }
+        }}
+        onBorrowerListChanged={fetchData}
       />
 
       {/* Give Loan Modal */}
@@ -1419,10 +1490,14 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   searchBarContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 18,
+    gap: 8,
     marginBottom: 8,
   },
   searchBox: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
@@ -1432,6 +1507,16 @@ const styles = StyleSheet.create({
     borderWidth: 1.2,
     borderColor: '#DFE8E0',
     gap: 8,
+  },
+  directoryBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.2,
+    borderColor: '#DFE8E0',
   },
   searchInput: {
     flex: 1,
@@ -1487,6 +1572,11 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     marginBottom: 16,
   },
+  emptyActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
   emptyAddBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1500,6 +1590,22 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
     color: '#FFFFFF',
+  },
+  emptyDirectoryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#E8F5E9',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 14,
+    gap: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.25)',
+  },
+  emptyDirectoryBtnText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#0B3F28',
   },
   floatingFabContainer: {
     position: 'absolute',

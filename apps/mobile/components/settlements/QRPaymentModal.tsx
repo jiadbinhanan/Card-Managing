@@ -126,7 +126,14 @@ export function QRPaymentModal({
 
   const getUpiUrl = (amountVal?: number): string => {
     if (!qr) return '#';
-    if (qr.base_payment_link) return qr.base_payment_link;
+    if (qr.base_payment_link) {
+      const link = qr.base_payment_link.trim();
+      if (amountVal && amountVal > 0 && !link.includes('am=')) {
+        const separator = link.includes('?') ? '&' : '?';
+        return `${link}${separator}am=${amountVal}`;
+      }
+      return link;
+    }
     const upi = qr.upi_id || '';
     const name = encodeURIComponent(qr.merchant_name || 'Merchant');
     if (amountVal && amountVal > 0) {

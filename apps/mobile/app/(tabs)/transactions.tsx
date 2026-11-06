@@ -11,6 +11,7 @@ import {
   Image,
   Dimensions,
   StatusBar,
+  TextInput,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -52,6 +53,10 @@ import {
   ProfileData,
   QRData,
 } from '../../components/RecordEntryDrawer';
+import {
+  TransactionTraceBottomSheet,
+  TraceTarget,
+} from '../../components/TransactionTraceBottomSheet';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const PAGE_SIZE = 20;
@@ -210,7 +215,12 @@ export default function TransactionsScreen() {
   // Primary Filters
   const [activeTab, setActiveTab] = useState<'all' | 'rotations' | 'spends' | 'bill_paid'>('all');
   const [filterUser, setFilterUser] = useState<string>('all');
-  const [filterDateType, setFilterDateType] = useState<'month' | 'today' | 'all'>('month');
+  const [filterDateType, setFilterDateType] = useState<
+    'month' | 'last_month' | 'today' | 'all' | 'custom'
+  >('month');
+  const [customStartDate, setCustomStartDate] = useState('');
+  const [customEndDate, setCustomEndDate] = useState('');
+  const [isCustomDateModalOpen, setIsCustomDateModalOpen] = useState(false);
   const [selectedVaultCardId, setSelectedVaultCardId] = useState<string>('all');
 
   // Modals & Expansion
@@ -218,6 +228,10 @@ export default function TransactionsScreen() {
   const [isUserFilterModalOpen, setIsUserFilterModalOpen] = useState(false);
   const [isRecordModalOpen, setIsRecordModalOpen] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  // Trace Flow State
+  const [traceTarget, setTraceTarget] = useState<TraceTarget | null>(null);
+  const [isTraceOpen, setIsTraceOpen] = useState(false);
 
   // Data & Pagination States
   const [isLoading, setIsLoading] = useState(true);
@@ -234,6 +248,7 @@ export default function TransactionsScreen() {
   const [currentUser, setCurrentUser] = useState<ProfileData | null>(null);
   const [cardDueMap, setCardDueMap] = useState<Record<string, number>>({});
   const [userCardCashMap, setUserCardCashMap] = useState<Record<string, Record<string, number>>>({});
+  const [userFamilySpendMap, setUserFamilySpendMap] = useState<Record<string, number>>({});
 
   // 120Hz Animation Values
   const cardDropdownScale = useSharedValue(1);
@@ -269,12 +284,13 @@ export default function TransactionsScreen() {
       const { data: authData } = await supabase.auth.getSession();
       const currentAuthUser = authData?.session?.user;
 
-      const [cardsRes, profilesRes, qrsRes, cohRes, cyclesRes] = await Promise.all([
+      const [cardsRes, profilesRes, qrsRes, cohRes, cyclesRes, spendsRes] = await Promise.all([
         supabase.from('cards').select('*').order('is_primary', { ascending: false }),
         supabase.from('profiles').select('*').order('name'),
         supabase.from('qrs').select('*').order('merchant_name'),
         supabase.from('cash_on_hand').select('*'),
         supabase.from('billing_cycles').select('*').in('status', ['unpaid', 'partially_paid']),
+        supabase.from('spends').select('user_id, amount'),
       ]);
 
       const cards: CardData[] = cardsRes.data || [];
@@ -313,6 +329,15 @@ export default function TransactionsScreen() {
         }
       });
       setCardDueMap(dMap);
+
+      // Calculate Personal Family Debt Map
+      const fMap: Record<string, number> = {};
+      (spendsRes.data || []).forEach((s: any) => {
+        if (s.user_id) {
+          fMap[s.user_id] = (fMap[s.user_id] || 0) + Number(s.amount || 0);
+        }
+      });
+      setUserFamilySpendMap(fMap);
     } catch (err) {
       console.error('Error fetching auxiliary data:', err);
     }
@@ -329,13 +354,29 @@ export default function TransactionsScreen() {
         }
 
         const now = new Date();
+        const todayStr = now.toISOString().slice(0, 10);
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1)
           .toISOString()
           .slice(0, 10);
         const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0)
           .toISOString()
           .slice(0, 10);
-        const todayStr = now.toISOString().slice(0, 10);
+        const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+          .toISOString()
+          .slice(0, 10);
+        const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0)
+          .toISOString()
+          .slice(0, 10);
+
+        let familyCardIds: string[] | null = null;
+        if (selectedVaultCardId !== 'all') {
+          familyCardIds = [selectedVaultCardId];
+          allCards.forEach((c) => {
+            if (c.parent_card_id === selectedVaultCardId) {
+              familyCardIds!.push(c.id);
+            }
+          });
+        }
 
         const from = pageNumber * PAGE_SIZE;
         const to = from + PAGE_SIZE - 1;
@@ -362,12 +403,20 @@ export default function TransactionsScreen() {
 
           if (filterDateType === 'month') {
             q = q.gte('transaction_date', startOfMonth).lte('transaction_date', endOfMonth);
+          } else if (filterDateType === 'last_month') {
+            q = q.gte('transaction_date', startOfLastMonth).lte('transaction_date', endOfLastMonth);
           } else if (filterDateType === 'today') {
             q = q.eq('transaction_date', todayStr);
+          } else if (filterDateType === 'custom' && customStartDate && customEndDate) {
+            q = q.gte('transaction_date', customStartDate).lte('transaction_date', customEndDate);
           }
 
-          if (selectedVaultCardId !== 'all') {
-            q = q.eq('card_id', selectedVaultCardId);
+          if (familyCardIds && familyCardIds.length > 0) {
+            if (familyCardIds.length === 1) {
+              q = q.eq('card_id', familyCardIds[0]);
+            } else {
+              q = q.in('card_id', familyCardIds);
+            }
           }
 
           if (filterUser !== 'all') {
@@ -391,12 +440,20 @@ export default function TransactionsScreen() {
 
           if (filterDateType === 'month') {
             q = q.gte('spend_date', startOfMonth).lte('spend_date', endOfMonth);
+          } else if (filterDateType === 'last_month') {
+            q = q.gte('spend_date', startOfLastMonth).lte('spend_date', endOfLastMonth);
           } else if (filterDateType === 'today') {
             q = q.eq('spend_date', todayStr);
+          } else if (filterDateType === 'custom' && customStartDate && customEndDate) {
+            q = q.gte('spend_date', customStartDate).lte('spend_date', customEndDate);
           }
 
-          if (selectedVaultCardId !== 'all') {
-            q = q.eq('card_id', selectedVaultCardId);
+          if (familyCardIds && familyCardIds.length > 0) {
+            if (familyCardIds.length === 1) {
+              q = q.eq('card_id', familyCardIds[0]);
+            } else {
+              q = q.in('card_id', familyCardIds);
+            }
           }
 
           if (filterUser !== 'all') {
@@ -448,7 +505,17 @@ export default function TransactionsScreen() {
         setRefreshing(false);
       }
     },
-    [activeTab, filterDateType, selectedVaultCardId, filterUser, allCards, allProfiles, allQrs]
+    [
+      activeTab,
+      filterDateType,
+      customStartDate,
+      customEndDate,
+      selectedVaultCardId,
+      filterUser,
+      allCards,
+      allProfiles,
+      allQrs,
+    ]
   );
 
   useEffect(() => {
@@ -723,6 +790,17 @@ export default function TransactionsScreen() {
             item={item}
             isExpanded={expandedId === item.id}
             onToggle={() => setExpandedId(expandedId === item.id ? null : item.id)}
+            onTrace={() => {
+              setTraceTarget({
+                id: item.rawId,
+                sourceType: item.type === 'spend' ? 'spend' : 'card_transaction',
+                title: item.title,
+                amount: item.amount,
+                date: item.displayDate,
+                remarks: item.remarks,
+              });
+              setIsTraceOpen(true);
+            }}
           />
         </View>
       );
@@ -891,10 +969,16 @@ export default function TransactionsScreen() {
         </TouchableOpacity>
 
         {/* Date Filter Pills */}
-        {(['month', 'today', 'all'] as const).map((dType) => {
+        {(['month', 'last_month', 'today', 'all'] as const).map((dType) => {
           const isDateActive = filterDateType === dType;
           const dateLabel =
-            dType === 'month' ? 'This Month' : dType === 'today' ? 'Today' : 'All Time';
+            dType === 'month'
+              ? 'This Month'
+              : dType === 'last_month'
+              ? 'Last Month'
+              : dType === 'today'
+              ? 'Today'
+              : 'All Time';
           return (
             <TouchableOpacity
               key={dType}
@@ -918,6 +1002,25 @@ export default function TransactionsScreen() {
             </TouchableOpacity>
           );
         })}
+
+        {/* Custom Date Range Pill */}
+        <TouchableOpacity
+          style={[styles.filterChip, filterDateType === 'custom' && styles.activeFilterChip]}
+          onPress={() => setIsCustomDateModalOpen(true)}
+          activeOpacity={0.8}
+        >
+          <Calendar size={11} color={filterDateType === 'custom' ? '#072C1C' : '#4A6B56'} />
+          <Text
+            style={[
+              styles.filterChipText,
+              filterDateType === 'custom' && styles.activeFilterChipText,
+            ]}
+          >
+            {filterDateType === 'custom' && customStartDate && customEndDate
+              ? `${customStartDate.slice(5)} - ${customEndDate.slice(5)}`
+              : 'Custom'}
+          </Text>
+        </TouchableOpacity>
       </View>
 
       {/* ================= 4. VIRTUALIZED FLATLIST FEED ================= */}
@@ -1099,6 +1202,100 @@ export default function TransactionsScreen() {
         </TouchableOpacity>
       </Modal>
 
+      {/* ================= CUSTOM DATE RANGE MODAL ================= */}
+      <Modal
+        visible={isCustomDateModalOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setIsCustomDateModalOpen(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setIsCustomDateModalOpen(false)}
+        >
+          <View
+            style={[styles.modalCard, { width: SCREEN_WIDTH - 48 }]}
+            onStartShouldSetResponder={() => true}
+          >
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Custom Date Range</Text>
+              <TouchableOpacity onPress={() => setIsCustomDateModalOpen(false)}>
+                <X size={16} color="#4A6B56" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={{ gap: 10, marginVertical: 12 }}>
+              <View>
+                <Text style={styles.dateInputLabel}>Start Date (YYYY-MM-DD)</Text>
+                <TextInput
+                  style={styles.dateTextInput}
+                  placeholder="2026-10-01"
+                  placeholderTextColor="#7E9185"
+                  value={customStartDate}
+                  onChangeText={setCustomStartDate}
+                />
+              </View>
+
+              <View>
+                <Text style={styles.dateInputLabel}>End Date (YYYY-MM-DD)</Text>
+                <TextInput
+                  style={styles.dateTextInput}
+                  placeholder="2026-10-31"
+                  placeholderTextColor="#7E9185"
+                  value={customEndDate}
+                  onChangeText={setCustomEndDate}
+                />
+              </View>
+            </View>
+
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
+              <TouchableOpacity
+                style={styles.presetBtn}
+                onPress={() => {
+                  const now = new Date();
+                  const end = now.toISOString().slice(0, 10);
+                  const start = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
+                    .toISOString()
+                    .slice(0, 10);
+                  setCustomStartDate(start);
+                  setCustomEndDate(end);
+                }}
+              >
+                <Text style={styles.presetBtnText}>Last 30 Days</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.presetBtn}
+                onPress={() => {
+                  const now = new Date();
+                  const end = now.toISOString().slice(0, 10);
+                  const start = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000)
+                    .toISOString()
+                    .slice(0, 10);
+                  setCustomStartDate(start);
+                  setCustomEndDate(end);
+                }}
+              >
+                <Text style={styles.presetBtnText}>Last 90 Days</Text>
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity
+              style={styles.applyDateBtn}
+              onPress={() => {
+                if (customStartDate && customEndDate) {
+                  setFilterDateType('custom');
+                }
+                setIsCustomDateModalOpen(false);
+              }}
+            >
+              <Text style={styles.applyDateBtnText}>Apply Date Filter</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
       {/* ================= RECORD ENTRY MODULAR DRAWER ================= */}
       <RecordEntryDrawer
         visible={isRecordModalOpen}
@@ -1111,6 +1308,17 @@ export default function TransactionsScreen() {
         currentUserId={currentUser?.id}
         cardDueMap={cardDueMap}
         userCardCashMap={userCardCashMap}
+        userFamilySpendMap={userFamilySpendMap}
+      />
+
+      {/* ================= LIVE TRANSACTION TRACE BOTTOM SHEET ================= */}
+      <TransactionTraceBottomSheet
+        target={traceTarget}
+        isOpen={isTraceOpen}
+        onClose={() => {
+          setIsTraceOpen(false);
+          setTraceTarget(null);
+        }}
       />
     </View>
   );
@@ -1469,5 +1677,78 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: '#4A6B56',
     marginTop: 1,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  modalCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#DFE8E0',
+  },
+  modalTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#072C1C',
+  },
+  dateInputLabel: {
+    fontSize: 11,
+    color: '#4A6B56',
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  dateTextInput: {
+    backgroundColor: '#EFF3EE',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#DFE8E0',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    fontSize: 12,
+    color: '#072C1C',
+    fontWeight: '600',
+  },
+  presetBtn: {
+    flex: 1,
+    paddingVertical: 6,
+    backgroundColor: '#EFF3EE',
+    borderRadius: 8,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#DFE8E0',
+  },
+  presetBtnText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#4A6B56',
+  },
+  applyDateBtn: {
+    backgroundColor: '#0B3F28',
+    borderRadius: 12,
+    paddingVertical: 10,
+    alignItems: 'center',
+    marginTop: 12,
+  },
+  applyDateBtnText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#F6F9F5',
   },
 });

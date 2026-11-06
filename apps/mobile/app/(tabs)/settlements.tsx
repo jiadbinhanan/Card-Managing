@@ -46,6 +46,8 @@ import { SettledHistoryTab, SettledTransaction } from '../../components/settleme
 import { QRPaymentModal, QRData, CardData } from '../../components/settlements/QRPaymentModal';
 import { SettleConfirmModal, Profile } from '../../components/settlements/SettleConfirmModal';
 import { AddQRDrawer } from '../../components/settlements/AddQRDrawer';
+import { EditQRDrawer } from '../../components/settlements/EditQRDrawer';
+import { ManualRotationDrawer } from '../../components/settlements/ManualRotationDrawer';
 import { TherapeuticSuccessModal } from '../../components/settlements/TherapeuticSuccessModal';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
@@ -83,6 +85,8 @@ export default function SettlementsScreen() {
   const [selectedQrForPayment, setSelectedQrForPayment] = useState<QRData | null>(null);
   const [selectedTxForSettle, setSelectedTxForSettle] = useState<InTransitTransaction | null>(null);
   const [isAddQrOpen, setIsAddQrOpen] = useState(false);
+  const [isManualRotationOpen, setIsManualRotationOpen] = useState(false);
+  const [editingQr, setEditingQr] = useState<QRData | null>(null);
 
   // Therapeutic Celebration State
   const [successModalVisible, setSuccessModalVisible] = useState(false);
@@ -283,7 +287,12 @@ export default function SettlementsScreen() {
           .order('settled_date', { ascending: false });
 
         if (selectedVaultCardId !== 'all') {
-          q = q.eq('card_id', selectedVaultCardId);
+          const selected = cards.find((c) => c.id === selectedVaultCardId);
+          const primaryId = selected?.is_primary ? selected.id : (selected?.parent_card_id || selectedVaultCardId);
+          const familyIds = cards
+            .filter((c) => c.id === primaryId || c.parent_card_id === primaryId)
+            .map((c) => c.id);
+          q = q.in('card_id', familyIds.length > 0 ? familyIds : [selectedVaultCardId]);
         }
 
         const { data: rawSettled } = await q.range(from, to);
@@ -401,10 +410,11 @@ export default function SettlementsScreen() {
     remarks,
   }: {
     cardId: string;
-    qrId: string;
+    qrId?: string | null;
     amount: number;
     remarks: string;
   }) => {
+    const cleanQrId = qrId && qrId.trim() ? qrId.trim() : null;
     const today = new Date().toISOString().slice(0, 10);
     const originalCreatedAt = new Date().toISOString();
     const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
@@ -418,7 +428,7 @@ export default function SettlementsScreen() {
         payload: {
           activeCardId: cardId,
           numAmount: amount,
-          selectedQrId: qrId,
+          selectedQrId: cleanQrId,
           remarks,
           actingUserId: currentUser?.id,
         },
@@ -438,7 +448,7 @@ export default function SettlementsScreen() {
     try {
       const { error: txError } = await supabase.from('card_transactions').insert({
         card_id: cardId,
-        qr_id: qrId,
+        qr_id: cleanQrId,
         amount,
         transaction_date: today,
         created_at: originalCreatedAt,
@@ -449,7 +459,9 @@ export default function SettlementsScreen() {
       });
       if (txError) throw txError;
 
-      await supabase.from('qrs').update({ last_used_date: originalCreatedAt }).eq('id', qrId);
+      if (cleanQrId) {
+        await supabase.from('qrs').update({ last_used_date: originalCreatedAt }).eq('id', cleanQrId);
+      }
 
       // Rule 4: Haptics on save
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -468,7 +480,7 @@ export default function SettlementsScreen() {
         payload: {
           activeCardId: cardId,
           numAmount: amount,
-          selectedQrId: qrId,
+          selectedQrId: cleanQrId,
           remarks,
           actingUserId: currentUser?.id,
         },
@@ -634,11 +646,16 @@ export default function SettlementsScreen() {
     return link.trim();
   };
 
-  // Filtered lists by selected vault card
+  // Filtered lists by selected vault card family
   const filteredPending = useMemo(() => {
     if (selectedVaultCardId === 'all') return pendingTxs;
-    return pendingTxs.filter((t) => t.card_id === selectedVaultCardId);
-  }, [pendingTxs, selectedVaultCardId]);
+    const selected = cards.find((c) => c.id === selectedVaultCardId);
+    const primaryId = selected?.is_primary ? selected.id : (selected?.parent_card_id || selectedVaultCardId);
+    const familyIds = cards
+      .filter((c) => c.id === primaryId || c.parent_card_id === primaryId)
+      .map((c) => c.id);
+    return pendingTxs.filter((t) => t.card_id && (t.card_id === selectedVaultCardId || familyIds.includes(t.card_id)));
+  }, [pendingTxs, selectedVaultCardId, cards]);
 
   // Total In Transit Calculation
   const totalInTransit = useMemo(() => {
@@ -811,6 +828,7 @@ export default function SettlementsScreen() {
               currentUserName={currentUser?.name || ''}
               onSelectQr={(qr) => setSelectedQrForPayment(qr)}
               onToggleStatus={handleToggleQrStatus}
+              onEditQr={(qr) => setEditingQr(qr)}
             />
           )}
 
@@ -819,6 +837,7 @@ export default function SettlementsScreen() {
             <InTransitTab
               transactions={filteredPending}
               onSettle={(tx) => setSelectedTxForSettle(tx)}
+              onNewManualEntry={() => setIsManualRotationOpen(true)}
             />
           )}
         </ScrollView>
@@ -872,6 +891,29 @@ export default function SettlementsScreen() {
         onClose={() => setIsAddQrOpen(false)}
         cards={cards}
         onSaveQR={handleSaveNewQR}
+      />
+
+      {/* Manual Rotation Drawer (Off-QR or Direct Entry) */}
+      <ManualRotationDrawer
+        visible={isManualRotationOpen}
+        onClose={() => setIsManualRotationOpen(false)}
+        cards={cards}
+        qrs={qrs}
+        cardAvailableMap={cardAvailableMap}
+        onSaveRotation={async ({ cardId, qrId, amount, remarks }) => {
+          await handleRecordRotation({ cardId, qrId: qrId || '', amount, remarks });
+          setIsManualRotationOpen(false);
+        }}
+      />
+
+      {/* Edit QR Drawer */}
+      <EditQRDrawer
+        visible={!!editingQr}
+        onClose={() => setEditingQr(null)}
+        qr={editingQr}
+        onSaveSuccess={async () => {
+          await fetchCoreData();
+        }}
       />
 
       {/* Therapeutic Success Celebration Modal */}

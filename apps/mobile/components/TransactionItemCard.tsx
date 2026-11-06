@@ -12,6 +12,7 @@ import {
   Wallet,
   Receipt,
   ChevronDown,
+  ArrowLeftRight,
 } from 'lucide-react-native';
 
 export interface CashSourceBreakdownItem {
@@ -47,12 +48,14 @@ interface TransactionItemCardProps {
   item: UnifiedTransactionItem;
   isExpanded: boolean;
   onToggle: () => void;
+  onTrace?: () => void;
 }
 
 export const TransactionItemCard = React.memo(function TransactionItemCard({
   item,
   isExpanded,
   onToggle,
+  onTrace,
 }: TransactionItemCardProps) {
   const isNegative =
     item.type === 'withdrawal' || (item.type === 'spend' && !item.isRepaymentFlag);
@@ -181,6 +184,17 @@ export const TransactionItemCard = React.memo(function TransactionItemCard({
               <Text style={styles.remarksText}>{item.remarks}</Text>
             </View>
           ) : null}
+
+          {/* Journey Trace Flow Button */}
+          {onTrace && (
+            <Pressable
+              style={styles.traceBtn}
+              onPress={onTrace}
+            >
+              <ArrowLeftRight size={13} color="#2D7A5D" strokeWidth={2.4} />
+              <Text style={styles.traceBtnText}>View DB Trace Flow</Text>
+            </Pressable>
+          )}
         </View>
       )}
     </Pressable>
@@ -188,6 +202,24 @@ export const TransactionItemCard = React.memo(function TransactionItemCard({
 });
 
 const styles = StyleSheet.create({
+  traceBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(45, 122, 93, 0.1)',
+    borderRadius: 12,
+    paddingVertical: 8,
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(45, 122, 93, 0.25)',
+  },
+  traceBtnText: {
+    fontSize: 11,
+    fontFamily: CedarTypography.bodySemiBold,
+    fontWeight: '700',
+    color: '#2D7A5D',
+  },
   txCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: 20,

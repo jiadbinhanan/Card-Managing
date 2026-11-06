@@ -174,6 +174,36 @@ export function SettleConfirmModal({
           </View>
         )}
 
+        {/* Past Milestones if partial settlement history exists */}
+        {tx.settlement_details?.history && tx.settlement_details.history.length > 0 && (
+          <View style={styles.sectionBox}>
+            <Text style={styles.fieldLabel}>
+              Past Settlement Milestones ({tx.settlement_details.history.length})
+            </Text>
+            <View style={styles.milestonesList}>
+              {tx.settlement_details.history.map((h, i) => (
+                <View key={h.settle_id || i} style={styles.milestoneItem}>
+                  <View style={styles.milestoneDot} />
+                  <View style={styles.milestoneContent}>
+                    <Text style={styles.milestoneAmount}>
+                      +₹{Number(h.amount).toLocaleString('en-IN')}
+                    </Text>
+                    <Text style={styles.milestoneSub}>
+                      {h.settled_date
+                        ? new Date(h.settled_date).toLocaleDateString('en-GB', {
+                            day: 'numeric',
+                            month: 'short',
+                          })
+                        : 'Settled'}
+                      {h.remarks ? ` • ${h.remarks}` : ''}
+                    </Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          </View>
+        )}
+
         {/* Cash Receiver Selector */}
         <View style={styles.sectionBox}>
           <Text style={styles.fieldLabel}>Cash Receiver</Text>
@@ -410,6 +440,43 @@ const styles = StyleSheet.create({
   },
   cardChipSubActive: {
     color: '#CAD6C9',
+  },
+  milestonesList: {
+    gap: 8,
+    marginTop: 4,
+  },
+  milestoneItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    backgroundColor: '#F0FDF4',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#DCFCE7',
+  },
+  milestoneDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#10B981',
+  },
+  milestoneContent: {
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  milestoneAmount: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#15803D',
+  },
+  milestoneSub: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#658270',
   },
   footerContainer: {
     paddingHorizontal: 20,

@@ -36,6 +36,8 @@ import { SwipeDownDrawer, DrawerScrollView } from '../../components/SwipeDownDra
 import { HapticButton } from '../../components/HapticButton';
 import { HomeSkeleton } from '../../components/Skeleton';
 import { HeroCardLimitChart, CardLimitStat } from '../../components/HeroCardLimitChart';
+import { UrgentBillBottomSheet } from '../../components/UrgentBillBottomSheet';
+import { broadcastBillEntryAlert } from '../../lib/alertDispatcher';
 import { supabase } from '../../lib/supabase';
 import {
   useDashboardStore,
@@ -75,6 +77,7 @@ import {
   ArrowRight,
   ChevronRight,
   Clock,
+  AlertTriangle,
 } from 'lucide-react-native';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -118,11 +121,37 @@ export default function HomeScreen() {
   // Billing Cycle State
   const [showNotificationPanel, setShowNotificationPanel] = useState<boolean>(false);
   const [isBillModalOpen, setIsBillModalOpen] = useState(false);
+  const [isUrgentBillOpen, setIsUrgentBillOpen] = useState(false);
   const [billFormCardId, setBillFormCardId] = useState('');
   const [billFormMonth, setBillFormMonth] = useState('');
   const [billFormGenAmount, setBillFormGenAmount] = useState('');
   const [billFormPaidAmount, setBillFormPaidAmount] = useState('');
   const [isSavingBill, setIsSavingBill] = useState(false);
+
+  // Pending Bills & Urgency Calculation
+  const pendingBills = useMemo(() => {
+    return activeBills.filter((b) => {
+      const due = Number(b.generated_amount) - Number(b.paid_amount || 0);
+      return b.status !== 'paid' && due > 0;
+    });
+  }, [activeBills]);
+
+  const totalPendingDue = useMemo(() => {
+    return pendingBills.reduce((sum, b) => {
+      const due = Number(b.generated_amount) - Number(b.paid_amount || 0);
+      return sum + due;
+    }, 0);
+  }, [pendingBills]);
+
+  const mostUrgentBill = useMemo(() => {
+    if (pendingBills.length === 0) return null;
+    return pendingBills[0];
+  }, [pendingBills]);
+
+  const mostUrgentCard = useMemo(() => {
+    if (!mostUrgentBill) return null;
+    return accessibleCards.find((c) => c.id === mostUrgentBill.card_id) || null;
+  }, [mostUrgentBill, accessibleCards]);
 
   // Cash & Repayment Analytics State
   const [selectedUserStat, setSelectedUserStat] = useState<UserStat | null>(null);
@@ -465,6 +494,20 @@ export default function HomeScreen() {
       setBillFormGenAmount('');
       setBillFormPaidAmount('');
       fetchDashboardData();
+
+      // Broadcast WhatsApp and Push alerts to family members
+      const selectedCard = accessibleCards.find((c) => c.id === billFormCardId);
+      const { data: allProfiles } = await supabase.from('profiles').select('id, name, phone');
+      if (selectedCard && allProfiles) {
+        broadcastBillEntryAlert({
+          cardName: selectedCard.card_name,
+          last4Digits: selectedCard.last_4_digits,
+          billMonth: billFormMonth,
+          billAmount: generated,
+          dueDay: selectedCard.bill_due_day || 26,
+          profiles: allProfiles,
+        }).catch((err) => console.error('Failed to broadcast bill entry alert:', err));
+      }
     } catch (err: any) {
       Alert.alert('Error', err?.message || 'Failed to save bill cycle.');
     } finally {
@@ -809,6 +852,45 @@ export default function HomeScreen() {
               </View>
 
               <View style={styles.billingDivider} />
+
+              {/* 100% Paid Celebration Banner */}
+              {activeBills.length > 0 && pendingBills.length === 0 && (
+                <View style={styles.celebrationBanner}>
+                  <View style={styles.celebrationIconCircle}>
+                    <CheckCircle2 size={16} color="#15803D" strokeWidth={2.5} />
+                  </View>
+                  <View style={styles.celebrationTextCol}>
+                    <Text style={styles.celebrationTitle}>All Card Bills Cleared</Text>
+                    <Text style={styles.celebrationSub}>
+                      100% debt-free across all credit vaults for this cycle.
+                    </Text>
+                  </View>
+                </View>
+              )}
+
+              {/* Urgent Bill Alert Pill (when daysToBill <= 3 and due > 0) */}
+              {daysToBill <= 3 && totalPendingDue > 0 && (
+                <TouchableOpacity
+                  activeOpacity={0.88}
+                  onPress={() => setIsUrgentBillOpen(true)}
+                  style={styles.urgentAlertBanner}
+                >
+                  <View style={styles.urgentAlertLeft}>
+                    <View style={styles.urgentAlertPulse}>
+                      <AlertTriangle size={15} color="#DC2626" />
+                    </View>
+                    <View>
+                      <Text style={styles.urgentAlertTitle}>
+                        {daysToBill <= 1 ? 'Bill Due in 24 Hours' : `Bill Due in ${daysToBill} Days`}
+                      </Text>
+                      <Text style={styles.urgentAlertSub}>
+                        ₹{totalPendingDue.toLocaleString('en-IN')} pending • Tap to review & pay
+                      </Text>
+                    </View>
+                  </View>
+                  <ArrowRight size={16} color="#DC2626" />
+                </TouchableOpacity>
+              )}
 
               {/* Billing Items Inside Master Card */}
               {activeBills.length === 0 ? (
@@ -1846,11 +1928,11 @@ export default function HomeScreen() {
           visible={showNotificationPanel}
           onClose={() => setShowNotificationPanel(false)}
           urgentBill={
-            daysToBill <= 3
+            daysToBill <= 3 && totalPendingDue > 0
               ? {
-                  cardName: getActiveCardName(),
-                  last4Digits: accessibleCards[0]?.last_4_digits || '0000',
-                  dueAmount: availableLimit > 0 ? 45000 : 0,
+                  cardName: mostUrgentCard?.card_name || getActiveCardName(),
+                  last4Digits: mostUrgentCard?.last_4_digits || accessibleCards[0]?.last_4_digits || '0000',
+                  dueAmount: totalPendingDue,
                   dueDate: nextBillDate || 'Soon',
                   daysLeft: daysToBill,
                   onPayNow: () => {
@@ -1864,6 +1946,25 @@ export default function HomeScreen() {
                 }
               : null
           }
+        />
+
+        {/* ================= 4. URGENT BILL BOTTOM SHEET ================= */}
+        <UrgentBillBottomSheet
+          visible={isUrgentBillOpen}
+          cardName={mostUrgentCard?.card_name || getActiveCardName()}
+          last4Digits={mostUrgentCard?.last_4_digits || accessibleCards[0]?.last_4_digits || '0000'}
+          dueAmount={totalPendingDue}
+          dueDate={nextBillDate || 'Soon'}
+          daysLeft={daysToBill}
+          onClose={() => setIsUrgentBillOpen(false)}
+          onPayNow={() => {
+            setIsUrgentBillOpen(false);
+            router.push('/(tabs)/transactions');
+          }}
+          onRotateLimit={() => {
+            setIsUrgentBillOpen(false);
+            router.push('/(tabs)/settlements');
+          }}
         />
       </View>
     </View>
@@ -3288,5 +3389,76 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontFamily: CedarTypography.bodyBold,
     fontWeight: '900',
+  },
+  celebrationBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(21, 128, 61, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(21, 128, 61, 0.25)',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 12,
+    gap: 10,
+  },
+  celebrationIconCircle: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(21, 128, 61, 0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  celebrationTextCol: {
+    flex: 1,
+  },
+  celebrationTitle: {
+    fontSize: 13,
+    fontFamily: CedarTypography.bodyBold,
+    fontWeight: '800',
+    color: '#15803D',
+  },
+  celebrationSub: {
+    fontSize: 11,
+    fontFamily: CedarTypography.body,
+    color: '#4A6B56',
+    marginTop: 2,
+  },
+  urgentAlertBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 12,
+  },
+  urgentAlertLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  urgentAlertPulse: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#FEE2E2',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  urgentAlertTitle: {
+    fontSize: 12,
+    fontFamily: CedarTypography.bodyBold,
+    fontWeight: '800',
+    color: '#DC2626',
+  },
+  urgentAlertSub: {
+    fontSize: 11,
+    fontFamily: CedarTypography.body,
+    color: '#991B1B',
+    marginTop: 1,
   },
 });
