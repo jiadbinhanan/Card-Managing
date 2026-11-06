@@ -120,7 +120,7 @@ export const TransactionItemCard = React.memo(function TransactionItemCard({
           </Text>
           <View style={styles.chevronRow}>
             <Text style={styles.txCardPillText}>
-              {item.cardDetails.split(' ')[0]}
+              {item.cardDetails ? item.cardDetails.split(' ')[0] : 'Card'}
             </Text>
             <ChevronDown
               size={12}

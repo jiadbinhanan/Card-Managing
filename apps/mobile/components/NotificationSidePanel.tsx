@@ -18,7 +18,7 @@ import Animated, {
   interpolate,
   Extrapolation,
 } from 'react-native-reanimated';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import { CedarColors, CedarTypography } from '@credics/core';
 import { HapticButton } from './HapticButton';
 import {
@@ -178,7 +178,8 @@ export function NotificationSidePanel({
       onRequestClose={handleDismiss}
       statusBarTranslucent
     >
-      <View style={styles.container}>
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <View style={styles.container}>
         {/* Separate backdrop overlay - NEVER wraps the panel so panel is never dimmed */}
         <Animated.View style={[styles.backdrop, animatedBackdropStyle]}>
           <Pressable style={StyleSheet.absoluteFill} onPress={handleDismiss} />
@@ -331,7 +332,8 @@ export function NotificationSidePanel({
           </Animated.View>
         </GestureDetector>
       </View>
-    </Modal>
+    </GestureHandlerRootView>
+  </Modal>
   );
 }
 

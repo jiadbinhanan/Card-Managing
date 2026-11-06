@@ -19,7 +19,7 @@ import Animated, {
   interpolate,
   Extrapolation,
 } from 'react-native-reanimated';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import { CedarColors, CedarTypography } from '@credics/core';
 import { X } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -199,38 +199,40 @@ export function SwipeDownDrawer({
       onRequestClose={handleDismiss}
       statusBarTranslucent
     >
-      <View style={styles.overlay}>
-        {/* Backdrop (separate sibling view) */}
-        <Animated.View style={[styles.backdrop, animatedBackdropStyle]}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={handleDismiss} />
-        </Animated.View>
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <View style={styles.overlay}>
+          {/* Backdrop (separate sibling view) */}
+          <Animated.View style={[styles.backdrop, animatedBackdropStyle]}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={handleDismiss} />
+          </Animated.View>
 
-        {/* Bottom Drawer Container */}
-        <Animated.View
-          style={[
-            styles.sheet,
-            { height: SHEET_HEIGHT },
-            animatedSheetStyle,
-          ]}
-        >
-          <LinearGradient
-            colors={gradientColors || ['#041009', '#081E15', '#0E2E20']}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
+          {/* Bottom Drawer Container */}
+          <Animated.View
             style={[
-              StyleSheet.absoluteFill,
-              {
-                borderTopLeftRadius: 32,
-                borderTopRightRadius: 32,
-                borderBottomLeftRadius: 0,
-                borderBottomRightRadius: 0,
-              },
+              styles.sheet,
+              { height: SHEET_HEIGHT },
+              animatedSheetStyle,
             ]}
           >
-            {contentContainer}
-          </LinearGradient>
-        </Animated.View>
-      </View>
+            <LinearGradient
+              colors={gradientColors || ['#041009', '#081E15', '#0E2E20']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={[
+                StyleSheet.absoluteFill,
+                {
+                  borderTopLeftRadius: 32,
+                  borderTopRightRadius: 32,
+                  borderBottomLeftRadius: 0,
+                  borderBottomRightRadius: 0,
+                },
+              ]}
+            >
+              {contentContainer}
+            </LinearGradient>
+          </Animated.View>
+        </View>
+      </GestureHandlerRootView>
     </Modal>
   );
 }

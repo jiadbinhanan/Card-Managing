@@ -6,6 +6,8 @@ import {
   FlatList,
   RefreshControl,
   TouchableOpacity,
+  Pressable,
+  ScrollView,
   Modal,
   ActivityIndicator,
   Image,
@@ -58,7 +60,7 @@ import {
   TraceTarget,
 } from '../../components/TransactionTraceBottomSheet';
 
-const SCREEN_WIDTH = Dimensions.get('window').width;
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const PAGE_SIZE = 20;
 
 function mapTxToUnified(
@@ -1074,132 +1076,156 @@ export default function TransactionsScreen() {
       </Animated.View>
 
       {/* ================= CARD FILTER MODAL ================= */}
-      <Modal visible={isCardDropdownOpen} transparent animationType="fade">
-        <TouchableOpacity
-          style={styles.modalBackdrop}
-          activeOpacity={1}
-          onPress={() => setIsCardDropdownOpen(false)}
-        >
+      <Modal
+        visible={isCardDropdownOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setIsCardDropdownOpen(false)}
+        statusBarTranslucent
+      >
+        <View style={styles.modalBackdrop}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => setIsCardDropdownOpen(false)}
+          />
           <View style={styles.filterMenuBox}>
             <View style={styles.filterMenuHeader}>
               <Text style={styles.filterMenuTitle}>Select Vault Card</Text>
-              <TouchableOpacity onPress={() => setIsCardDropdownOpen(false)}>
+              <TouchableOpacity onPress={() => setIsCardDropdownOpen(false)} hitSlop={10}>
                 <X size={16} color="#4A6B56" />
               </TouchableOpacity>
             </View>
 
-            <TouchableOpacity
-              style={[
-                styles.menuOption,
-                selectedVaultCardId === 'all' && styles.menuOptionActive,
-              ]}
-              onPress={() => {
-                setSelectedVaultCardId('all');
-                setIsCardDropdownOpen(false);
-              }}
+            <ScrollView
+              style={{ maxHeight: SCREEN_HEIGHT * 0.55 }}
+              showsVerticalScrollIndicator={false}
+              bounces={false}
             >
-              <Text
+              <TouchableOpacity
                 style={[
-                  styles.menuOptionText,
-                  selectedVaultCardId === 'all' && styles.menuOptionTextActive,
+                  styles.menuOption,
+                  selectedVaultCardId === 'all' && styles.menuOptionActive,
                 ]}
+                onPress={() => {
+                  setSelectedVaultCardId('all');
+                  setIsCardDropdownOpen(false);
+                }}
               >
-                All Vault Cards
-              </Text>
-              {selectedVaultCardId === 'all' && <Check size={14} color="#0B3F28" />}
-            </TouchableOpacity>
-
-            {allCards.map((card) => {
-              const isSelected = selectedVaultCardId === card.id;
-              return (
-                <TouchableOpacity
-                  key={card.id}
-                  style={[styles.menuOption, isSelected && styles.menuOptionActive]}
-                  onPress={() => {
-                    setSelectedVaultCardId(card.id);
-                    setIsCardDropdownOpen(false);
-                  }}
+                <Text
+                  style={[
+                    styles.menuOptionText,
+                    selectedVaultCardId === 'all' && styles.menuOptionTextActive,
+                  ]}
                 >
-                  <View>
+                  All Vault Cards
+                </Text>
+                {selectedVaultCardId === 'all' && <Check size={14} color="#0B3F28" />}
+              </TouchableOpacity>
+
+              {allCards.map((card) => {
+                const isSelected = selectedVaultCardId === card.id;
+                return (
+                  <TouchableOpacity
+                    key={card.id}
+                    style={[styles.menuOption, isSelected && styles.menuOptionActive]}
+                    onPress={() => {
+                      setSelectedVaultCardId(card.id);
+                      setIsCardDropdownOpen(false);
+                    }}
+                  >
+                    <View>
+                      <Text
+                        style={[
+                          styles.menuOptionText,
+                          isSelected && styles.menuOptionTextActive,
+                        ]}
+                      >
+                        {card.card_name}
+                      </Text>
+                      <Text style={styles.menuOptionSub}>**{card.last_4_digits}</Text>
+                    </View>
+                    {isSelected && <Check size={14} color="#0B3F28" />}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ================= USER FILTER MODAL ================= */}
+      <Modal
+        visible={isUserFilterModalOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setIsUserFilterModalOpen(false)}
+        statusBarTranslucent
+      >
+        <View style={styles.modalBackdrop}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => setIsUserFilterModalOpen(false)}
+          />
+          <View style={styles.filterMenuBox}>
+            <View style={styles.filterMenuHeader}>
+              <Text style={styles.filterMenuTitle}>Filter By User</Text>
+              <TouchableOpacity onPress={() => setIsUserFilterModalOpen(false)} hitSlop={10}>
+                <X size={16} color="#4A6B56" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView
+              style={{ maxHeight: SCREEN_HEIGHT * 0.55 }}
+              showsVerticalScrollIndicator={false}
+              bounces={false}
+            >
+              <TouchableOpacity
+                style={[
+                  styles.menuOption,
+                  filterUser === 'all' && styles.menuOptionActive,
+                ]}
+                onPress={() => {
+                  setFilterUser('all');
+                  setIsUserFilterModalOpen(false);
+                }}
+              >
+                <Text
+                  style={[
+                    styles.menuOptionText,
+                    filterUser === 'all' && styles.menuOptionTextActive,
+                  ]}
+                >
+                  All Users
+                </Text>
+                {filterUser === 'all' && <Check size={14} color="#0B3F28" />}
+              </TouchableOpacity>
+
+              {allProfiles.map((prof) => {
+                const isSelected = filterUser === prof.id;
+                return (
+                  <TouchableOpacity
+                    key={prof.id}
+                    style={[styles.menuOption, isSelected && styles.menuOptionActive]}
+                    onPress={() => {
+                      setFilterUser(prof.id);
+                      setIsUserFilterModalOpen(false);
+                    }}
+                  >
                     <Text
                       style={[
                         styles.menuOptionText,
                         isSelected && styles.menuOptionTextActive,
                       ]}
                     >
-                      {card.card_name}
+                      {prof.name}
                     </Text>
-                    <Text style={styles.menuOptionSub}>**{card.last_4_digits}</Text>
-                  </View>
-                  {isSelected && <Check size={14} color="#0B3F28" />}
-                </TouchableOpacity>
-              );
-            })}
+                    {isSelected && <Check size={14} color="#0B3F28" />}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
           </View>
-        </TouchableOpacity>
-      </Modal>
-
-      {/* ================= USER FILTER MODAL ================= */}
-      <Modal visible={isUserFilterModalOpen} transparent animationType="fade">
-        <TouchableOpacity
-          style={styles.modalBackdrop}
-          activeOpacity={1}
-          onPress={() => setIsUserFilterModalOpen(false)}
-        >
-          <View style={styles.filterMenuBox}>
-            <View style={styles.filterMenuHeader}>
-              <Text style={styles.filterMenuTitle}>Filter By User</Text>
-              <TouchableOpacity onPress={() => setIsUserFilterModalOpen(false)}>
-                <X size={16} color="#4A6B56" />
-              </TouchableOpacity>
-            </View>
-
-            <TouchableOpacity
-              style={[
-                styles.menuOption,
-                filterUser === 'all' && styles.menuOptionActive,
-              ]}
-              onPress={() => {
-                setFilterUser('all');
-                setIsUserFilterModalOpen(false);
-              }}
-            >
-              <Text
-                style={[
-                  styles.menuOptionText,
-                  filterUser === 'all' && styles.menuOptionTextActive,
-                ]}
-              >
-                All Users
-              </Text>
-              {filterUser === 'all' && <Check size={14} color="#0B3F28" />}
-            </TouchableOpacity>
-
-            {allProfiles.map((prof) => {
-              const isSelected = filterUser === prof.id;
-              return (
-                <TouchableOpacity
-                  key={prof.id}
-                  style={[styles.menuOption, isSelected && styles.menuOptionActive]}
-                  onPress={() => {
-                    setFilterUser(prof.id);
-                    setIsUserFilterModalOpen(false);
-                  }}
-                >
-                  <Text
-                    style={[
-                      styles.menuOptionText,
-                      isSelected && styles.menuOptionTextActive,
-                    ]}
-                  >
-                    {prof.name}
-                  </Text>
-                  {isSelected && <Check size={14} color="#0B3F28" />}
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </TouchableOpacity>
+        </View>
       </Modal>
 
       {/* ================= CUSTOM DATE RANGE MODAL ================= */}
