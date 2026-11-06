@@ -88,7 +88,7 @@ export function calculateCardLimits(params: {
   const utilizedLimit = Math.max(0, totalLimit - availableLimit);
 
   const availablePercentage = totalLimit > 0
-    ? Math.max(0, Math.min(100, Math.round((availableLimit / totalLimit) * 100)))
+    ? Math.max(0, Math.min(100, Math.round((availableLimit * 100) / totalLimit)))
     : 0;
 
   const utilizationPercentage = totalLimit > 0

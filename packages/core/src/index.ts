@@ -6,3 +6,5 @@ export * from './alerts';
 export * from './store';
 export * from './theme/cedarTokens';
 export * from './supabase/client';
+export * from './offline/mutationQueue';
+

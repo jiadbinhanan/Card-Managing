@@ -91,3 +91,47 @@ export function buildCashTransferLedgerEntries(params: {
 
   return { senderEntry, receiverEntry };
 }
+
+export interface CashShortageResolution {
+  totalAvailableCash: number;
+  cashPaid: number;
+  pocketAdvanceDeficit: number;
+  isShortage: boolean;
+  allocations: Array<{ cardId: string; amount: number }>;
+}
+
+/**
+ * Resolves multi-card cash deduction and calculates pocket advance deficit when cash is insufficient.
+ */
+export function resolveCashShortageWithPocketAdvance(
+  targetAmount: number,
+  cardBalances: Record<string, number>
+): CashShortageResolution {
+  const cardIds = Object.keys(cardBalances);
+  let remainingTarget = targetAmount;
+  let totalCash = 0;
+  const allocations: Array<{ cardId: string; amount: number }> = [];
+
+  for (const cardId of cardIds) {
+    const bal = Math.max(0, cardBalances[cardId] || 0);
+    totalCash += bal;
+    if (remainingTarget > 0 && bal > 0) {
+      const alloc = Math.min(remainingTarget, bal);
+      allocations.push({ cardId, amount: alloc });
+      remainingTarget -= alloc;
+    }
+  }
+
+  const isShortage = totalCash < targetAmount;
+  const cashPaid = Math.min(totalCash, targetAmount);
+  const pocketAdvanceDeficit = isShortage ? targetAmount - totalCash : 0;
+
+  return {
+    totalAvailableCash: totalCash,
+    cashPaid,
+    pocketAdvanceDeficit,
+    isShortage,
+    allocations,
+  };
+}
+
