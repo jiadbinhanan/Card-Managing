@@ -10,6 +10,11 @@ import {
 } from 'react-native';
 import { SwipeDownDrawer, DrawerScrollView } from '../SwipeDownDrawer';
 import { User, Phone, Check, Trash2, AlertTriangle } from 'lucide-react-native';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
+} from 'react-native-reanimated';
 import { BorrowerSummary } from './BorrowerCard';
 
 interface EditBorrowerModalProps {
@@ -31,6 +36,17 @@ export function EditBorrowerModal({
   const [phone, setPhone] = useState('');
   const [isUpdating, setIsUpdating] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // 120Hz Button Spring Feedback
+  const updateScale = useSharedValue(1);
+  const updateAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: updateScale.value }],
+  }));
+
+  const deleteScale = useSharedValue(1);
+  const deleteAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: deleteScale.value }],
+  }));
 
   useEffect(() => {
     if (visible && borrower) {
@@ -139,42 +155,58 @@ export function EditBorrowerModal({
           </View>
 
           {/* Delete Danger Zone */}
-          <TouchableOpacity
-            style={styles.deleteBtn}
-            onPress={handleDelete}
-            disabled={isDeleting || isUpdating}
-            activeOpacity={0.8}
-          >
-            {isDeleting ? (
-              <ActivityIndicator color="#DC2626" size="small" />
-            ) : (
-              <>
-                <Trash2 size={16} color="#DC2626" strokeWidth={2.2} />
-                <Text style={styles.deleteBtnText}>Delete Borrower</Text>
-              </>
-            )}
-          </TouchableOpacity>
+          <Animated.View style={deleteAnimStyle}>
+            <TouchableOpacity
+              style={styles.deleteBtn}
+              onPress={handleDelete}
+              onPressIn={() => {
+                deleteScale.value = withSpring(0.96, { damping: 12, stiffness: 260 });
+              }}
+              onPressOut={() => {
+                deleteScale.value = withSpring(1, { damping: 12, stiffness: 260 });
+              }}
+              disabled={isDeleting || isUpdating}
+              activeOpacity={0.8}
+            >
+              {isDeleting ? (
+                <ActivityIndicator color="#DC2626" size="small" />
+              ) : (
+                <>
+                  <Trash2 size={16} color="#DC2626" strokeWidth={2.2} />
+                  <Text style={styles.deleteBtnText}>Delete Borrower</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </Animated.View>
         </DrawerScrollView>
 
         <View style={styles.bottomBar}>
-          <TouchableOpacity
-            style={[
-              styles.submitBtn,
-              (!name.trim() || isUpdating || isDeleting) && styles.submitBtnDisabled,
-            ]}
-            onPress={handleUpdate}
-            disabled={!name.trim() || isUpdating || isDeleting}
-            activeOpacity={0.88}
-          >
-            {isUpdating ? (
-              <ActivityIndicator color="#FFFFFF" size="small" />
-            ) : (
-              <>
-                <Check size={16} color="#FFFFFF" strokeWidth={2.6} />
-                <Text style={styles.submitBtnText}>SAVE CHANGES</Text>
-              </>
-            )}
-          </TouchableOpacity>
+          <Animated.View style={[{ flex: 1 }, updateAnimStyle]}>
+            <TouchableOpacity
+              style={[
+                styles.submitBtn,
+                (!name.trim() || isUpdating || isDeleting) && styles.submitBtnDisabled,
+              ]}
+              onPress={handleUpdate}
+              onPressIn={() => {
+                updateScale.value = withSpring(0.96, { damping: 12, stiffness: 260 });
+              }}
+              onPressOut={() => {
+                updateScale.value = withSpring(1, { damping: 12, stiffness: 260 });
+              }}
+              disabled={!name.trim() || isUpdating || isDeleting}
+              activeOpacity={0.88}
+            >
+              {isUpdating ? (
+                <ActivityIndicator color="#FFFFFF" size="small" />
+              ) : (
+                <>
+                  <Check size={16} color="#FFFFFF" strokeWidth={2.6} />
+                  <Text style={styles.submitBtnText}>SAVE CHANGES</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </Animated.View>
         </View>
       </View>
     </SwipeDownDrawer>

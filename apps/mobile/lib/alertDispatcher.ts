@@ -221,3 +221,120 @@ export async function broadcastBillPayAlert(params: {
     },
   });
 }
+
+/**
+ * Broadcasts Lent Issue (Give Loan) alert to family profiles via WhatsApp & Push
+ */
+export async function broadcastLentIssueAlert(params: {
+  borrowerName: string;
+  sourceName: string;
+  entryUserName: string;
+  amount: number;
+  remarks?: string;
+  dueDate?: string;
+  remainingBalance?: string | number;
+  totalDueLent?: string | number;
+  profiles: Array<{ id?: string; name?: string; phone?: string }>;
+}) {
+  const timeStr = new Date().toLocaleTimeString('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  }).toLowerCase();
+
+  const waPromises = params.profiles.map(async (profile) => {
+    if (!profile.phone) return;
+    const alert = buildLentIssueAlert({
+      greetingUser: profile.name || 'Member',
+      borrowerName: params.borrowerName,
+      sourceName: params.sourceName,
+      entryUserName: params.entryUserName,
+      timeStr,
+      amount: params.amount,
+      dueDate: params.dueDate || '-',
+      remarks: params.remarks || 'Loan issued',
+      remainingBalance: params.remainingBalance,
+      totalDueLent: params.totalDueLent,
+    });
+
+    await sendWhatsAppAlert(profile.phone, alert.templateName, alert.components);
+  });
+
+  await Promise.allSettled(waPromises);
+
+  // Push Notification Dispatch
+  await sendPushAlert({
+    title: `Loan Issued: ₹${params.amount.toLocaleString('en-IN')}`,
+    body: `₹${params.amount.toLocaleString('en-IN')} lent to ${params.borrowerName} by ${params.entryUserName} from ${params.sourceName}.`,
+    inAppTitle: `Loan Given (${params.borrowerName})`,
+    inAppBody: `₹${params.amount.toLocaleString('en-IN')} issued by ${params.entryUserName} via ${params.sourceName}.`,
+    type: 'lent_issue',
+    url: '/(tabs)/lents',
+    data: {
+      borrowerName: params.borrowerName,
+      amount: params.amount,
+      sourceName: params.sourceName,
+      entryUserName: params.entryUserName,
+    },
+  });
+}
+
+/**
+ * Broadcasts Lent Recovery (Collect Loan) alert to family profiles via WhatsApp & Push
+ */
+export async function broadcastLentRecoveryAlert(params: {
+  borrowerName: string;
+  entryUserName: string;
+  amount: number;
+  fullAmount?: string | number;
+  remainingDue?: string | number;
+  receivedOn: string;
+  isFull: boolean;
+  remarks?: string;
+  currentBal?: string | number;
+  profiles: Array<{ id?: string; name?: string; phone?: string }>;
+}) {
+  const timeStr = new Date().toLocaleTimeString('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  }).toLowerCase();
+
+  const waPromises = params.profiles.map(async (profile) => {
+    if (!profile.phone) return;
+    const alert = buildLentRecoveryAlert({
+      greetingUser: profile.name || 'Member',
+      borrowerName: params.borrowerName,
+      fullOrPartial: params.isFull ? 'Full' : 'Partial',
+      entryUserName: params.entryUserName,
+      timeStr,
+      amount: params.amount,
+      fullAmount: params.fullAmount || params.amount,
+      remarks: params.remarks || 'Loan recovery',
+      receivedOn: params.receivedOn,
+      currentBal: params.currentBal,
+      remainingDue: params.remainingDue,
+    });
+
+    await sendWhatsAppAlert(profile.phone, alert.templateName, alert.components);
+  });
+
+  await Promise.allSettled(waPromises);
+
+  // Push Notification Dispatch
+  await sendPushAlert({
+    title: `Loan Collected: ₹${params.amount.toLocaleString('en-IN')}`,
+    body: `₹${params.amount.toLocaleString('en-IN')} collected from ${params.borrowerName} by ${params.entryUserName}. ${params.isFull ? 'Settled in full.' : `Remaining: ₹${params.remainingDue || '0'}`}`,
+    inAppTitle: `Loan Repayment (${params.borrowerName})`,
+    inAppBody: `₹${params.amount.toLocaleString('en-IN')} received on ${params.receivedOn}.`,
+    type: 'lent_recovery',
+    url: '/(tabs)/lents',
+    data: {
+      borrowerName: params.borrowerName,
+      amount: params.amount,
+      entryUserName: params.entryUserName,
+      receivedOn: params.receivedOn,
+    },
+  });
+}
+

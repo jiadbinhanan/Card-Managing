@@ -114,11 +114,13 @@ export function SwipeDownDrawer({
   // 1. Dedicated Pan gesture on the top handle and header area (always slides down)
   const handlePanGesture = Gesture.Pan()
     .onUpdate((event) => {
+      'worklet';
       if (event.translationY > 0) {
         translateY.value = event.translationY;
       }
     })
     .onEnd((event) => {
+      'worklet';
       if (event.translationY > 80 || event.velocityY > 450) {
         runOnJS(handleDismiss)();
       } else {
@@ -131,11 +133,13 @@ export function SwipeDownDrawer({
     .activeOffsetY([18, 1000])
     .failOffsetY([-1000, -6])
     .onUpdate((event) => {
+      'worklet';
       if (isScrollAtTop.value && event.translationY > 0) {
         translateY.value = event.translationY;
       }
     })
     .onEnd((event) => {
+      'worklet';
       if (isScrollAtTop.value && (event.translationY > 90 || event.velocityY > 500)) {
         runOnJS(handleDismiss)();
       } else {

@@ -110,6 +110,29 @@ describe('Pillar 4A: Dashboard Limits & Card Family Utilization', () => {
       expect(metrics.inTransitAmount).toBe(60000);
     });
 
+    it('should deduct manual settled rotation withdrawals when settled_to_user is present', () => {
+      const transactions = [
+        {
+          amount: 50000,
+          type: 'withdrawal',
+          status: 'settled',
+          qr_id: null,
+          settled_to_user: 'user-2',
+          remarks: 'Cash handed over directly',
+        },
+      ];
+
+      const metrics = calculateCardLimits({
+        totalLimit: 100000,
+        transactions,
+        spends: [],
+      });
+
+      // 100k - 50k (settled rotation withdrawal with settled_to_user) = 50k
+      expect(metrics.availableLimit).toBe(50000);
+      expect(metrics.utilizedLimit).toBe(50000);
+    });
+
     it('should add back bill payments when calculating available limit', () => {
       const transactions = [
         { amount: 50000, type: 'withdrawal', status: 'pending_settlement', qr_id: 'qr-1' },

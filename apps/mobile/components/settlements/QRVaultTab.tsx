@@ -11,12 +11,12 @@ import {
   QrCode,
   Zap,
   Timer,
-  Clock,
-  ArrowRight,
+  LayoutGrid,
   ShieldCheck,
   CreditCard,
-  Layers,
   Pencil,
+  Plus,
+  AlertTriangle,
 } from 'lucide-react-native';
 import { QRData } from './QRPaymentModal';
 
@@ -32,8 +32,10 @@ interface QRVaultTabProps {
   activeCooldowns: ActiveCooldown[];
   currentUserName: string;
   onSelectQr: (qr: QRData) => void;
+  onSelectStaticQr?: (qr: QRData) => void;
   onToggleStatus: (qrId: string, currentStatus: string) => void;
   onEditQr?: (qr: QRData) => void;
+  onAddStatic?: () => void;
 }
 
 export function QRVaultTab({
@@ -41,10 +43,12 @@ export function QRVaultTab({
   activeCooldowns,
   currentUserName,
   onSelectQr,
+  onSelectStaticQr,
   onToggleStatus,
   onEditQr,
+  onAddStatic,
 }: QRVaultTabProps) {
-  const firstName = currentUserName.trim().split(/\s+/)[0].toLowerCase();
+  const firstName = (currentUserName || '').trim().split(/\s+/)[0].toLowerCase();
 
   // 1. Separate Static vs Operational QRs
   const staticQrs = useMemo(() => qrs.filter((q) => q.status === 'static'), [qrs]);
@@ -88,6 +92,13 @@ export function QRVaultTab({
     return activeOperational.slice(0, 4);
   }, [dynamicQrs, activeCooldowns, firstName]);
 
+  const formatLastPaid = (isoString?: string | null) => {
+    if (!isoString) return 'Not Used';
+    const d = new Date(isoString);
+    if (isNaN(d.getTime())) return 'Not Used';
+    return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+  };
+
   const formatCooldown = (expiresAt: number) => {
     const diffMs = expiresAt - Date.now();
     if (diffMs <= 0) return 'Ready';
@@ -103,20 +114,20 @@ export function QRVaultTab({
         <View style={styles.coolingBanner}>
           <Timer size={14} color="#D97706" />
           <Text style={styles.coolingBannerText}>
-            {activeCooldowns.length} Merchant QR{activeCooldowns.length > 1 ? 's' : ''} in cooling
-            safety cycle.
+            {activeCooldowns.length} Merchant QR{activeCooldowns.length > 1 ? 's' : ''} resting in
+            cooldown.
           </Text>
         </View>
       )}
 
-      {/* ================= 1. RECOMMENDED 2x2 GRID ================= */}
+      {/* ================= 1. RECOMMENDED 2-COLUMN GRID ================= */}
       <View style={styles.sectionHeaderRow}>
         <View style={styles.sectionTitleRow}>
           <Zap size={14} color="#10B981" />
-          <Text style={styles.sectionTitle}>Recommended Rotation QRs</Text>
+          <Text style={styles.sectionTitle}>Recommended Today</Text>
         </View>
         <View style={styles.recBadge}>
-          <Text style={styles.recBadgeText}>Optimal 4</Text>
+          <Text style={styles.recBadgeText}>Optimal Pick</Text>
         </View>
       </View>
 
@@ -127,53 +138,60 @@ export function QRVaultTab({
           </Text>
         </View>
       ) : (
-        <View style={styles.recGrid}>
+        <View style={styles.gridContainer}>
           {recommendedQrs.map((qr) => {
             const hasPhoto = Boolean((qr as any).qr_image_url);
             return (
               <TouchableOpacity
-                key={qr.id}
-                style={styles.recCard}
+                key={`rec-${qr.id}`}
+                style={styles.gridCard}
                 onPress={() => onSelectQr(qr)}
                 activeOpacity={0.85}
               >
-                <View style={styles.recCardTop}>
-                  <View style={styles.recIconCircle}>
-                    {hasPhoto ? (
-                      <Image source={{ uri: (qr as any).qr_image_url }} style={styles.recThumbnail} />
-                    ) : (
-                      <QrCode size={16} color="#0B3F28" strokeWidth={2.4} />
-                    )}
-                  </View>
-                  <View style={styles.recTopActions}>
-                    <View style={styles.readyBadge}>
-                      <Text style={styles.readyBadgeText}>READY</Text>
+                {/* Large 96px QR Image Banner */}
+                <View style={styles.gridImageBanner}>
+                  {hasPhoto ? (
+                    <Image
+                      source={{ uri: (qr as any).qr_image_url }}
+                      style={styles.gridBannerImage}
+                      resizeMode="cover"
+                    />
+                  ) : (
+                    <View style={styles.gridImagePlaceholder}>
+                      <QrCode size={28} color="#4A6B56" />
                     </View>
-                    {onEditQr && (
-                      <TouchableOpacity
-                        style={styles.cardEditPencil}
-                        onPress={(e) => {
-                          e.stopPropagation();
-                          onEditQr(qr);
-                        }}
-                      >
-                        <Pencil size={11} color="#658270" />
-                      </TouchableOpacity>
-                    )}
+                  )}
+                  {/* Best Pick Badge */}
+                  <View style={styles.bestPickBadge}>
+                    <Text style={styles.bestPickBadgeText}>Best Pick</Text>
                   </View>
+                  {/* Floating Edit Button */}
+                  {onEditQr && (
+                    <TouchableOpacity
+                      style={styles.floatingEditBtn}
+                      onPress={(e) => {
+                        e.stopPropagation();
+                        onEditQr(qr);
+                      }}
+                      hitSlop={8}
+                    >
+                      <Pencil size={11} color="#FFFFFF" />
+                    </TouchableOpacity>
+                  )}
                 </View>
 
-                <Text style={styles.recMerchantName} numberOfLines={1}>
-                  {qr.merchant_name}
-                </Text>
-                <Text style={styles.recPlatform}>{qr.platform || 'UPI QR'}</Text>
-
-                <View style={styles.recCardDivider} />
-
-                <View style={styles.recFooter}>
-                  <Text style={styles.recSettlement}>{qr.settlement_time || 'T+0 Instant'}</Text>
-                  <View style={styles.recActionArrow}>
-                    <ArrowRight size={12} color="#0B3F28" />
+                {/* Card Details Below Image */}
+                <View style={styles.gridCardContent}>
+                  <Text style={styles.gridMerchantName} numberOfLines={1}>
+                    {qr.merchant_name}
+                  </Text>
+                  <Text style={styles.gridPlatformText} numberOfLines={1}>
+                    {qr.platform || 'UPI'} • {qr.settlement_time || 'T+0'}
+                  </Text>
+                  <View style={styles.lastPaidPill}>
+                    <Text style={styles.lastPaidPillText}>
+                      Last Paid: {formatLastPaid(qr.last_used_date)}
+                    </Text>
                   </View>
                 </View>
               </TouchableOpacity>
@@ -182,42 +200,73 @@ export function QRVaultTab({
         </View>
       )}
 
-      {/* ================= 2. ALL DYNAMIC OPERATIONAL QRS ================= */}
-      <View style={[styles.sectionHeaderRow, { marginTop: 22 }]}>
+      {/* ================= 2. DYNAMIC VAULT (COMPLETE LIST) ================= */}
+      <View style={[styles.sectionHeaderRow, { marginTop: 24 }]}>
         <View style={styles.sectionTitleRow}>
-          <Layers size={14} color="#0B3F28" />
+          <QrCode size={14} color="#0EA5E9" />
           <Text style={styles.sectionTitle}>Dynamic Vault</Text>
         </View>
-        <Text style={styles.countText}>{dynamicQrs.length} Operational</Text>
+        <Text style={styles.countText}>{dynamicQrs.length} Available</Text>
       </View>
 
       <View style={styles.listContainer}>
         {dynamicQrs.map((qr) => {
-          const cooldown = activeCooldowns.find((c) => c.qrId === qr.id && c.expiresAt > Date.now());
+          const cooldown = activeCooldowns.find(
+            (c) => c.qrId === qr.id && c.expiresAt > Date.now()
+          );
           const isCooling = !!cooldown;
           const isActive = qr.status === 'active';
           const hasPhoto = Boolean((qr as any).qr_image_url);
 
+          // Anti-Fraud Self-Name Warning
+          const firstWord = (qr.merchant_name || '').toLowerCase().trim().split(/\s+/)[0];
+          const isDanger = Boolean(firstName && firstWord === firstName);
+
           return (
             <TouchableOpacity
               key={qr.id}
-              style={[styles.dynamicRow, isCooling && styles.dynamicRowCooling]}
+              style={[
+                styles.dynamicRow,
+                isDanger && styles.dynamicRowDanger,
+                isCooling && styles.dynamicRowCooling,
+                !isActive && styles.dynamicRowInactive,
+              ]}
               onPress={() => onSelectQr(qr)}
               activeOpacity={0.88}
             >
-              <View style={styles.dynamicIconBox}>
+              {/* 48x48px Thumbnail */}
+              <View
+                style={[
+                  styles.dynamicThumbnailBox,
+                  isDanger && styles.dynamicThumbnailBoxDanger,
+                ]}
+              >
                 {hasPhoto ? (
-                  <Image source={{ uri: (qr as any).qr_image_url }} style={styles.dynamicThumbnail} />
+                  <Image
+                    source={{ uri: (qr as any).qr_image_url }}
+                    style={styles.dynamicThumbnail}
+                    resizeMode="cover"
+                  />
                 ) : (
-                  <QrCode size={18} color={isActive ? '#0B3F28' : '#8CA394'} />
+                  <QrCode size={20} color={isDanger ? '#EF4444' : isActive ? '#0B3F28' : '#8CA394'} />
                 )}
               </View>
 
+              {/* Info Column */}
               <View style={styles.dynamicInfoCol}>
                 <View style={styles.dynamicTitleRow}>
-                  <Text style={styles.dynamicMerchant} numberOfLines={1}>
+                  <Text
+                    style={[styles.dynamicMerchant, isDanger && styles.dynamicMerchantDanger]}
+                    numberOfLines={1}
+                  >
                     {qr.merchant_name}
                   </Text>
+                  {isDanger && (
+                    <View style={styles.dangerPill}>
+                      <AlertTriangle size={9} color="#EF4444" />
+                      <Text style={styles.dangerPillText}>Self Risk</Text>
+                    </View>
+                  )}
                   {isCooling && (
                     <View style={styles.coolingPill}>
                       <Timer size={10} color="#D97706" />
@@ -227,11 +276,12 @@ export function QRVaultTab({
                     </View>
                   )}
                 </View>
-                <Text style={styles.dynamicUpi} numberOfLines={1}>
-                  {qr.upi_id || 'UPI Not Linked'} • {qr.platform || 'UPI'}
+                <Text style={styles.dynamicSub} numberOfLines={1}>
+                  {qr.platform || 'UPI'} • Last: {formatLastPaid(qr.last_used_date)}
                 </Text>
               </View>
 
+              {/* Actions Right */}
               <View style={styles.rowRightActions}>
                 {onEditQr && (
                   <TouchableOpacity
@@ -240,8 +290,9 @@ export function QRVaultTab({
                       e.stopPropagation();
                       onEditQr(qr);
                     }}
+                    hitSlop={8}
                   >
-                    <Pencil size={12} color="#4A6B56" />
+                    <Pencil size={13} color="#4A6B56" />
                   </TouchableOpacity>
                 )}
                 <View style={styles.switchWrapper}>
@@ -258,57 +309,83 @@ export function QRVaultTab({
         })}
       </View>
 
-      {/* ================= 3. STATIC VAULT SECTION ================= */}
-      {staticQrs.length > 0 && (
-        <>
-          <View style={[styles.sectionHeaderRow, { marginTop: 22 }]}>
-            <View style={styles.sectionTitleRow}>
-              <CreditCard size={14} color="#0B3F28" />
-              <Text style={styles.sectionTitle}>Static Vault</Text>
-            </View>
-            <Text style={styles.countText}>{staticQrs.length} Static</Text>
-          </View>
+      {/* ================= 3. STATIC VAULT (2-COLUMN SQUARE GRID) ================= */}
+      <View style={[styles.sectionHeaderRow, { marginTop: 26 }]}>
+        <View style={styles.sectionTitleRow}>
+          <LayoutGrid size={14} color="#0B3F28" />
+          <Text style={styles.sectionTitle}>Static Vault</Text>
+        </View>
+        {onAddStatic && (
+          <TouchableOpacity
+            style={styles.addStaticHeaderBtn}
+            onPress={onAddStatic}
+            activeOpacity={0.8}
+          >
+            <Plus size={12} color="#10B981" />
+            <Text style={styles.addStaticHeaderBtnText}>Add Static</Text>
+          </TouchableOpacity>
+        )}
+      </View>
 
-          <View style={styles.listContainer}>
-            {staticQrs.map((qr) => {
-              const hasPhoto = Boolean((qr as any).qr_image_url);
-              return (
-                <TouchableOpacity
-                  key={qr.id}
-                  style={styles.staticCard}
-                  onPress={() => onSelectQr(qr)}
-                  activeOpacity={0.88}
-                >
-                  <View style={styles.staticIconBox}>
-                    {hasPhoto ? (
-                      <Image source={{ uri: (qr as any).qr_image_url }} style={styles.dynamicThumbnail} />
-                    ) : (
-                      <ShieldCheck size={20} color="#0B3F28" />
-                    )}
+      {staticQrs.length === 0 ? (
+        <View style={styles.emptyCardBox}>
+          <Text style={styles.emptyCardText}>
+            No offline standee QRs saved yet. Tap &apos;+ Add Static&apos; to upload standee photos.
+          </Text>
+        </View>
+      ) : (
+        <View style={styles.gridContainer}>
+          {staticQrs.map((qr) => {
+            const hasPhoto = Boolean((qr as any).qr_image_url);
+            return (
+              <TouchableOpacity
+                key={`static-${qr.id}`}
+                style={styles.staticGridCard}
+                onPress={() => (onSelectStaticQr ? onSelectStaticQr(qr) : onSelectQr(qr))}
+                activeOpacity={0.85}
+              >
+                {/* Floating Edit Button */}
+                {onEditQr && (
+                  <TouchableOpacity
+                    style={styles.staticFloatingEditBtn}
+                    onPress={(e) => {
+                      e.stopPropagation();
+                      onEditQr(qr);
+                    }}
+                    hitSlop={8}
+                  >
+                    <Pencil size={12} color="#FFFFFF" />
+                  </TouchableOpacity>
+                )}
+
+                {/* 1:1 Square Aspect Ratio Standee Container */}
+                <View style={styles.staticSquareImageContainer}>
+                  {hasPhoto ? (
+                    <Image
+                      source={{ uri: (qr as any).qr_image_url }}
+                      style={styles.staticSquareImage}
+                      resizeMode="cover"
+                    />
+                  ) : (
+                    <View style={styles.staticSquarePlaceholder}>
+                      <ShieldCheck size={36} color="#4A6B56" />
+                    </View>
+                  )}
+                </View>
+
+                {/* Standee Info */}
+                <View style={styles.staticGridContent}>
+                  <Text style={styles.staticMerchantName} numberOfLines={1}>
+                    {qr.merchant_name}
+                  </Text>
+                  <View style={styles.staticQrBadge}>
+                    <Text style={styles.staticQrBadgeText}>STATIC QR</Text>
                   </View>
-                  <View style={styles.staticInfoCol}>
-                    <Text style={styles.staticTitle}>{qr.merchant_name}</Text>
-                    <Text style={styles.staticSub}>Offline Merchant Standee • Direct Scan</Text>
-                  </View>
-                  <View style={styles.rowRightActions}>
-                    {onEditQr && (
-                      <TouchableOpacity
-                        style={styles.rowEditBtn}
-                        onPress={(e) => {
-                          e.stopPropagation();
-                          onEditQr(qr);
-                        }}
-                      >
-                        <Pencil size={12} color="#4A6B56" />
-                      </TouchableOpacity>
-                    )}
-                    <ArrowRight size={14} color="#0B3F28" />
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </>
+                </View>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
       )}
     </View>
   );
@@ -316,31 +393,31 @@ export function QRVaultTab({
 
 const styles = StyleSheet.create({
   container: {
-    paddingBottom: 20,
+    paddingBottom: 24,
   },
   coolingBanner: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#FEF3C7',
-    borderWidth: 1,
-    borderColor: '#FDE68A',
-    borderRadius: 12,
+    backgroundColor: 'rgba(217, 119, 6, 0.1)',
+    borderRadius: 14,
     paddingHorizontal: 12,
     paddingVertical: 9,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(217, 119, 6, 0.25)',
     marginBottom: 16,
   },
   coolingBannerText: {
     fontSize: 11,
-    fontWeight: '700',
-    color: '#92400E',
+    fontWeight: '600',
+    color: '#D97706',
     flex: 1,
   },
   sectionHeaderRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 10,
+    justifyContent: 'space-between',
+    marginBottom: 12,
   },
   sectionTitleRow: {
     flexDirection: 'row',
@@ -348,26 +425,46 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   sectionTitle: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '800',
     color: '#072C1C',
     letterSpacing: -0.2,
   },
   recBadge: {
-    backgroundColor: '#E4ECE3',
+    backgroundColor: 'rgba(16, 185, 129, 0.12)',
     paddingHorizontal: 8,
     paddingVertical: 3,
-    borderRadius: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.25)',
   },
   recBadgeText: {
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: '800',
-    color: '#0B3F28',
+    color: '#10B981',
+    textTransform: 'uppercase',
   },
   countText: {
     fontSize: 11,
-    fontWeight: '700',
-    color: '#4A6B56',
+    fontWeight: '600',
+    color: '#658270',
+  },
+  addStaticHeaderBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.25)',
+  },
+  addStaticHeaderBtnText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#10B981',
+    textTransform: 'uppercase',
   },
   emptyCardBox: {
     backgroundColor: '#FFFFFF',
@@ -378,101 +475,108 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   emptyCardText: {
-    fontSize: 12,
-    color: '#4A6B56',
+    fontSize: 11,
+    fontWeight: '500',
+    color: '#658270',
     textAlign: 'center',
-    lineHeight: 18,
+    lineHeight: 16,
   },
-  recGrid: {
+  gridContainer: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 10,
   },
-  recCard: {
+  gridCard: {
     width: '48.5%',
     backgroundColor: '#FFFFFF',
     borderRadius: 18,
-    padding: 14,
-    borderWidth: 1.5,
-    borderColor: '#DFE8E0',
+    overflow: 'hidden',
+    borderWidth: 1.2,
+    borderColor: 'rgba(16, 185, 129, 0.25)',
     shadowColor: '#072C1C',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 6,
     elevation: 2,
   },
-  recCardTop: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  recIconCircle: {
-    width: 32,
-    height: 32,
-    borderRadius: 10,
-    backgroundColor: '#EFF3EE',
-    alignItems: 'center',
-    justifyContent: 'center',
+  gridImageBanner: {
+    width: '100%',
+    height: 96,
+    backgroundColor: '#03140C',
+    position: 'relative',
     overflow: 'hidden',
   },
-  recThumbnail: {
+  gridBannerImage: {
     width: '100%',
     height: '100%',
+    opacity: 0.85,
   },
-  recTopActions: {
-    flexDirection: 'row',
+  gridImagePlaceholder: {
+    width: '100%',
+    height: '100%',
     alignItems: 'center',
-    gap: 6,
+    justifyContent: 'center',
+    backgroundColor: '#052215',
   },
-  cardEditPencil: {
-    padding: 4,
-  },
-  readyBadge: {
-    backgroundColor: '#DCFCE7',
+  bestPickBadge: {
+    position: 'absolute',
+    top: 6,
+    left: 6,
+    backgroundColor: '#10B981',
     paddingHorizontal: 6,
     paddingVertical: 2,
-    borderRadius: 4,
+    borderRadius: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.3,
+    shadowRadius: 2,
   },
-  readyBadgeText: {
-    fontSize: 9,
-    fontWeight: '800',
-    color: '#15803D',
+  bestPickBadgeText: {
+    fontSize: 8,
+    fontWeight: '900',
+    color: '#03180F',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
-  recMerchantName: {
+  floatingEditBtn: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  gridCardContent: {
+    padding: 10,
+  },
+  gridMerchantName: {
     fontSize: 13,
     fontWeight: '800',
     color: '#072C1C',
-    letterSpacing: -0.2,
   },
-  recPlatform: {
+  gridPlatformText: {
     fontSize: 10,
     fontWeight: '600',
-    color: '#4A6B56',
+    color: '#658270',
     marginTop: 2,
   },
-  recCardDivider: {
-    height: 1,
-    backgroundColor: '#DFE8E0',
-    marginVertical: 10,
+  lastPaidPill: {
+    marginTop: 6,
+    backgroundColor: 'rgba(16, 185, 129, 0.08)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    alignSelf: 'flex-start',
   },
-  recFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  recSettlement: {
-    fontSize: 10,
+  lastPaidPillText: {
+    fontSize: 9,
     fontWeight: '700',
-    color: '#0B3F28',
-  },
-  recActionArrow: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: '#EFF3EE',
-    alignItems: 'center',
-    justifyContent: 'center',
+    color: '#059669',
   },
   listContainer: {
     gap: 8,
@@ -483,22 +587,40 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderRadius: 16,
     padding: 12,
-    borderWidth: 1.2,
+    borderWidth: 1,
     borderColor: '#DFE8E0',
-    gap: 12,
+    shadowColor: '#072C1C',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.03,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  dynamicRowDanger: {
+    borderColor: 'rgba(239, 68, 68, 0.4)',
+    backgroundColor: '#FEF2F2',
   },
   dynamicRowCooling: {
-    backgroundColor: '#FAFBF9',
-    borderColor: '#FDE68A',
+    borderColor: 'rgba(217, 119, 6, 0.3)',
+    backgroundColor: '#FFFBEB',
   },
-  dynamicIconBox: {
-    width: 38,
-    height: 38,
-    borderRadius: 10,
+  dynamicRowInactive: {
+    opacity: 0.6,
+  },
+  dynamicThumbnailBox: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
     backgroundColor: '#EFF3EE',
+    overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
-    overflow: 'hidden',
+    marginRight: 12,
+    borderWidth: 1,
+    borderColor: '#DFE8E0',
+  },
+  dynamicThumbnailBoxDanger: {
+    borderColor: 'rgba(239, 68, 68, 0.35)',
+    backgroundColor: 'rgba(239, 68, 68, 0.1)',
   },
   dynamicThumbnail: {
     width: '100%',
@@ -513,16 +635,34 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   dynamicMerchant: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '800',
     color: '#072C1C',
-    maxWidth: 160,
+    flexShrink: 1,
+  },
+  dynamicMerchantDanger: {
+    color: '#DC2626',
+  },
+  dangerPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: 'rgba(239, 68, 68, 0.12)',
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 5,
+  },
+  dangerPillText: {
+    fontSize: 8,
+    fontWeight: '800',
+    color: '#EF4444',
+    textTransform: 'uppercase',
   },
   coolingPill: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 3,
-    backgroundColor: '#FEF3C7',
+    backgroundColor: 'rgba(217, 119, 6, 0.12)',
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 6,
@@ -532,56 +672,96 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#D97706',
   },
-  dynamicUpi: {
-    fontSize: 10,
+  dynamicSub: {
+    fontSize: 11,
     fontWeight: '600',
-    color: '#658270',
+    color: '#4A6B56',
     marginTop: 2,
   },
   rowRightActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 8,
+    marginLeft: 8,
   },
   rowEditBtn: {
-    padding: 6,
+    width: 30,
+    height: 30,
+    borderRadius: 9,
     backgroundColor: '#EFF3EE',
-    borderRadius: 8,
-  },
-  switchWrapper: {
-    transform: [{ scaleX: 0.8 }, { scaleY: 0.8 }],
-  },
-  staticCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 12,
-    borderWidth: 1.2,
-    borderColor: '#DFE8E0',
-    gap: 12,
-  },
-  staticIconBox: {
-    width: 38,
-    height: 38,
-    borderRadius: 10,
-    backgroundColor: '#E8F5E9',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  switchWrapper: {
+    transform: [{ scale: 0.85 }],
+  },
+  staticGridCard: {
+    width: '48.5%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 10,
+    borderWidth: 1.2,
+    borderColor: '#DFE8E0',
+    position: 'relative',
+    shadowColor: '#072C1C',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 5,
+    elevation: 2,
+  },
+  staticFloatingEditBtn: {
+    position: 'absolute',
+    top: 14,
+    right: 14,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.25)',
+  },
+  staticSquareImageContainer: {
+    width: '100%',
+    aspectRatio: 1,
+    borderRadius: 14,
     overflow: 'hidden',
+    backgroundColor: '#030E09',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#DFE8E0',
+    marginBottom: 8,
   },
-  staticInfoCol: {
-    flex: 1,
+  staticSquareImage: {
+    width: '100%',
+    height: '100%',
   },
-  staticTitle: {
+  staticSquarePlaceholder: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  staticGridContent: {
+    gap: 4,
+  },
+  staticMerchantName: {
     fontSize: 13,
     fontWeight: '800',
     color: '#072C1C',
   },
-  staticSub: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: '#658270',
-    marginTop: 2,
+  staticQrBadge: {
+    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    alignSelf: 'flex-start',
+  },
+  staticQrBadgeText: {
+    fontSize: 8,
+    fontWeight: '800',
+    color: '#10B981',
+    letterSpacing: 0.5,
   },
 });

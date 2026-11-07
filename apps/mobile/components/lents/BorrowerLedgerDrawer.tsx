@@ -15,6 +15,9 @@ import Animated, {
   withRepeat,
   withTiming,
   withSequence,
+  withSpring,
+  LinearTransition,
+  FadeInDown,
 } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import { SwipeDownDrawer, DrawerScrollView } from '../SwipeDownDrawer';
@@ -68,6 +71,7 @@ interface BorrowerLedgerDrawerProps {
   onEntriesChanged?: () => void;
   getCardName: (cardId?: string | null) => string;
   getRecorderName: (userId?: string | null) => string;
+  currentUserId?: string;
 }
 
 type GroupByMode = 'daily' | 'weekly' | 'monthly';
@@ -114,6 +118,7 @@ export function BorrowerLedgerDrawer({
   onEntriesChanged,
   getCardName,
   getRecorderName,
+  currentUserId,
 }: BorrowerLedgerDrawerProps) {
   const [groupBy, setGroupBy] = useState<GroupByMode>('daily');
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -559,7 +564,11 @@ export function BorrowerLedgerDrawer({
 
                       {/* Expanded Details */}
                       {isExpanded && (
-                        <View style={styles.expandedSection}>
+                        <Animated.View
+                          entering={FadeInDown.duration(180)}
+                          layout={LinearTransition.springify()}
+                          style={styles.expandedSection}
+                        >
                           <View style={styles.expandedDivider} />
                           {item.remarks ? (
                             <View style={styles.expandedDetailRow}>
@@ -597,27 +606,29 @@ export function BorrowerLedgerDrawer({
                             </View>
                           ) : null}
 
-                          {/* Entry Actions: Edit & Delete */}
-                          <View style={styles.entryActionRow}>
-                            <TouchableOpacity
-                              style={styles.entryEditBtn}
-                              onPress={() => handleStartEdit(item)}
-                              activeOpacity={0.7}
-                            >
-                              <Pencil size={12} color="#0B3F28" strokeWidth={2.2} />
-                              <Text style={styles.entryEditBtnText}>Edit Entry</Text>
-                            </TouchableOpacity>
+                          {/* Entry Actions: Edit & Delete (Guarded by Ownership) */}
+                          {(!currentUserId || item.recorded_by === currentUserId) ? (
+                            <View style={styles.entryActionRow}>
+                              <TouchableOpacity
+                                style={styles.entryEditBtn}
+                                onPress={() => handleStartEdit(item)}
+                                activeOpacity={0.7}
+                              >
+                                <Pencil size={12} color="#0B3F28" strokeWidth={2.2} />
+                                <Text style={styles.entryEditBtnText}>Edit Entry</Text>
+                              </TouchableOpacity>
 
-                            <TouchableOpacity
-                              style={styles.entryDeleteBtn}
-                              onPress={() => handleDeleteEntry(item)}
-                              activeOpacity={0.7}
-                            >
-                              <Trash2 size={12} color="#EF4444" strokeWidth={2.2} />
-                              <Text style={styles.entryDeleteBtnText}>Delete Entry</Text>
-                            </TouchableOpacity>
-                          </View>
-                        </View>
+                              <TouchableOpacity
+                                style={styles.entryDeleteBtn}
+                                onPress={() => handleDeleteEntry(item)}
+                                activeOpacity={0.7}
+                              >
+                                <Trash2 size={12} color="#EF4444" strokeWidth={2.2} />
+                                <Text style={styles.entryDeleteBtnText}>Delete Entry</Text>
+                              </TouchableOpacity>
+                            </View>
+                          ) : null}
+                        </Animated.View>
                       )}
                     </TouchableOpacity>
                   );

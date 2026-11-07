@@ -16,4 +16,11 @@ config.resolver.nodeModulesPaths = [
   path.resolve(monorepoRoot, 'node_modules'),
 ];
 
+// 3. Explicit polyfills resolver fallback for pnpm monorepo isolation
+const polyfillsPath = path.resolve(projectRoot, 'node_modules/@react-native/js-polyfills');
+config.resolver.extraNodeModules = {
+  ...config.resolver.extraNodeModules,
+  '@react-native/js-polyfills': polyfillsPath,
+};
+
 module.exports = config;

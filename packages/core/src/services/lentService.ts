@@ -17,9 +17,10 @@ export async function recordLentCollectedCreditCardPaydown(
     txDate: string; // YYYY-MM-DD
     userId: string;
     createdAt?: string;
+    remarks?: string;
   }
 ): Promise<{ cycleId: string | null; cardTxId: string; lentLedgerId: string }> {
-  const { borrowerId, borrowerName, cardId, amount, txDate, userId, createdAt } = params;
+  const { borrowerId, borrowerName, cardId, amount, txDate, userId, createdAt, remarks } = params;
 
   const now = new Date(txDate);
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toLocaleDateString('en-CA', {
@@ -65,7 +66,7 @@ export async function recordLentCollectedCreditCardPaydown(
       status: 'settled',
       recorded_by: userId,
       payment_method: 'lent_recovery',
-      remarks: `Collected lent from ${borrowerName}`,
+      remarks: remarks ? `Collected lent from ${borrowerName} - ${remarks}` : `Collected lent from ${borrowerName}`,
       billing_cycle_id: activeCycleId,
     })
     .select('id')
@@ -86,6 +87,7 @@ export async function recordLentCollectedCreditCardPaydown(
       ...(createdAt ? { created_at: createdAt } : {}),
       source_type: 'credit_card',
       card_id: cardId,
+      remarks: remarks || null,
       linked_card_transaction_id: txRow?.id,
       linked_billing_cycle_id: activeCycleId,
       billing_cycle_delta_amount: activeCycleId ? amount : null,

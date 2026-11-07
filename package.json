@@ -14,5 +14,8 @@
     "cap:sync": "pnpm --filter @credics/web cap:sync",
     "cap:open": "pnpm --filter @credics/web cap:open",
     "cap:build": "pnpm --filter @credics/web cap:build"
+  },
+  "devDependencies": {
+    "@react-native/js-polyfills": "0.76.7"
   }
 }

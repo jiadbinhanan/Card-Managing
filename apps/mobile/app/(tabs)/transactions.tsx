@@ -43,6 +43,8 @@ import {
 import { supabase } from '../../lib/supabase';
 import NetInfo from '@react-native-community/netinfo';
 import { processBillPaymentFIFO, deductCashFromSources } from '@credics/core';
+import { useCardStore } from '../../lib/cardStore';
+import { VaultCardSelectorDrawer } from '../../components/VaultCardSelectorDrawer';
 import { useOfflineQueueStore } from '../../lib/offlineQueue';
 import {
   TransactionItemCard,
@@ -223,7 +225,8 @@ export default function TransactionsScreen() {
   const [customStartDate, setCustomStartDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
   const [isCustomDateModalOpen, setIsCustomDateModalOpen] = useState(false);
-  const [selectedVaultCardId, setSelectedVaultCardId] = useState<string>('all');
+  const { selectedCardId: selectedVaultCardId, setSelectedCardId: setSelectedVaultCardId } =
+    useCardStore();
 
   // Modals & Expansion
   const [isCardDropdownOpen, setIsCardDropdownOpen] = useState(false);
@@ -370,16 +373,6 @@ export default function TransactionsScreen() {
           .toISOString()
           .slice(0, 10);
 
-        let familyCardIds: string[] | null = null;
-        if (selectedVaultCardId !== 'all') {
-          familyCardIds = [selectedVaultCardId];
-          allCards.forEach((c) => {
-            if (c.parent_card_id === selectedVaultCardId) {
-              familyCardIds!.push(c.id);
-            }
-          });
-        }
-
         const from = pageNumber * PAGE_SIZE;
         const to = from + PAGE_SIZE - 1;
 
@@ -413,12 +406,8 @@ export default function TransactionsScreen() {
             q = q.gte('transaction_date', customStartDate).lte('transaction_date', customEndDate);
           }
 
-          if (familyCardIds && familyCardIds.length > 0) {
-            if (familyCardIds.length === 1) {
-              q = q.eq('card_id', familyCardIds[0]);
-            } else {
-              q = q.in('card_id', familyCardIds);
-            }
+          if (selectedVaultCardId !== 'all') {
+            q = q.eq('card_id', selectedVaultCardId);
           }
 
           if (filterUser !== 'all') {
@@ -450,12 +439,8 @@ export default function TransactionsScreen() {
             q = q.gte('spend_date', customStartDate).lte('spend_date', customEndDate);
           }
 
-          if (familyCardIds && familyCardIds.length > 0) {
-            if (familyCardIds.length === 1) {
-              q = q.eq('card_id', familyCardIds[0]);
-            } else {
-              q = q.in('card_id', familyCardIds);
-            }
+          if (selectedVaultCardId !== 'all') {
+            q = q.eq('card_id', selectedVaultCardId);
           }
 
           if (filterUser !== 'all') {
@@ -892,7 +877,11 @@ export default function TransactionsScreen() {
               <Text style={styles.vaultPillText} numberOfLines={1}>
                 {selectedVaultCardId === 'all'
                   ? 'All Cards'
-                  : allCards.find((c) => c.id === selectedVaultCardId)?.card_name || 'Card'}
+                  : (() => {
+                      const c = allCards.find((card) => card.id === selectedVaultCardId);
+                      if (!c) return 'Card';
+                      return !c.is_primary && c.parent_card_id ? `↳ ${c.card_name}` : c.card_name;
+                    })()}
               </Text>
               <ChevronDown size={12} color="#CAD6C9" />
             </TouchableOpacity>
@@ -1075,83 +1064,15 @@ export default function TransactionsScreen() {
         </TouchableOpacity>
       </Animated.View>
 
-      {/* ================= CARD FILTER MODAL ================= */}
-      <Modal
+      {/* ================= CARD FILTER DRAWER ================= */}
+      <VaultCardSelectorDrawer
         visible={isCardDropdownOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setIsCardDropdownOpen(false)}
-        statusBarTranslucent
-      >
-        <View style={styles.modalBackdrop}>
-          <Pressable
-            style={StyleSheet.absoluteFill}
-            onPress={() => setIsCardDropdownOpen(false)}
-          />
-          <View style={styles.filterMenuBox}>
-            <View style={styles.filterMenuHeader}>
-              <Text style={styles.filterMenuTitle}>Select Vault Card</Text>
-              <TouchableOpacity onPress={() => setIsCardDropdownOpen(false)} hitSlop={10}>
-                <X size={16} color="#4A6B56" />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView
-              style={{ maxHeight: SCREEN_HEIGHT * 0.55 }}
-              showsVerticalScrollIndicator={false}
-              bounces={false}
-            >
-              <TouchableOpacity
-                style={[
-                  styles.menuOption,
-                  selectedVaultCardId === 'all' && styles.menuOptionActive,
-                ]}
-                onPress={() => {
-                  setSelectedVaultCardId('all');
-                  setIsCardDropdownOpen(false);
-                }}
-              >
-                <Text
-                  style={[
-                    styles.menuOptionText,
-                    selectedVaultCardId === 'all' && styles.menuOptionTextActive,
-                  ]}
-                >
-                  All Vault Cards
-                </Text>
-                {selectedVaultCardId === 'all' && <Check size={14} color="#0B3F28" />}
-              </TouchableOpacity>
-
-              {allCards.map((card) => {
-                const isSelected = selectedVaultCardId === card.id;
-                return (
-                  <TouchableOpacity
-                    key={card.id}
-                    style={[styles.menuOption, isSelected && styles.menuOptionActive]}
-                    onPress={() => {
-                      setSelectedVaultCardId(card.id);
-                      setIsCardDropdownOpen(false);
-                    }}
-                  >
-                    <View>
-                      <Text
-                        style={[
-                          styles.menuOptionText,
-                          isSelected && styles.menuOptionTextActive,
-                        ]}
-                      >
-                        {card.card_name}
-                      </Text>
-                      <Text style={styles.menuOptionSub}>**{card.last_4_digits}</Text>
-                    </View>
-                    {isSelected && <Check size={14} color="#0B3F28" />}
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
+        onClose={() => setIsCardDropdownOpen(false)}
+        cards={allCards}
+        selectedCardId={selectedVaultCardId}
+        onSelectCard={(id) => setSelectedVaultCardId(id)}
+        title="Select Vault Card"
+      />
 
       {/* ================= USER FILTER MODAL ================= */}
       <Modal

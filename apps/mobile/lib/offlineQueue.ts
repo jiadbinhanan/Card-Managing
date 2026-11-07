@@ -336,7 +336,6 @@ async function executeSingleMutation(item: OfflineMutationItem) {
               transaction_type: 'debit',
               remarks: `Lent given ${remarks ? '- ' + remarks : ''}`,
               transaction_date,
-              created_at: original_created_at,
             })
             .select('id')
             .single();
@@ -395,6 +394,7 @@ async function executeSingleMutation(item: OfflineMutationItem) {
           txDate: transaction_date,
           userId,
           createdAt: original_created_at,
+          remarks: remarks || undefined,
         });
       } else {
         let linkedCashLedgerId: string | null = null;
@@ -408,7 +408,6 @@ async function executeSingleMutation(item: OfflineMutationItem) {
               transaction_type: 'credit',
               remarks: `Collected lent from ${borrowerName || 'Borrower'}`,
               transaction_date,
-              created_at: original_created_at,
             })
             .select('id')
             .single();

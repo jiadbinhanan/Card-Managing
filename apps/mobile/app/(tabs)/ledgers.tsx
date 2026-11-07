@@ -37,6 +37,7 @@ import {
   CrossCardReclaimDrawer,
   type CardItem as ReclaimCardItem,
 } from '../../components/ledgers/CrossCardReclaimDrawer';
+import { useCardStore, buildHierarchicalCardList } from '../../lib/cardStore';
 import {
   SpendEntryDrawer,
   type ProfileItem as SpendProfileItem,
@@ -130,7 +131,8 @@ export default function LedgersScreen() {
 
   // Filter States
   const [activeUserId, setActiveUserId] = useState<string>('all');
-  const [selectedCardFamilyId, setSelectedCardFamilyId] = useState<string>('all');
+  const { selectedCardId: selectedCardFamilyId, setSelectedCardId: setSelectedCardFamilyId } =
+    useCardStore();
   const [cashFilterType, setCashFilterType] = useState<'all' | 'credit' | 'debit'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
@@ -479,7 +481,7 @@ export default function LedgersScreen() {
               </Text>
             </TouchableOpacity>
 
-            {primaryCards.map((c) => {
+            {buildHierarchicalCardList(cards).map((c) => {
               const isSelected = selectedCardFamilyId === c.id;
               return (
                 <TouchableOpacity
@@ -492,7 +494,7 @@ export default function LedgersScreen() {
                     style={[styles.familyChipText, isSelected && styles.familyChipTextActive]}
                     numberOfLines={1}
                   >
-                    {c.card_name} (••{c.last_4_digits})
+                    {c.isSub ? `↳ ${c.card_name}` : c.card_name} (••{c.last_4_digits})
                   </Text>
                 </TouchableOpacity>
               );

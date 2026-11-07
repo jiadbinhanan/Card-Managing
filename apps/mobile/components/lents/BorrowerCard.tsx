@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, Pressable } from 'react-native';
+import Animated, { useSharedValue, useAnimatedStyle, withSpring } from 'react-native-reanimated';
 import { User, ChevronRight } from 'lucide-react-native';
 
 export interface BorrowerSummary {
@@ -24,8 +25,28 @@ export const BorrowerCard = React.memo(function BorrowerCard({
   const hasDue = borrower.netDue > 0;
   const isOwed = borrower.netDue < 0;
 
+  const scale = useSharedValue(1);
+
+  const animStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
+
+  const handlePressIn = () => {
+    scale.value = withSpring(0.97, { damping: 15, stiffness: 300 });
+  };
+
+  const handlePressOut = () => {
+    scale.value = withSpring(1, { damping: 15, stiffness: 300 });
+  };
+
   return (
-    <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.85}>
+    <Animated.View style={animStyle}>
+      <Pressable
+        style={styles.card}
+        onPress={onPress}
+        onPressIn={handlePressIn}
+        onPressOut={handlePressOut}
+      >
       <View style={styles.mainRow}>
         {/* Avatar Circle */}
         <View
@@ -84,7 +105,8 @@ export const BorrowerCard = React.memo(function BorrowerCard({
 
         <ChevronRight size={15} color="#8CA394" style={{ marginLeft: 6 }} />
       </View>
-    </TouchableOpacity>
+    </Pressable>
+  </Animated.View>
   );
 });
 

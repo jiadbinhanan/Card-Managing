@@ -1,14 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { CedarColors, CedarTypography } from '@credics/core';
+import { CedarColors, CedarTypography, calculateCardAvailableMap } from '@credics/core';
 import { CedarCard } from '../../components/CedarCard';
-import { HapticButton } from '../../components/HapticButton';
 import { CardsSkeleton } from '../../components/Skeleton';
 import { Plus, CreditCard, ArrowUpRight, ArrowDownLeft, ShieldCheck, ChevronRight } from 'lucide-react-native';
 import { supabase } from '../../lib/supabase';
 import { useRouter } from 'expo-router';
-import * as Haptics from 'expo-haptics';
 
 interface CardItem {
   id: string;
@@ -41,41 +39,31 @@ export default function CardsScreen() {
 
   const fetchCardsData = useCallback(async () => {
     try {
-      const { data: cardsData } = await supabase
-        .from('cards')
-        .select('*')
-        .order('is_primary', { ascending: false });
+      const [cardsRes, txsRes, spendsRes] = await Promise.all([
+        supabase.from('cards').select('*').order('is_primary', { ascending: false }),
+        supabase
+          .from('card_transactions')
+          .select('id, amount, type, payment_method, card_id, status, qr_id, settled_to_user, remarks, transaction_date')
+          .order('transaction_date', { ascending: false }),
+        supabase.from('spends').select('amount, payment_method, card_id'),
+      ]);
+
+      const cardsData = (cardsRes.data || []) as CardItem[];
+      const allTxs = txsRes.data || [];
+      const allSpends = spendsRes.data || [];
 
       if (cardsData && cardsData.length > 0) {
         setCards(cardsData);
 
         const currentCard = cardsData[activeCardIndex] || cardsData[0];
-        const cardLimit = Number(currentCard.total_limit || 0);
+        const availableMap = calculateCardAvailableMap(cardsData as any, allTxs as any, allSpends as any);
+        setAvailableLimit(availableMap[currentCard.id] ?? 0);
 
-        // Fetch card's transactions
-        const { data: txData } = await supabase
-          .from('card_transactions')
-          .select('*')
-          .eq('card_id', currentCard.id)
-          .order('transaction_date', { ascending: false })
-          .limit(6);
+        const thisCardTxs = allTxs.filter((t: any) => t.card_id === currentCard.id).slice(0, 10);
 
-        const withdrawals =
-          txData
-            ?.filter((t) => t.type === 'withdrawal')
-            .reduce((sum, t) => sum + Number(t.amount || 0), 0) || 0;
-
-        const billPayments =
-          txData
-            ?.filter((t) => t.type === 'bill_payment')
-            .reduce((sum, t) => sum + Number(t.amount || 0), 0) || 0;
-
-        const calculated = Math.max(0, cardLimit - withdrawals + billPayments);
-        setAvailableLimit(calculated);
-
-        if (txData && txData.length > 0) {
+        if (thisCardTxs.length > 0) {
           setCardTxs(
-            txData.map((t) => ({
+            thisCardTxs.map((t: any) => ({
               id: t.id,
               title: t.type === 'bill_payment' ? 'Bill Repayment' : (t.remarks || 'Rotation Withdrawal'),
               category: t.type === 'bill_payment' ? 'Settlement' : 'Credit Rotation',
@@ -139,15 +127,16 @@ export default function CardsScreen() {
             <Text style={styles.title}>Card Vault</Text>
             <Text style={styles.subtitle}>Unified Credit Limits & Statements</Text>
           </View>
-          <HapticButton
+          <TouchableOpacity
             style={styles.addCardBtn}
             onPress={() => {
               router.push('/(tabs)/transactions');
             }}
+            activeOpacity={0.8}
           >
             <Plus size={16} color="#F6F9F5" strokeWidth={2.4} />
             <Text style={styles.addCardBtnText}>Record Tx</Text>
-          </HapticButton>
+          </TouchableOpacity>
         </View>
 
         {/* Card Selector Pills */}

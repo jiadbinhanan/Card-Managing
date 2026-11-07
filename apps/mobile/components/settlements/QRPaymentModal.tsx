@@ -10,6 +10,7 @@ import {
   Linking,
   ActivityIndicator,
 } from 'react-native';
+import * as Haptics from 'expo-haptics';
 import { SwipeDownDrawer, DrawerScrollView } from '../SwipeDownDrawer';
 import {
   QrCode,
@@ -31,6 +32,7 @@ export interface QRData {
   settlement_time?: string;
   base_payment_link?: string | null;
   last_used_date?: string | null;
+  qr_image_url?: string;
 }
 
 export interface CardData {
@@ -172,6 +174,9 @@ export function QRPaymentModal({
         amount: totalAmt,
         remarks: `QR Rotation • ${qr.merchant_name} (${paymentMode === 'multiple' ? `${splitCount} splits` : 'Single'})`,
       });
+      try {
+        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      } catch {}
       onClose();
     } catch (err: any) {
       Alert.alert('Error', err?.message || 'Failed to record rotation withdrawal.');
@@ -184,8 +189,9 @@ export function QRPaymentModal({
 
   return (
     <SwipeDownDrawer visible={visible} onClose={onClose} heightPercent={0.85}>
-      <View style={styles.headerBox}>
-        <View style={styles.qrIconSquare}>
+      <View style={styles.container}>
+        <View style={styles.headerBox}>
+          <View style={styles.qrIconSquare}>
           <QrCode size={22} color="#10B981" />
         </View>
         <View style={styles.headerDetailsCol}>
@@ -355,16 +361,22 @@ export function QRPaymentModal({
           )}
         </TouchableOpacity>
       </View>
+      </View>
     </SwipeDownDrawer>
   );
 }
 
 const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#EFF3EE',
+  },
   headerBox: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingBottom: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
     borderBottomColor: '#DFE8E0',
     gap: 12,
@@ -398,7 +410,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: '#E4ECE3',
+    backgroundColor: '#EFF3EE',
+    borderWidth: 1,
+    borderColor: '#DFE8E0',
     paddingHorizontal: 8,
     paddingVertical: 5,
     borderRadius: 8,
@@ -412,40 +426,48 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   bodyContent: {
-    padding: 20,
-    gap: 16,
-    paddingBottom: 40,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 24,
+    gap: 14,
   },
   sectionBox: {
-    gap: 8,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1.2,
+    borderColor: '#DFE8E0',
+    gap: 10,
   },
   fieldLabel: {
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: '800',
-    color: '#072C1C',
-    letterSpacing: 0.2,
+    color: '#4A6B56',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
   },
   amountInputRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1.5,
+    backgroundColor: '#EFF3EE',
+    borderWidth: 1.2,
     borderColor: '#DFE8E0',
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    height: 52,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    height: 48,
   },
   currencySymbol: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '800',
-    color: '#0B3F28',
+    color: '#072C1C',
     marginRight: 6,
   },
   amountInput: {
     flex: 1,
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '800',
     color: '#072C1C',
+    padding: 0,
   },
   modeRow: {
     flexDirection: 'row',
@@ -457,15 +479,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-    paddingVertical: 12,
+    paddingVertical: 10,
     borderRadius: 12,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1.2,
+    backgroundColor: '#EFF3EE',
+    borderWidth: 1,
     borderColor: '#DFE8E0',
   },
   modeBtnActive: {
     backgroundColor: '#0B3F28',
-    borderColor: '#0B3F28',
+    borderColor: '#072C1C',
   },
   modeBtnText: {
     fontSize: 12,
@@ -479,20 +501,19 @@ const styles = StyleSheet.create({
   splitRow: {
     flexDirection: 'row',
     gap: 8,
-    marginTop: 4,
   },
   splitPill: {
     flex: 1,
     paddingVertical: 8,
     alignItems: 'center',
-    borderRadius: 8,
+    borderRadius: 10,
     backgroundColor: '#EFF3EE',
     borderWidth: 1,
     borderColor: '#DFE8E0',
   },
   splitPillActive: {
-    backgroundColor: '#E4ECE3',
-    borderColor: '#0B3F28',
+    backgroundColor: '#0B3F28',
+    borderColor: '#072C1C',
   },
   splitPillText: {
     fontSize: 11,
@@ -500,22 +521,23 @@ const styles = StyleSheet.create({
     color: '#4A6B56',
   },
   splitPillTextActive: {
-    color: '#0B3F28',
+    color: '#FFFFFF',
     fontWeight: '800',
   },
   generatedBox: {
     backgroundColor: '#EFF3EE',
-    borderRadius: 14,
+    borderRadius: 12,
     padding: 12,
     borderWidth: 1,
     borderColor: '#DFE8E0',
-    marginTop: 6,
+    gap: 8,
   },
   generatedTitle: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '800',
-    color: '#072C1C',
-    marginBottom: 8,
+    color: '#4A6B56',
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
   },
   generatedPillsWrap: {
     gap: 8,
@@ -550,35 +572,34 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: '#E4ECE3',
+    backgroundColor: '#0B3F28',
     paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 6,
+    paddingVertical: 6,
+    borderRadius: 8,
   },
   amountChipPayText: {
     fontSize: 11,
     fontWeight: '800',
-    color: '#0B3F28',
+    color: '#FFFFFF',
   },
   cardScroll: {
     flexDirection: 'row',
-    paddingVertical: 2,
   },
   cardItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1.2,
+    gap: 8,
+    backgroundColor: '#EFF3EE',
+    borderWidth: 1,
     borderColor: '#DFE8E0',
-    borderRadius: 14,
-    paddingHorizontal: 14,
+    borderRadius: 12,
+    paddingHorizontal: 12,
     paddingVertical: 10,
-    marginRight: 10,
+    marginRight: 8,
   },
   cardItemActive: {
     backgroundColor: '#0B3F28',
-    borderColor: '#0B3F28',
+    borderColor: '#072C1C',
   },
   cardItemName: {
     fontSize: 12,
@@ -591,8 +612,8 @@ const styles = StyleSheet.create({
   cardItemSub: {
     fontSize: 10,
     fontWeight: '600',
-    color: '#4A6B56',
-    marginTop: 2,
+    color: '#658270',
+    marginTop: 1,
   },
   cardItemSubActive: {
     color: '#CAD6C9',
@@ -601,25 +622,24 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#EFF3EE',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#CAD6C9',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    borderWidth: 1.2,
+    borderColor: '#DFE8E0',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
   },
   upiLaunchBtnText: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '800',
     color: '#0B3F28',
   },
   footerContainer: {
-    paddingHorizontal: 20,
-    paddingTop: 10,
-    paddingBottom: 24,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#FFFFFF',
     borderTopWidth: 1,
     borderTopColor: '#DFE8E0',
-    backgroundColor: '#FFFFFF',
   },
   submitBtn: {
     flexDirection: 'row',
@@ -627,21 +647,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
     backgroundColor: '#0B3F28',
-    borderRadius: 16,
-    paddingVertical: 15,
-    shadowColor: '#072C1C',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 4,
+    borderRadius: 14,
+    paddingVertical: 14,
   },
   submitBtnDisabled: {
     opacity: 0.6,
   },
   submitBtnText: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '800',
     color: '#FFFFFF',
-    letterSpacing: -0.2,
   },
 });

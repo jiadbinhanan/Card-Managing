@@ -59,6 +59,8 @@ export interface DashboardState {
 
 let activeFetchPromise: Promise<void> | null = null;
 
+import { useCardStore } from './cardStore';
+
 export const useDashboardStore = create<DashboardState>()(
   persist(
     (set, get) => ({
@@ -70,7 +72,7 @@ export const useDashboardStore = create<DashboardState>()(
       firstName: '',
       userAvatar: null,
       accessibleCards: [],
-      selectedCardId: 'all',
+      selectedCardId: useCardStore.getState().selectedCardId || 'all',
       cardLimitStats: [],
       availableLimit: 0,
       totalLimit: 0,
@@ -86,6 +88,7 @@ export const useDashboardStore = create<DashboardState>()(
 
       setSelectedCardId: (cardId: string) => {
         set({ selectedCardId: cardId });
+        useCardStore.getState().setSelectedCardId(cardId);
         get().fetchDashboardData(cardId);
       },
 
@@ -318,3 +321,12 @@ export const useDashboardStore = create<DashboardState>()(
     }
   )
 );
+
+// Subscribe to global card selection updates from other screens
+useCardStore.subscribe((state) => {
+  const current = useDashboardStore.getState().selectedCardId;
+  if (current !== state.selectedCardId) {
+    useDashboardStore.setState({ selectedCardId: state.selectedCardId });
+    useDashboardStore.getState().fetchDashboardData(state.selectedCardId);
+  }
+});

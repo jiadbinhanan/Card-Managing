@@ -133,11 +133,13 @@ export function NotificationSidePanel({
   // Swipe right on the panel to dismiss
   const panGesture = Gesture.Pan()
     .onUpdate((event) => {
+      'worklet';
       if (event.translationX > 0) {
         translateX.value = event.translationX;
       }
     })
     .onEnd((event) => {
+      'worklet';
       if (event.translationX > 80 || event.velocityX > 400) {
         runOnJS(handleDismiss)();
       } else {

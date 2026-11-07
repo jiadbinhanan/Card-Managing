@@ -24,6 +24,8 @@ import {
   TrendingUp,
 } from 'lucide-react-native';
 import { supabase } from '../../lib/supabase';
+import { useCardStore } from '../../lib/cardStore';
+import { VaultCardSelectorDrawer } from '../../components/VaultCardSelectorDrawer';
 
 interface CardData {
   id: string;
@@ -57,9 +59,9 @@ export default function InsightsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [activeSegment, setActiveSegment] = useState<'spending' | 'income' | 'savings' | 'goals'>('spending');
 
-  // Card Family Filtering
+  // Card Filtering (Global Persistent)
   const [cards, setCards] = useState<CardData[]>([]);
-  const [selectedCardId, setSelectedCardId] = useState<string>('all');
+  const { selectedCardId, setSelectedCardId } = useCardStore();
   const [isCardModalOpen, setIsCardModalOpen] = useState(false);
 
   // Trend Mode Toggle: Weekly vs Monthly
@@ -113,18 +115,8 @@ export default function InsightsScreen() {
     let filteredTxs = rawTxs;
 
     if (selectedCardId !== 'all') {
-      const selected = cards.find((c) => c.id === selectedCardId);
-      const primaryId = selected?.is_primary ? selected.id : (selected?.parent_card_id || selectedCardId);
-      const familyIds = cards
-        .filter((c) => c.id === primaryId || c.parent_card_id === primaryId)
-        .map((c) => c.id);
-
-      filteredSpends = rawSpends.filter(
-        (s) => s.card_id && (s.card_id === selectedCardId || familyIds.includes(s.card_id))
-      );
-      filteredTxs = rawTxs.filter(
-        (t) => t.card_id && (t.card_id === selectedCardId || familyIds.includes(t.card_id))
-      );
+      filteredSpends = rawSpends.filter((s) => s.card_id === selectedCardId);
+      filteredTxs = rawTxs.filter((t) => t.card_id === selectedCardId);
     }
 
     // 2. Category Breakdown
@@ -299,7 +291,7 @@ export default function InsightsScreen() {
               {selectedCardId === 'all'
                 ? 'All Cards'
                 : activeCardObj
-                ? `${activeCardObj.card_name} (**${activeCardObj.last_4_digits})`
+                ? `${!activeCardObj.is_primary && activeCardObj.parent_card_id ? '↳ ' : ''}${activeCardObj.card_name} (**${activeCardObj.last_4_digits})`
                 : 'Card'}
             </Text>
             <ChevronDown size={12} color={CedarColors.forest800} />
@@ -468,87 +460,15 @@ export default function InsightsScreen() {
         </View>
       </ScrollView>
 
-      {/* ================= 6. CARD FAMILY FILTER MODAL ================= */}
-      <Modal visible={isCardModalOpen} transparent animationType="fade">
-        <TouchableOpacity
-          style={styles.modalBackdrop}
-          activeOpacity={1}
-          onPress={() => setIsCardModalOpen(false)}
-        >
-          <View style={styles.filterMenuBox}>
-            <View style={styles.filterMenuHeader}>
-              <Text style={styles.filterMenuTitle}>Select Vault Card</Text>
-              <TouchableOpacity onPress={() => setIsCardModalOpen(false)}>
-                <X size={16} color="#4A6B56" />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView style={{ maxHeight: 280 }} showsVerticalScrollIndicator={false}>
-              <TouchableOpacity
-                style={[
-                  styles.menuOption,
-                  selectedCardId === 'all' && styles.menuOptionActive,
-                ]}
-                onPress={() => {
-                  setSelectedCardId('all');
-                  setIsCardModalOpen(false);
-                }}
-              >
-                <View style={styles.menuOptionLeft}>
-                  <CreditCard
-                    size={14}
-                    color={selectedCardId === 'all' ? CedarColors.forest800 : '#6B7280'}
-                  />
-                  <Text
-                    style={[
-                      styles.menuOptionText,
-                      selectedCardId === 'all' && styles.menuOptionTextActive,
-                    ]}
-                  >
-                    All Vault Cards
-                  </Text>
-                </View>
-                {selectedCardId === 'all' && <Check size={14} color={CedarColors.forest800} />}
-              </TouchableOpacity>
-
-              {cards.map((c) => {
-                const isSelected = selectedCardId === c.id;
-                return (
-                  <TouchableOpacity
-                    key={c.id}
-                    style={[styles.menuOption, isSelected && styles.menuOptionActive]}
-                    onPress={() => {
-                      setSelectedCardId(c.id);
-                      setIsCardModalOpen(false);
-                    }}
-                  >
-                    <View style={styles.menuOptionLeft}>
-                      <CreditCard
-                        size={14}
-                        color={isSelected ? CedarColors.forest800 : '#6B7280'}
-                      />
-                      <View>
-                        <Text
-                          style={[
-                            styles.menuOptionText,
-                            isSelected && styles.menuOptionTextActive,
-                          ]}
-                        >
-                          {c.card_name}
-                        </Text>
-                        <Text style={styles.menuOptionSub}>
-                          **{c.last_4_digits} {c.is_primary ? '• Primary' : '• Add-on'}
-                        </Text>
-                      </View>
-                    </View>
-                    {isSelected && <Check size={14} color={CedarColors.forest800} />}
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-          </View>
-        </TouchableOpacity>
-      </Modal>
+      {/* ================= 6. CARD FAMILY FILTER DRAWER ================= */}
+      <VaultCardSelectorDrawer
+        visible={isCardModalOpen}
+        onClose={() => setIsCardModalOpen(false)}
+        cards={cards}
+        selectedCardId={selectedCardId}
+        onSelectCard={(id) => setSelectedCardId(id)}
+        title="Select Vault Card"
+      />
     </SafeAreaView>
   );
 }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -22,6 +22,7 @@ import Animated, {
   withTiming,
   withSpring,
   withSequence,
+  interpolate,
 } from 'react-native-reanimated';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
@@ -35,11 +36,17 @@ import {
   QrCode,
   ArrowDownLeft,
   CheckCircle2,
+  CornerDownRight,
+  CreditCard,
 } from 'lucide-react-native';
 
-import { supabase } from '../../lib/supabase';
 import NetInfo from '@react-native-community/netinfo';
-import { computeSettlementTransition, executeSettlementTransaction } from '@credics/core';
+import { supabase } from '../../lib/supabase';
+import {
+  computeSettlementTransition,
+  executeSettlementTransaction,
+  calculateCardAvailableMap,
+} from '@credics/core';
 import { useOfflineQueueStore } from '../../lib/offlineQueue';
 import { QRVaultTab, ActiveCooldown } from '../../components/settlements/QRVaultTab';
 import { InTransitTab, InTransitTransaction } from '../../components/settlements/InTransitTab';
@@ -50,6 +57,8 @@ import { AddQRDrawer } from '../../components/settlements/AddQRDrawer';
 import { EditQRDrawer } from '../../components/settlements/EditQRDrawer';
 import { ManualRotationDrawer } from '../../components/settlements/ManualRotationDrawer';
 import { TherapeuticSuccessModal } from '../../components/settlements/TherapeuticSuccessModal';
+import { useCardStore, buildHierarchicalCardList } from '../../lib/cardStore';
+import { StaticQRViewModal } from '../../components/settlements/StaticQRViewModal';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const HISTORY_PAGE_SIZE = 20;
@@ -61,9 +70,10 @@ export default function SettlementsScreen() {
   // Primary Tab Order: 1. QR Vault -> 2. In Transit -> 3. History
   const [activeTab, setActiveTab] = useState<'vault' | 'pending' | 'history'>('vault');
 
-  // Vault Selection
-  const [selectedVaultCardId, setSelectedVaultCardId] = useState<string>('all');
-  const [isCardDropdownOpen, setIsCardDropdownOpen] = useState(false);
+  // Vault Selection (Global Persistent)
+  const { selectedCardId: selectedVaultCardId, setSelectedCardId: setSelectedVaultCardId } =
+    useCardStore();
+  const [isHeaderExpanded, setIsHeaderExpanded] = useState(false);
 
   // Data Stores
   const [isLoading, setIsLoading] = useState(true);
@@ -95,16 +105,61 @@ export default function SettlementsScreen() {
   const [successSubtitle, setSuccessSubtitle] = useState('Added to In-Transit liquidity queue');
   const [successAmount, setSuccessAmount] = useState<number | undefined>(undefined);
 
-  // 120Hz Animations
+  // Static QR Viewer Modal State
+  const [viewingStaticQr, setViewingStaticQr] = useState<QRData | null>(null);
+  const [isStaticModalOpen, setIsStaticModalOpen] = useState(false);
+
+  // 120Hz Animations & Paging
+  const horizontalScrollRef = useRef<ScrollView>(null);
   const cardDropdownScale = useSharedValue(1);
-  const fabScale = useSharedValue(1);
+  const headerExpandedProgress = useSharedValue(0);
+  const fabScale = useSharedValue(activeTab === 'history' ? 0 : 1);
+  const fabOpacity = useSharedValue(activeTab === 'history' ? 0 : 1);
+  const fabWidth = useSharedValue(activeTab === 'pending' ? 168 : 52);
+  const fabTextWidth = useSharedValue(activeTab === 'pending' ? 104 : 0);
+  const fabTextOpacity = useSharedValue(activeTab === 'pending' ? 1 : 0);
+  const tabIndicatorX = useSharedValue(0);
+
+  const TAB_CONTAINER_MARGIN = 16;
+  const TAB_TRACK_WIDTH = SCREEN_WIDTH - TAB_CONTAINER_MARGIN * 2;
+  const TAB_ITEM_WIDTH = (TAB_TRACK_WIDTH - 8) / 3;
 
   const cardDropdownAnimStyle = useAnimatedStyle(() => ({
     transform: [{ scale: cardDropdownScale.value }],
   }));
 
+  const chevronAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${headerExpandedProgress.value * 180}deg` }],
+  }));
+
+  const accordionAnimStyle = useAnimatedStyle(() => ({
+    maxHeight: interpolate(headerExpandedProgress.value, [0, 1], [0, 100]),
+    opacity: headerExpandedProgress.value,
+    marginTop: interpolate(headerExpandedProgress.value, [0, 1], [0, 8]),
+    marginBottom: interpolate(headerExpandedProgress.value, [0, 1], [0, 4]),
+    transform: [
+      {
+        translateY: interpolate(headerExpandedProgress.value, [0, 1], [-8, 0]),
+      },
+    ],
+    overflow: 'hidden',
+  }));
+
   const fabAnimStyle = useAnimatedStyle(() => ({
+    width: fabWidth.value,
     transform: [{ scale: fabScale.value }],
+    opacity: fabOpacity.value,
+  }));
+
+  const fabTextContainerAnimStyle = useAnimatedStyle(() => ({
+    width: fabTextWidth.value,
+    opacity: fabTextOpacity.value,
+    marginLeft: fabTextWidth.value > 0 ? 6 : 0,
+  }));
+
+  const tabIndicatorAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: tabIndicatorX.value }],
+    width: TAB_ITEM_WIDTH,
   }));
 
   const handleCardDropdownPress = () => {
@@ -112,7 +167,65 @@ export default function SettlementsScreen() {
       withTiming(0.92, { duration: 80 }),
       withSpring(1, { damping: 14 })
     );
-    setIsCardDropdownOpen(true);
+    const next = !isHeaderExpanded;
+    setIsHeaderExpanded(next);
+    headerExpandedProgress.value = withSpring(next ? 1 : 0, {
+      damping: 20,
+      stiffness: 220,
+    });
+  };
+
+  const handleTabSwitch = (tab: 'vault' | 'pending' | 'history', index: number) => {
+    setActiveTab(tab);
+    tabIndicatorX.value = withSpring(index * TAB_ITEM_WIDTH, { damping: 22, stiffness: 240 });
+    horizontalScrollRef.current?.scrollTo({ x: index * SCREEN_WIDTH, animated: true });
+
+    if (tab === 'history') {
+      fabScale.value = withTiming(0, { duration: 180 });
+      fabOpacity.value = withTiming(0, { duration: 180 });
+      fabTextOpacity.value = withTiming(0, { duration: 100 });
+      fabTextWidth.value = withTiming(0, { duration: 120 });
+    } else if (tab === 'pending') {
+      fabScale.value = withSpring(1, { damping: 15 });
+      fabOpacity.value = withTiming(1, { duration: 180 });
+      fabWidth.value = withSpring(168, { damping: 16, stiffness: 220 });
+      fabTextWidth.value = withSpring(104, { damping: 16, stiffness: 220 });
+      fabTextOpacity.value = withTiming(1, { duration: 180 });
+    } else {
+      fabScale.value = withSpring(1, { damping: 15 });
+      fabOpacity.value = withTiming(1, { duration: 180 });
+      fabWidth.value = withSpring(52, { damping: 16, stiffness: 220 });
+      fabTextWidth.value = withSpring(0, { damping: 16, stiffness: 220 });
+      fabTextOpacity.value = withTiming(0, { duration: 120 });
+    }
+  };
+
+  const handlePageScrollEnd = (e: any) => {
+    const pageIndex = Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH);
+    const tabs: Array<'vault' | 'pending' | 'history'> = ['vault', 'pending', 'history'];
+    const newTab = tabs[pageIndex] || 'vault';
+    if (newTab !== activeTab) {
+      setActiveTab(newTab);
+      tabIndicatorX.value = withSpring(pageIndex * TAB_ITEM_WIDTH, { damping: 22, stiffness: 240 });
+      if (newTab === 'history') {
+        fabScale.value = withTiming(0, { duration: 180 });
+        fabOpacity.value = withTiming(0, { duration: 180 });
+        fabTextOpacity.value = withTiming(0, { duration: 100 });
+        fabTextWidth.value = withTiming(0, { duration: 120 });
+      } else if (newTab === 'pending') {
+        fabScale.value = withSpring(1, { damping: 15 });
+        fabOpacity.value = withTiming(1, { duration: 180 });
+        fabWidth.value = withSpring(168, { damping: 16, stiffness: 220 });
+        fabTextWidth.value = withSpring(104, { damping: 16, stiffness: 220 });
+        fabTextOpacity.value = withTiming(1, { duration: 180 });
+      } else {
+        fabScale.value = withSpring(1, { damping: 15 });
+        fabOpacity.value = withTiming(1, { duration: 180 });
+        fabWidth.value = withSpring(52, { damping: 16, stiffness: 220 });
+        fabTextWidth.value = withSpring(0, { damping: 16, stiffness: 220 });
+        fabTextOpacity.value = withTiming(0, { duration: 120 });
+      }
+    }
   };
 
   const handleFabPress = () => {
@@ -120,7 +233,11 @@ export default function SettlementsScreen() {
       withTiming(0.88, { duration: 70 }),
       withSpring(1, { damping: 14 })
     );
-    setIsAddQrOpen(true);
+    if (activeTab === 'pending') {
+      setIsManualRotationOpen(true);
+    } else if (activeTab === 'vault') {
+      setIsAddQrOpen(true);
+    }
   };
 
   // Fetch Auxiliary Data (Cards, Profiles, QRs, In-Transit)
@@ -138,11 +255,12 @@ export default function SettlementsScreen() {
             .from('card_transactions')
             .select('*')
             .eq('type', 'withdrawal')
+            .not('remarks', 'ilike', 'Lent given to%')
             .in('status', ['pending_settlement', 'partially_settled'])
             .order('transaction_date', { ascending: false }),
           supabase
             .from('card_transactions')
-            .select('amount, type, card_id, status, qr_id, remarks'),
+            .select('amount, type, card_id, status, qr_id, remarks, settled_to_user'),
           supabase.from('spends').select('amount, payment_method, card_id'),
         ]);
 
@@ -164,47 +282,8 @@ export default function SettlementsScreen() {
         setCurrentUser(profilesData[0]);
       }
 
-      // Calculate Card Available Limits Map
-      const availableMap: Record<string, number> = {};
-      cardsData
-        .filter((c) => c.is_primary)
-        .forEach((primaryCard) => {
-          const familyCardIds = cardsData
-            .filter((c) => c.id === primaryCard.id || c.parent_card_id === primaryCard.id)
-            .map((c) => c.id);
-
-          const withdrawals = allTxs
-            .filter((t) => {
-              if (t.type !== 'withdrawal') return false;
-              if (!t.card_id || !familyCardIds.includes(t.card_id)) return false;
-              const isRot = t.qr_id || (t.remarks || '').toLowerCase().includes('rotation');
-              if (isRot) return true;
-              return t.status === 'pending_settlement' || t.status === 'partially_settled';
-            })
-            .reduce((sum, t) => sum + Number(t.amount || 0), 0);
-
-          const billPayments = allTxs
-            .filter(
-              (t) => t.type === 'bill_payment' && t.card_id && familyCardIds.includes(t.card_id)
-            )
-            .reduce((sum, t) => sum + Number(t.amount || 0), 0);
-
-          const ccSpends = allSpends
-            .filter(
-              (s) =>
-                s.payment_method === 'credit_card' &&
-                s.card_id &&
-                familyCardIds.includes(s.card_id)
-            )
-            .reduce((sum, s) => sum + Number(s.amount || 0), 0);
-
-          const available =
-            Number(primaryCard.total_limit || 0) - withdrawals - ccSpends + billPayments;
-
-          familyCardIds.forEach((id) => {
-            availableMap[id] = available;
-          });
-        });
+      // Calculate Card Available Limits Map via @credics/core Canonical Engine
+      const availableMap = calculateCardAvailableMap(cardsData as any, allTxs, allSpends);
       setCardAvailableMap(availableMap);
 
       // Enrich In-Transit Transactions
@@ -284,25 +363,26 @@ export default function SettlementsScreen() {
           .from('card_transactions')
           .select('*')
           .eq('type', 'withdrawal')
+          .not('remarks', 'ilike', 'Lent given to%')
           .eq('status', 'settled')
-          .order('settled_date', { ascending: false });
+          .order('settled_date', { ascending: false, nullsFirst: false });
 
         if (selectedVaultCardId !== 'all') {
-          const selected = cards.find((c) => c.id === selectedVaultCardId);
-          const primaryId = selected?.is_primary ? selected.id : (selected?.parent_card_id || selectedVaultCardId);
-          const familyIds = cards
-            .filter((c) => c.id === primaryId || c.parent_card_id === primaryId)
-            .map((c) => c.id);
-          q = q.in('card_id', familyIds.length > 0 ? familyIds : [selectedVaultCardId]);
+          q = q.eq('card_id', selectedVaultCardId);
         }
 
         const { data: rawSettled } = await q.range(from, to);
-        const settledList = rawSettled || [];
+        const settledList = (rawSettled || []).slice().sort((a, b) => {
+          const tA = new Date(a.settled_date || a.transaction_date).getTime();
+          const tB = new Date(b.settled_date || b.transaction_date).getTime();
+          return tB - tA;
+        });
 
         const enriched: SettledTransaction[] = settledList.map((t) => {
           const card = cards.find((c) => c.id === t.card_id);
           const qr = qrs.find((q) => q.id === t.qr_id);
           const settledTo = profiles.find((p) => p.id === t.settled_to_user);
+          const rotatedBy = profiles.find((p) => p.id === t.recorded_by);
 
           return {
             id: t.id,
@@ -312,7 +392,11 @@ export default function SettlementsScreen() {
             merchant_name: qr?.merchant_name,
             card_name: card?.card_name,
             last_4_digits: card?.last_4_digits,
+            rotated_by_name: rotatedBy?.name,
+            rotated_by_avatar: rotatedBy?.avatar_url,
+            settled_to_user: t.settled_to_user,
             settled_to_name: settledTo?.name,
+            settled_to_avatar: settledTo?.avatar_url,
             remarks: t.remarks,
           };
         });
@@ -647,16 +731,11 @@ export default function SettlementsScreen() {
     return link.trim();
   };
 
-  // Filtered lists by selected vault card family
+  // Filtered lists by selected vault card
   const filteredPending = useMemo(() => {
     if (selectedVaultCardId === 'all') return pendingTxs;
-    const selected = cards.find((c) => c.id === selectedVaultCardId);
-    const primaryId = selected?.is_primary ? selected.id : (selected?.parent_card_id || selectedVaultCardId);
-    const familyIds = cards
-      .filter((c) => c.id === primaryId || c.parent_card_id === primaryId)
-      .map((c) => c.id);
-    return pendingTxs.filter((t) => t.card_id && (t.card_id === selectedVaultCardId || familyIds.includes(t.card_id)));
-  }, [pendingTxs, selectedVaultCardId, cards]);
+    return pendingTxs.filter((t) => t.card_id === selectedVaultCardId);
+  }, [pendingTxs, selectedVaultCardId]);
 
   // Total In Transit Calculation
   const totalInTransit = useMemo(() => {
@@ -668,6 +747,17 @@ export default function SettlementsScreen() {
       return sum + due;
     }, 0);
   }, [filteredPending]);
+
+  // Hierarchical cards for header accordion
+  const hierarchicalCards = useMemo(() => {
+    return buildHierarchicalCardList(cards);
+  }, [cards]);
+
+  const totalUnifiedAvailable = useMemo(() => {
+    return cards
+      .filter((c) => c.is_primary || !c.parent_card_id)
+      .reduce((sum, c) => sum + (cardAvailableMap[c.id] || 0), 0);
+  }, [cards, cardAvailableMap]);
 
   return (
     <View style={styles.screenContainer}>
@@ -698,15 +788,11 @@ export default function SettlementsScreen() {
               )}
             </View>
             <View style={styles.userTextCol}>
-              <View style={styles.liveStatusRow}>
-                <View style={styles.livePulseDot} />
-                <Text style={styles.liveStatusText}>LIQUIDITY ENGINE • REALTIME</Text>
-              </View>
               <Text style={styles.headerTitle}>Settlements & QRs</Text>
             </View>
           </TouchableOpacity>
 
-          {/* Vault Card Selector Dropdown with 120Hz Tactile Pop */}
+          {/* Vault Card Selector Pill with 120Hz Rotating Chevron */}
           <Animated.View style={cardDropdownAnimStyle}>
             <TouchableOpacity
               style={styles.vaultPill}
@@ -717,12 +803,96 @@ export default function SettlementsScreen() {
               <Text style={styles.vaultPillText} numberOfLines={1}>
                 {selectedVaultCardId === 'all'
                   ? 'All Cards'
-                  : cards.find((c) => c.id === selectedVaultCardId)?.card_name || 'Card'}
+                  : (() => {
+                      const c = cards.find((card) => card.id === selectedVaultCardId);
+                      if (!c) return 'Card';
+                      return !c.is_primary && c.parent_card_id ? `↳ ${c.card_name}` : c.card_name;
+                    })()}
               </Text>
-              <ChevronDown size={12} color="#CAD6C9" />
+              <Animated.View style={chevronAnimStyle}>
+                <ChevronDown size={12} color="#CAD6C9" />
+              </Animated.View>
             </TouchableOpacity>
           </Animated.View>
         </View>
+
+        {/* 120Hz Slide Accordion for Card Vault Selection */}
+        <Animated.View style={[styles.headerAccordion, accordionAnimStyle]}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.accordionScrollContent}
+          >
+            {/* All Cards Option */}
+            <TouchableOpacity
+              style={[
+                styles.accordionCardItem,
+                selectedVaultCardId === 'all' && styles.accordionCardItemActive,
+              ]}
+              onPress={() => {
+                setSelectedVaultCardId('all');
+                setIsHeaderExpanded(false);
+                headerExpandedProgress.value = withSpring(0, { damping: 20, stiffness: 220 });
+              }}
+              activeOpacity={0.8}
+            >
+              <View style={styles.accordionCardTopRow}>
+                <Layers size={13} color={selectedVaultCardId === 'all' ? '#10B981' : '#CAD6C9'} />
+                {selectedVaultCardId === 'all' && (
+                  <View style={styles.accordionActiveCheck}>
+                    <Check size={10} color="#FFFFFF" strokeWidth={3} />
+                  </View>
+                )}
+              </View>
+              <Text style={styles.accordionCardTitle} numberOfLines={1}>
+                All Cards
+              </Text>
+              <Text style={styles.accordionCardSub}>
+                Avail: ₹{totalUnifiedAvailable.toLocaleString('en-IN')}
+              </Text>
+            </TouchableOpacity>
+
+            {/* Hierarchical Cards List */}
+            {hierarchicalCards.map((c) => {
+              const isSelected = selectedVaultCardId === c.id;
+              const avail = cardAvailableMap[c.id] || 0;
+              return (
+                <TouchableOpacity
+                  key={c.id}
+                  style={[
+                    styles.accordionCardItem,
+                    isSelected && styles.accordionCardItemActive,
+                  ]}
+                  onPress={() => {
+                    setSelectedVaultCardId(c.id);
+                    setIsHeaderExpanded(false);
+                    headerExpandedProgress.value = withSpring(0, { damping: 20, stiffness: 220 });
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <View style={styles.accordionCardTopRow}>
+                    {c.isSub ? (
+                      <CornerDownRight size={13} color={isSelected ? '#10B981' : '#8CA394'} />
+                    ) : (
+                      <CreditCard size={13} color={isSelected ? '#10B981' : '#CAD6C9'} />
+                    )}
+                    {isSelected && (
+                      <View style={styles.accordionActiveCheck}>
+                        <Check size={10} color="#FFFFFF" strokeWidth={3} />
+                      </View>
+                    )}
+                  </View>
+                  <Text style={styles.accordionCardTitle} numberOfLines={1}>
+                    {c.isSub ? `↳ ${c.card_name}` : c.card_name}
+                  </Text>
+                  <Text style={styles.accordionCardSub} numberOfLines={1}>
+                    ••{c.last_4_digits} • ₹{avail.toLocaleString('en-IN')}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        </Animated.View>
 
         {/* Symmetrical Organic SVG Wave Transition */}
         <View style={styles.svgWaveWrapper}>
@@ -740,115 +910,153 @@ export default function SettlementsScreen() {
         </View>
       </LinearGradient>
 
-      {/* ================= 2. LIQUIDITY SUMMARY BANNER ================= */}
-      <View style={styles.summaryCardWrapper}>
-        <LinearGradient
-          colors={['#071A12', '#0C2B20', '#071A12']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.summaryCard}
-        >
-          <View style={styles.summaryTopRow}>
-            <View>
-              <Text style={styles.summaryLabel}>Total Due In Transit</Text>
-              <Text style={styles.summaryAmount}>₹{totalInTransit.toLocaleString('en-IN')}</Text>
-            </View>
-            <View style={styles.pendingBadge}>
-              <Clock size={12} color="#F59E0B" />
-              <Text style={styles.pendingBadgeText}>{filteredPending.length} Pending</Text>
-            </View>
-          </View>
-          <Text style={styles.summarySub}>
-            Tap any rotation below to record receipt into cash on hand
-          </Text>
-        </LinearGradient>
+      {/* ================= 2. REORDERED SEGMENTED TABS (120HZ SLIDING PILL) ================= */}
+      <View style={styles.tabsContainer}>
+        <View style={styles.tabsTrack}>
+          {/* Animated 120Hz Sliding Background Pill */}
+          <Animated.View style={[styles.slidingTabIndicator, tabIndicatorAnimStyle]} />
+
+          {(['vault', 'pending', 'history'] as const).map((tab, idx) => {
+            const isActive = activeTab === tab;
+            const label =
+              tab === 'vault'
+                ? 'QR Vault'
+                : tab === 'pending'
+                ? 'In Transit'
+                : 'Settled History';
+            return (
+              <TouchableOpacity
+                key={tab}
+                style={styles.tabButton}
+                onPress={() => handleTabSwitch(tab, idx)}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.tabButtonText, isActive && styles.tabButtonTextActive]}>
+                  {label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
       </View>
 
-      {/* ================= 3. REORDERED SEGMENTED TABS ================= */}
-      {/* 1. QR Vault -> 2. In Transit -> 3. History */}
-      <View style={styles.tabsRow}>
-        {(['vault', 'pending', 'history'] as const).map((tab) => {
-          const isActive = activeTab === tab;
-          const label =
-            tab === 'vault'
-              ? 'QR Vault'
-              : tab === 'pending'
-              ? 'In Transit'
-              : 'Settled History';
-          return (
-            <TouchableOpacity
-              key={tab}
-              style={[styles.tabChip, isActive && styles.activeTabChip]}
-              onPress={() => setActiveTab(tab)}
-              activeOpacity={0.8}
-            >
-              <Text style={[styles.tabChipText, isActive && styles.activeTabChipText]}>
-                {label}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
-
-      {/* ================= 4. TAB CONTENT ================= */}
+      {/* ================= 3. HORIZONTAL SWIPEABLE PAGER ================= */}
       {isLoading ? (
         <View style={styles.loaderContainer}>
           <ActivityIndicator size="large" color="#0B3F28" />
           <Text style={styles.loaderText}>Loading Liquidity Ledger...</Text>
         </View>
-      ) : activeTab === 'history' ? (
-        <View style={styles.historyContainer}>
-          <SettledHistoryTab
-            transactions={settledHistory}
-            loadingMore={loadingMoreHistory}
-            hasMore={hasMoreHistory}
-            onLoadMore={handleLoadMoreHistory}
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-          />
-        </View>
       ) : (
         <ScrollView
-          style={styles.contentScroll}
-          contentContainerStyle={[styles.scrollContent, { paddingBottom: 130 }]}
-          showsVerticalScrollIndicator={false}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              colors={['#0B3F28']}
-              tintColor="#0B3F28"
-            />
-          }
+          ref={horizontalScrollRef}
+          horizontal
+          pagingEnabled
+          showsHorizontalScrollIndicator={false}
+          onMomentumScrollEnd={handlePageScrollEnd}
+          style={styles.horizontalPager}
+          contentContainerStyle={{ width: SCREEN_WIDTH * 3 }}
         >
-          {/* TAB 1: QR VAULT */}
-          {activeTab === 'vault' && (
-            <QRVaultTab
-              qrs={qrs}
-              activeCooldowns={activeCooldowns}
-              currentUserName={currentUser?.name || ''}
-              onSelectQr={(qr) => setSelectedQrForPayment(qr)}
-              onToggleStatus={handleToggleQrStatus}
-              onEditQr={(qr) => setEditingQr(qr)}
-            />
-          )}
+          {/* PAGE 0: QR VAULT */}
+          <View style={{ width: SCREEN_WIDTH }}>
+            <ScrollView
+              style={styles.contentScroll}
+              contentContainerStyle={[styles.scrollContent, { paddingBottom: 130 }]}
+              showsVerticalScrollIndicator={false}
+              refreshControl={
+                <RefreshControl
+                  refreshing={refreshing}
+                  onRefresh={onRefresh}
+                  colors={['#0B3F28']}
+                  tintColor="#0B3F28"
+                />
+              }
+            >
+              <QRVaultTab
+                qrs={qrs}
+                activeCooldowns={activeCooldowns}
+                currentUserName={currentUser?.name || ''}
+                onSelectQr={(qr) => setSelectedQrForPayment(qr)}
+                onSelectStaticQr={(qr) => {
+                  setViewingStaticQr(qr);
+                  setIsStaticModalOpen(true);
+                }}
+                onToggleStatus={handleToggleQrStatus}
+                onEditQr={(qr) => setEditingQr(qr)}
+                onAddStatic={() => setIsAddQrOpen(true)}
+              />
+            </ScrollView>
+          </View>
 
-          {/* TAB 2: IN TRANSIT */}
-          {activeTab === 'pending' && (
-            <InTransitTab
-              transactions={filteredPending}
-              onSettle={(tx) => setSelectedTxForSettle(tx)}
-              onNewManualEntry={() => setIsManualRotationOpen(true)}
-            />
-          )}
+          {/* PAGE 1: IN TRANSIT */}
+          <View style={{ width: SCREEN_WIDTH }}>
+            <ScrollView
+              style={styles.contentScroll}
+              contentContainerStyle={[styles.scrollContent, { paddingBottom: 130 }]}
+              showsVerticalScrollIndicator={false}
+              refreshControl={
+                <RefreshControl
+                  refreshing={refreshing}
+                  onRefresh={onRefresh}
+                  colors={['#0B3F28']}
+                  tintColor="#0B3F28"
+                />
+              }
+            >
+              {/* LIQUIDITY SUMMARY BANNER - Relocated INSIDE In-Transit Tab! */}
+              <View style={styles.inTransitSummaryCardWrapper}>
+                <LinearGradient
+                  colors={['#071A12', '#0C2B20', '#071A12']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.summaryCard}
+                >
+                  <View style={styles.summaryTopRow}>
+                    <View>
+                      <Text style={styles.summaryLabel}>Total Due In Transit</Text>
+                      <Text style={styles.summaryAmount}>₹{totalInTransit.toLocaleString('en-IN')}</Text>
+                    </View>
+                    <View style={styles.pendingBadge}>
+                      <Clock size={12} color="#F59E0B" />
+                      <Text style={styles.pendingBadgeText}>{filteredPending.length} Pending</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.summarySub}>
+                    Tap any rotation below to record receipt into cash on hand
+                  </Text>
+                </LinearGradient>
+              </View>
+
+              <InTransitTab
+                transactions={filteredPending}
+                onSettle={(tx) => setSelectedTxForSettle(tx)}
+              />
+            </ScrollView>
+          </View>
+
+          {/* PAGE 2: SETTLED HISTORY */}
+          <View style={{ width: SCREEN_WIDTH }}>
+            <View style={styles.historyContainer}>
+              <SettledHistoryTab
+                transactions={settledHistory}
+                loadingMore={loadingMoreHistory}
+                hasMore={hasMoreHistory}
+                onLoadMore={handleLoadMoreHistory}
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+              />
+            </View>
+          </View>
         </ScrollView>
       )}
 
-      {/* ================= 5. ELEVATED FLOATING ACTION BUTTON (FAB) ================= */}
-      <Animated.View style={[styles.floatingFabContainer, fabAnimStyle]}>
+      {/* ================= 4. CONTEXT-AWARE MORPHING FAB ================= */}
+      <Animated.View
+        style={[styles.floatingFabContainer, fabAnimStyle]}
+        pointerEvents={activeTab === 'history' ? 'none' : 'auto'}
+      >
         <TouchableOpacity
-          style={styles.floatingFab}
-          activeOpacity={0.9}
+          style={styles.floatingFabTouchable}
+          activeOpacity={0.88}
           onPress={handleFabPress}
         >
           <LinearGradient
@@ -857,7 +1065,12 @@ export default function SettlementsScreen() {
             end={{ x: 1, y: 1 }}
             style={styles.floatingFabGradient}
           >
-            <Plus size={24} color="#FFFFFF" strokeWidth={2.8} />
+            <Plus size={20} color="#FFFFFF" strokeWidth={2.8} />
+            <Animated.View style={[styles.floatingFabTextWrapper, fabTextContainerAnimStyle]}>
+              <Text style={styles.floatingFabPillText} numberOfLines={1}>
+                Record Rotation
+              </Text>
+            </Animated.View>
           </LinearGradient>
         </TouchableOpacity>
       </Animated.View>
@@ -926,83 +1139,12 @@ export default function SettlementsScreen() {
         amount={successAmount}
       />
 
-      {/* Vault Card Dropdown Filter Modal */}
-      <Modal
-        visible={isCardDropdownOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setIsCardDropdownOpen(false)}
-        statusBarTranslucent
-      >
-        <View style={styles.modalBackdrop}>
-          <Pressable
-            style={StyleSheet.absoluteFill}
-            onPress={() => setIsCardDropdownOpen(false)}
-          />
-          <View style={styles.filterMenuBox}>
-            <View style={styles.filterMenuHeader}>
-              <Text style={styles.filterMenuTitle}>Select Vault Card</Text>
-              <TouchableOpacity onPress={() => setIsCardDropdownOpen(false)} hitSlop={10}>
-                <X size={16} color="#4A6B56" />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView
-              style={{ maxHeight: SCREEN_HEIGHT * 0.55 }}
-              showsVerticalScrollIndicator={false}
-              bounces={false}
-            >
-              <TouchableOpacity
-                style={[
-                  styles.menuOption,
-                  selectedVaultCardId === 'all' && styles.menuOptionActive,
-                ]}
-                onPress={() => {
-                  setSelectedVaultCardId('all');
-                  setIsCardDropdownOpen(false);
-                }}
-              >
-                <Text
-                  style={[
-                    styles.menuOptionText,
-                    selectedVaultCardId === 'all' && styles.menuOptionTextActive,
-                  ]}
-                >
-                  All Vault Cards
-                </Text>
-                {selectedVaultCardId === 'all' && <Check size={14} color="#0B3F28" />}
-              </TouchableOpacity>
-
-              {cards.map((card) => {
-                const isSelected = selectedVaultCardId === card.id;
-                return (
-                  <TouchableOpacity
-                    key={card.id}
-                    style={[styles.menuOption, isSelected && styles.menuOptionActive]}
-                    onPress={() => {
-                      setSelectedVaultCardId(card.id);
-                      setIsCardDropdownOpen(false);
-                    }}
-                  >
-                    <View>
-                      <Text
-                        style={[
-                          styles.menuOptionText,
-                          isSelected && styles.menuOptionTextActive,
-                        ]}
-                      >
-                        {card.card_name}
-                      </Text>
-                      <Text style={styles.menuOptionSub}>**{card.last_4_digits}</Text>
-                    </View>
-                    {isSelected && <Check size={14} color="#0B3F28" />}
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
+      {/* Static Standee Full-Screen Viewer Modal */}
+      <StaticQRViewModal
+        visible={isStaticModalOpen}
+        qr={viewingStaticQr}
+        onClose={() => setIsStaticModalOpen(false)}
+      />
     </View>
   );
 }
@@ -1033,29 +1175,27 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    borderWidth: 1.5,
-    borderColor: 'rgba(255, 255, 255, 0.25)',
-    padding: 2,
+    borderWidth: 2,
+    borderColor: 'rgba(255, 255, 255, 0.4)',
+    overflow: 'hidden',
+    backgroundColor: '#072C1C',
     alignItems: 'center',
     justifyContent: 'center',
   },
   avatarImg: {
     width: '100%',
     height: '100%',
-    borderRadius: 18,
   },
   avatarPlaceholder: {
     width: '100%',
     height: '100%',
-    borderRadius: 18,
-    backgroundColor: '#072C1C',
     alignItems: 'center',
     justifyContent: 'center',
   },
   avatarText: {
+    fontSize: 16,
+    fontWeight: '900',
     color: '#CAD6C9',
-    fontSize: 14,
-    fontWeight: '800',
   },
   userTextCol: {
     justifyContent: 'center',
@@ -1099,6 +1239,55 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
     maxWidth: 90,
+  },
+  headerAccordion: {
+    overflow: 'hidden',
+  },
+  accordionScrollContent: {
+    paddingHorizontal: 20,
+    gap: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 4,
+  },
+  accordionCardItem: {
+    width: 144,
+    height: 74,
+    borderRadius: 14,
+    padding: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.14)',
+    justifyContent: 'space-between',
+  },
+  accordionCardItemActive: {
+    backgroundColor: 'rgba(16, 185, 129, 0.22)',
+    borderColor: '#10B981',
+    borderWidth: 1.5,
+  },
+  accordionCardTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  accordionActiveCheck: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#10B981',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  accordionCardTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: -0.2,
+  },
+  accordionCardSub: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#A7F3D0',
   },
   svgWaveWrapper: {
     position: 'absolute',
@@ -1163,39 +1352,60 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: '#A3B8A5',
   },
-  tabsRow: {
+  inTransitSummaryCardWrapper: {
+    paddingHorizontal: 0,
+    marginBottom: 12,
+  },
+  tabsContainer: {
+    marginHorizontal: 16,
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  tabsTrack: {
     flexDirection: 'row',
-    paddingHorizontal: 16,
-    marginVertical: 8,
-    gap: 8,
-  },
-  tabChip: {
-    flex: 1,
-    paddingVertical: 9,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 12,
     backgroundColor: '#FFFFFF',
-    borderWidth: 1,
+    borderRadius: 16,
+    padding: 4,
+    position: 'relative',
+    borderWidth: 1.2,
     borderColor: '#DFE8E0',
-  },
-  activeTabChip: {
-    backgroundColor: '#0B3F28',
-    borderColor: '#0B3F28',
     shadowColor: '#072C1C',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.12,
-    shadowRadius: 4,
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
     elevation: 2,
   },
-  tabChipText: {
-    fontSize: 11,
+  slidingTabIndicator: {
+    position: 'absolute',
+    top: 4,
+    bottom: 4,
+    left: 4,
+    backgroundColor: '#0B3F28',
+    borderRadius: 12,
+    shadowColor: '#072C1C',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.18,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  tabButton: {
+    flex: 1,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 2,
+  },
+  tabButtonText: {
+    fontSize: 12,
     fontWeight: '700',
     color: '#4A6B56',
   },
-  activeTabChipText: {
+  tabButtonTextActive: {
     color: '#FFFFFF',
     fontWeight: '800',
+  },
+  horizontalPager: {
+    flex: 1,
   },
   contentScroll: {
     flex: 1,
@@ -1225,6 +1435,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 86,
     right: 18,
+    height: 52,
     zIndex: 99,
     shadowColor: '#047857',
     shadowOffset: { width: 0, height: 6 },
@@ -1232,17 +1443,30 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 8,
   },
-  floatingFab: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
+  floatingFabTouchable: {
+    width: '100%',
+    height: 52,
+    borderRadius: 26,
     overflow: 'hidden',
   },
   floatingFabGradient: {
     width: '100%',
     height: '100%',
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+  floatingFabTextWrapper: {
+    overflow: 'hidden',
+    justifyContent: 'center',
+    alignItems: 'flex-start',
+  },
+  floatingFabPillText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0.2,
   },
   modalBackdrop: {
     flex: 1,

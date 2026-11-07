@@ -4,7 +4,6 @@ import {
   CheckCircle2,
   ArrowDownLeft,
   Clock,
-  Plus,
   ChevronDown,
   ChevronUp,
   CreditCard,
@@ -57,7 +56,6 @@ interface InTransitTabProps {
 export function InTransitTab({
   transactions,
   onSettle,
-  onNewManualEntry,
 }: InTransitTabProps) {
   const [expandedHistories, setExpandedHistories] = useState<Record<string, boolean>>({});
 
@@ -70,22 +68,6 @@ export function InTransitTab({
 
   return (
     <View style={styles.listContainer}>
-      {/* Top Action Row: New Manual Rotation Entry */}
-      {onNewManualEntry && (
-        <View style={styles.topActionBar}>
-          <TouchableOpacity
-            style={styles.manualEntryBtn}
-            onPress={onNewManualEntry}
-            activeOpacity={0.85}
-          >
-            <View style={styles.manualEntryBtnInner}>
-              <Plus size={15} color="#0B3F28" strokeWidth={2.4} />
-              <Text style={styles.manualEntryBtnText}>New Manual Rotation Entry</Text>
-            </View>
-          </TouchableOpacity>
-        </View>
-      )}
-
       {transactions.length === 0 ? (
         <View style={styles.emptyContainer}>
           <View style={styles.emptyIconCircle}>
@@ -242,33 +224,6 @@ const styles = StyleSheet.create({
   listContainer: {
     gap: 10,
     paddingBottom: 24,
-  },
-  topActionBar: {
-    marginBottom: 4,
-  },
-  manualEntryBtn: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderWidth: 1.2,
-    borderColor: '#DFE8E0',
-    shadowColor: '#072C1C',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 5,
-    elevation: 2,
-  },
-  manualEntryBtnInner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-  },
-  manualEntryBtnText: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#0B3F28',
   },
   emptyContainer: {
     alignItems: 'center',

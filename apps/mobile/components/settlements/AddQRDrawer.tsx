@@ -10,6 +10,7 @@ import {
   Alert,
   ActivityIndicator,
 } from 'react-native';
+import * as Haptics from 'expo-haptics';
 import { SwipeDownDrawer, DrawerScrollView } from '../SwipeDownDrawer';
 import { QrCode, ShieldCheck, CheckCircle2 } from 'lucide-react-native';
 import { CardData } from './QRPaymentModal';
@@ -77,6 +78,7 @@ export function AddQRDrawer({ visible, onClose, cards, onSaveQR }: AddQRDrawerPr
         is_static: isStatic,
         card_id: selectedCardId || (cards.length > 0 ? cards[0].id : undefined),
       });
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       onClose();
     } catch (err: any) {
       Alert.alert('Error', err?.message || 'Failed to add QR.');
@@ -87,174 +89,181 @@ export function AddQRDrawer({ visible, onClose, cards, onSaveQR }: AddQRDrawerPr
 
   return (
     <SwipeDownDrawer visible={visible} onClose={onClose} heightPercent={0.85}>
-      <View style={styles.headerBox}>
-        <View style={styles.iconSquare}>
-          <QrCode size={22} color="#10B981" />
-        </View>
-        <View style={styles.headerDetailsCol}>
-          <Text style={styles.title}>Add New Merchant QR</Text>
-          <Text style={styles.subTitle}>Register liquidity rotation endpoint</Text>
-        </View>
-      </View>
-
-      <DrawerScrollView style={styles.bodyScroll} contentContainerStyle={styles.bodyContent}>
-        {/* Dynamic vs Static Toggle */}
-        <View style={styles.switchBox}>
-          <View style={styles.switchLeft}>
-            <Text style={styles.switchTitle}>Static Vault Standee QR</Text>
-            <Text style={styles.switchSub}>
-              Enable for offline standees without UPI intent links
-            </Text>
+      <View style={styles.container}>
+        <View style={styles.headerBox}>
+          <View style={styles.iconSquare}>
+            <QrCode size={22} color="#10B981" />
           </View>
-          <Switch
-            value={isStatic}
-            onValueChange={setIsStatic}
-            trackColor={{ false: '#DFE8E0', true: '#10B981' }}
-            thumbColor="#FFFFFF"
-          />
+          <View style={styles.headerDetailsCol}>
+            <Text style={styles.title}>Add New Merchant QR</Text>
+            <Text style={styles.subTitle}>Register liquidity rotation endpoint</Text>
+          </View>
         </View>
 
-        {/* Merchant Name */}
-        <View style={styles.sectionBox}>
-          <Text style={styles.fieldLabel}>Merchant / Business Name</Text>
-          <TextInput
-            style={styles.textInput}
-            placeholder="e.g. Maa Tara Enterprise"
-            placeholderTextColor="#8CA394"
-            value={merchantName}
-            onChangeText={setMerchantName}
-          />
-        </View>
-
-        {/* UPI ID (Hidden if Static) */}
-        {!isStatic && (
-          <View style={styles.sectionBox}>
-            <Text style={styles.fieldLabel}>UPI ID (VPA)</Text>
-            <TextInput
-              style={styles.textInput}
-              placeholder="e.g. merchant@icici"
-              placeholderTextColor="#8CA394"
-              value={upiId}
-              onChangeText={setUpiId}
-              autoCapitalize="none"
+        <DrawerScrollView style={styles.bodyScroll} contentContainerStyle={styles.bodyContent}>
+          {/* Dynamic vs Static Toggle */}
+          <View style={styles.switchBox}>
+            <View style={styles.switchLeft}>
+              <Text style={styles.switchTitle}>Static Vault Standee QR</Text>
+              <Text style={styles.switchSub}>
+                Enable for offline standees without UPI intent links
+              </Text>
+            </View>
+            <Switch
+              value={isStatic}
+              onValueChange={setIsStatic}
+              trackColor={{ false: '#DFE8E0', true: '#10B981' }}
+              thumbColor="#FFFFFF"
             />
           </View>
-        )}
 
-        {/* Platform Selection */}
-        {!isStatic && (
+          {/* Merchant Name */}
           <View style={styles.sectionBox}>
-            <Text style={styles.fieldLabel}>Provider Platform</Text>
+            <Text style={styles.fieldLabel}>Merchant / Business Name</Text>
+            <TextInput
+              style={styles.textInput}
+              placeholder="e.g. Maa Tara Enterprise"
+              placeholderTextColor="#8CA394"
+              value={merchantName}
+              onChangeText={setMerchantName}
+            />
+          </View>
+
+          {/* UPI ID (Hidden if Static) */}
+          {!isStatic && (
+            <View style={styles.sectionBox}>
+              <Text style={styles.fieldLabel}>UPI ID (VPA)</Text>
+              <TextInput
+                style={styles.textInput}
+                placeholder="e.g. merchant@icici"
+                placeholderTextColor="#8CA394"
+                value={upiId}
+                onChangeText={setUpiId}
+                autoCapitalize="none"
+              />
+            </View>
+          )}
+
+          {/* Platform Selection */}
+          {!isStatic && (
+            <View style={styles.sectionBox}>
+              <Text style={styles.fieldLabel}>Provider Platform</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.pillsScroll}>
+                {PLATFORMS.map((p) => {
+                  const isSelected = platform === p;
+                  return (
+                    <TouchableOpacity
+                      key={p}
+                      style={[styles.pill, isSelected && styles.pillActive]}
+                      onPress={() => setPlatform(p)}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={[styles.pillText, isSelected && styles.pillTextActive]}>
+                        {p}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          )}
+
+          {/* Settlement Time */}
+          {!isStatic && (
+            <View style={styles.sectionBox}>
+              <Text style={styles.fieldLabel}>Expected Settlement Speed</Text>
+              <View style={styles.settleRow}>
+                {SETTLEMENT_TIMES.map((st) => {
+                  const isSelected = settlementTime === st;
+                  return (
+                    <TouchableOpacity
+                      key={st}
+                      style={[styles.settleBtn, isSelected && styles.settleBtnActive]}
+                      onPress={() => setSettlementTime(st)}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={[styles.settleBtnText, isSelected && styles.settleBtnTextActive]}>
+                        {st}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+          )}
+
+          {/* Base Payment Link (Optional) */}
+          {!isStatic && (
+            <View style={styles.sectionBox}>
+              <Text style={styles.fieldLabel}>Base UPI Payment Link (Optional)</Text>
+              <TextInput
+                style={styles.textInput}
+                placeholder="e.g. upi://pay?pa=... or PhonePe Link"
+                placeholderTextColor="#8CA394"
+                value={basePaymentLink}
+                onChangeText={setBasePaymentLink}
+                autoCapitalize="none"
+              />
+            </View>
+          )}
+
+          {/* Owning Card Link */}
+          <View style={styles.sectionBox}>
+            <Text style={styles.fieldLabel}>Link to Vault Card</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.pillsScroll}>
-              {PLATFORMS.map((p) => {
-                const isSelected = platform === p;
+              {cards.map((c) => {
+                const isSelected = selectedCardId === c.id;
                 return (
                   <TouchableOpacity
-                    key={p}
-                    style={[styles.pill, isSelected && styles.pillActive]}
-                    onPress={() => setPlatform(p)}
+                    key={c.id}
+                    style={[styles.cardPill, isSelected && styles.cardPillActive]}
+                    onPress={() => setSelectedCardId(c.id)}
                     activeOpacity={0.8}
                   >
-                    <Text style={[styles.pillText, isSelected && styles.pillTextActive]}>
-                      {p}
+                    <Text style={[styles.cardPillText, isSelected && styles.cardPillTextActive]}>
+                      {c.card_name} (**{c.last_4_digits})
                     </Text>
                   </TouchableOpacity>
                 );
               })}
             </ScrollView>
           </View>
-        )}
+        </DrawerScrollView>
 
-        {/* Settlement Time */}
-        {!isStatic && (
-          <View style={styles.sectionBox}>
-            <Text style={styles.fieldLabel}>Expected Settlement Speed</Text>
-            <View style={styles.settleRow}>
-              {SETTLEMENT_TIMES.map((st) => {
-                const isSelected = settlementTime === st;
-                return (
-                  <TouchableOpacity
-                    key={st}
-                    style={[styles.settleBtn, isSelected && styles.settleBtnActive]}
-                    onPress={() => setSettlementTime(st)}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={[styles.settleBtnText, isSelected && styles.settleBtnTextActive]}>
-                      {st}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </View>
-        )}
-
-        {/* Base Payment Link (Optional) */}
-        {!isStatic && (
-          <View style={styles.sectionBox}>
-            <Text style={styles.fieldLabel}>Base UPI Payment Link (Optional)</Text>
-            <TextInput
-              style={styles.textInput}
-              placeholder="e.g. upi://pay?pa=... or PhonePe Link"
-              placeholderTextColor="#8CA394"
-              value={basePaymentLink}
-              onChangeText={setBasePaymentLink}
-              autoCapitalize="none"
-            />
-          </View>
-        )}
-
-        {/* Owning Card Link */}
-        <View style={styles.sectionBox}>
-          <Text style={styles.fieldLabel}>Link to Vault Card</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.pillsScroll}>
-            {cards.map((c) => {
-              const isSelected = selectedCardId === c.id;
-              return (
-                <TouchableOpacity
-                  key={c.id}
-                  style={[styles.cardPill, isSelected && styles.cardPillActive]}
-                  onPress={() => setSelectedCardId(c.id)}
-                  activeOpacity={0.8}
-                >
-                  <Text style={[styles.cardPillText, isSelected && styles.cardPillTextActive]}>
-                    {c.card_name} (**{c.last_4_digits})
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
+        {/* Footer Save Button */}
+        <View style={styles.footerContainer}>
+          <TouchableOpacity
+            style={[styles.saveBtn, isSubmitting && styles.saveBtnDisabled]}
+            onPress={handleSave}
+            disabled={isSubmitting}
+            activeOpacity={0.88}
+          >
+            {isSubmitting ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <>
+                <CheckCircle2 size={18} color="#FFFFFF" strokeWidth={2.4} />
+                <Text style={styles.saveBtnText}>Save Merchant QR to Vault</Text>
+              </>
+            )}
+          </TouchableOpacity>
         </View>
-      </DrawerScrollView>
-
-      {/* Footer Save Button */}
-      <View style={styles.footerContainer}>
-        <TouchableOpacity
-          style={[styles.saveBtn, isSubmitting && styles.saveBtnDisabled]}
-          onPress={handleSave}
-          disabled={isSubmitting}
-          activeOpacity={0.88}
-        >
-          {isSubmitting ? (
-            <ActivityIndicator size="small" color="#FFFFFF" />
-          ) : (
-            <>
-              <CheckCircle2 size={18} color="#FFFFFF" strokeWidth={2.4} />
-              <Text style={styles.saveBtnText}>Save Merchant QR to Vault</Text>
-            </>
-          )}
-        </TouchableOpacity>
       </View>
     </SwipeDownDrawer>
   );
 }
 
 const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#EFF3EE',
+  },
   headerBox: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingBottom: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
     borderBottomColor: '#DFE8E0',
     gap: 12,
@@ -288,18 +297,18 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   bodyContent: {
-    padding: 20,
-    gap: 16,
-    paddingBottom: 40,
+    padding: 16,
+    gap: 14,
+    paddingBottom: 32,
   },
   switchBox: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: '#EFF3EE',
-    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
     padding: 14,
-    borderWidth: 1,
+    borderWidth: 1.2,
     borderColor: '#DFE8E0',
   },
   switchLeft: {
@@ -318,20 +327,26 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   sectionBox: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1.2,
+    borderColor: '#DFE8E0',
     gap: 8,
   },
   fieldLabel: {
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: '800',
-    color: '#072C1C',
-    letterSpacing: 0.2,
+    color: '#4A6B56',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
   },
   textInput: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#EFF3EE',
     borderWidth: 1.2,
     borderColor: '#DFE8E0',
     borderRadius: 12,
-    paddingHorizontal: 14,
+    paddingHorizontal: 12,
     height: 48,
     fontSize: 13,
     color: '#072C1C',
@@ -343,15 +358,15 @@ const styles = StyleSheet.create({
   pill: {
     paddingHorizontal: 14,
     paddingVertical: 8,
-    borderRadius: 20,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1.2,
+    borderRadius: 12,
+    backgroundColor: '#EFF3EE',
+    borderWidth: 1,
     borderColor: '#DFE8E0',
     marginRight: 8,
   },
   pillActive: {
     backgroundColor: '#0B3F28',
-    borderColor: '#0B3F28',
+    borderColor: '#072C1C',
   },
   pillText: {
     fontSize: 11,
@@ -371,13 +386,13 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     alignItems: 'center',
     borderRadius: 10,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1.2,
+    backgroundColor: '#EFF3EE',
+    borderWidth: 1,
     borderColor: '#DFE8E0',
   },
   settleBtnActive: {
     backgroundColor: '#0B3F28',
-    borderColor: '#0B3F28',
+    borderColor: '#072C1C',
   },
   settleBtnText: {
     fontSize: 11,
@@ -392,28 +407,27 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 10,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1.2,
+    backgroundColor: '#EFF3EE',
+    borderWidth: 1,
     borderColor: '#DFE8E0',
     marginRight: 8,
   },
   cardPillActive: {
     backgroundColor: '#0B3F28',
-    borderColor: '#0B3F28',
+    borderColor: '#072C1C',
   },
   cardPillText: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#072C1C',
+    color: '#4A6B56',
   },
   cardPillTextActive: {
     color: '#FFFFFF',
     fontWeight: '800',
   },
   footerContainer: {
-    paddingHorizontal: 20,
-    paddingTop: 10,
-    paddingBottom: 24,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     borderTopWidth: 1,
     borderTopColor: '#DFE8E0',
     backgroundColor: '#FFFFFF',
@@ -424,21 +438,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
     backgroundColor: '#0B3F28',
-    borderRadius: 16,
-    paddingVertical: 15,
-    shadowColor: '#072C1C',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 4,
+    borderRadius: 14,
+    paddingVertical: 14,
   },
   saveBtnDisabled: {
     opacity: 0.6,
   },
   saveBtnText: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '800',
     color: '#FFFFFF',
-    letterSpacing: -0.2,
   },
 });

@@ -21,13 +21,24 @@ import Animated, {
   withSpring,
   withTiming,
   withSequence,
+  interpolate,
+  FadeInDown,
+  LinearTransition,
 } from 'react-native-reanimated';
 import Svg, { Path } from 'react-native-svg';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
-import NetInfo from '@react-native-community/netinfo';
-import { recordLentCollectedCreditCardPaydown, computeBorrowerSummaries } from '@credics/core';
+import {
+  recordLentCollectedCreditCardPaydown,
+  computeBorrowerSummaries,
+  calculateCardAvailableMap,
+} from '@credics/core';
+import {
+  broadcastLentIssueAlert,
+  broadcastLentRecoveryAlert,
+} from '../../lib/alertDispatcher';
 import { useOfflineQueueStore } from '../../lib/offlineQueue';
+import NetInfo from '@react-native-community/netinfo';
 import { supabase } from '../../lib/supabase';
 import {
   Users,
@@ -44,6 +55,7 @@ import {
   Check,
   User,
   Search,
+  CornerDownRight,
 } from 'lucide-react-native';
 
 import { BorrowerCard, BorrowerSummary } from '../../components/lents/BorrowerCard';
@@ -51,6 +63,7 @@ import {
   BorrowerLedgerDrawer,
   LedgerEntry,
 } from '../../components/lents/BorrowerLedgerDrawer';
+import { useCardStore, buildHierarchicalCardList } from '../../lib/cardStore';
 import {
   LentGiveModal,
   LentGiveSubmitParams,
@@ -69,6 +82,7 @@ import {
 } from '../../components/lents/BorrowerPickerDrawer';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const TAB_ITEM_WIDTH = (SCREEN_WIDTH - 32 - 8) / 3;
 
 interface Profile {
   id: string;
@@ -95,9 +109,11 @@ export default function LentsScreen() {
   const [activeTab, setActiveTab] = useState<TabType>('combined');
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Vault Selection
-  const [selectedVaultCardId, setSelectedVaultCardId] = useState<string>('all');
-  const [isCardDropdownOpen, setIsCardDropdownOpen] = useState(false);
+  // Vault Selection (Global Persistent)
+  const { selectedCardId: selectedVaultCardId, setSelectedCardId: setSelectedVaultCardId } =
+    useCardStore();
+  const [isHeaderExpanded, setIsHeaderExpanded] = useState(false);
+  const headerExpandedProgress = useSharedValue(0);
 
   // Core Data States
   const [rawBorrowers, setRawBorrowers] = useState<RawBorrower[]>([]);
@@ -133,9 +149,28 @@ export default function LentsScreen() {
   const fabScale = useSharedValue(1);
   const heroCardScale = useSharedValue(1);
   const heroCardOpacity = useSharedValue(1);
+  const tabIndicatorX = useSharedValue(0);
+  const horizontalScrollRef = React.useRef<ScrollView>(null);
 
   const cardDropdownAnimStyle = useAnimatedStyle(() => ({
     transform: [{ scale: cardDropdownScale.value }],
+  }));
+
+  const chevronAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${headerExpandedProgress.value * 180}deg` }],
+  }));
+
+  const accordionAnimStyle = useAnimatedStyle(() => ({
+    maxHeight: interpolate(headerExpandedProgress.value, [0, 1], [0, 100]),
+    opacity: headerExpandedProgress.value,
+    marginTop: interpolate(headerExpandedProgress.value, [0, 1], [0, 8]),
+    marginBottom: interpolate(headerExpandedProgress.value, [0, 1], [0, 4]),
+    transform: [
+      {
+        translateY: interpolate(headerExpandedProgress.value, [0, 1], [-8, 0]),
+      },
+    ],
+    overflow: 'hidden',
   }));
 
   const fabAnimStyle = useAnimatedStyle(() => ({
@@ -147,7 +182,27 @@ export default function LentsScreen() {
     opacity: heroCardOpacity.value,
   }));
 
-  // Tab switch animation
+  const tabIndicatorAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: tabIndicatorX.value }],
+  }));
+
+  const handleTabSwitch = (tab: TabType, index: number) => {
+    setActiveTab(tab);
+    tabIndicatorX.value = withSpring(index * TAB_ITEM_WIDTH, { damping: 22, stiffness: 240 });
+    horizontalScrollRef.current?.scrollTo({ x: index * SCREEN_WIDTH, animated: true });
+  };
+
+  const handlePageScrollEnd = (e: any) => {
+    const pageIndex = Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH);
+    const tabs: TabType[] = ['combined', 'card', 'pocket'];
+    const newTab = tabs[pageIndex] || 'combined';
+    if (newTab !== activeTab) {
+      setActiveTab(newTab);
+      tabIndicatorX.value = withSpring(pageIndex * TAB_ITEM_WIDTH, { damping: 22, stiffness: 240 });
+    }
+  };
+
+  // Tab switch animation for Hero Card
   useEffect(() => {
     heroCardScale.value = withSequence(
       withTiming(0.96, { duration: 90 }),
@@ -164,8 +219,24 @@ export default function LentsScreen() {
       withTiming(0.92, { duration: 80 }),
       withSpring(1, { damping: 14 })
     );
-    setIsCardDropdownOpen(true);
+    const next = !isHeaderExpanded;
+    setIsHeaderExpanded(next);
+    headerExpandedProgress.value = withSpring(next ? 1 : 0, {
+      damping: 20,
+      stiffness: 220,
+    });
   };
+
+  // Hierarchical cards for header accordion
+  const hierarchicalCards = useMemo(() => {
+    return buildHierarchicalCardList(cards);
+  }, [cards]);
+
+  const totalUnifiedAvailable = useMemo(() => {
+    return cards
+      .filter((c) => c.is_primary || !c.parent_card_id)
+      .reduce((sum, c) => sum + (cardAvailableMap[c.id] || 0), 0);
+  }, [cards, cardAvailableMap]);
 
   const handleFabPress = () => {
     fabScale.value = withSequence(
@@ -219,7 +290,7 @@ export default function LentsScreen() {
           supabase.from('cash_on_hand').select('*'),
           supabase.from('card_lent_ledger').select('*').order('transaction_date', { ascending: false }),
           supabase.from('pocket_lent_ledger').select('*').order('transaction_date', { ascending: false }),
-          supabase.from('card_transactions').select('amount, type, card_id, status, qr_id, remarks'),
+          supabase.from('card_transactions').select('amount, type, card_id, status, qr_id, remarks, settled_to_user'),
           supabase.from('spends').select('amount, payment_method, card_id'),
         ]);
 
@@ -257,54 +328,8 @@ export default function LentsScreen() {
       });
       setUserCardCashMap(cardCashMap);
 
-      // Card Available Map
-      const availableMap: Record<string, number> = {};
-      cardsData
-        .filter((c) => c.is_primary)
-        .forEach((primaryCard) => {
-          const familyCardIds = cardsData
-            .filter((c) => c.id === primaryCard.id || c.parent_card_id === primaryCard.id)
-            .map((c) => c.id);
-
-          const withdrawals =
-            txsData
-              .filter((t: any) => {
-                if (t.type !== 'withdrawal') return false;
-                if (!t.card_id || !familyCardIds.includes(t.card_id)) return false;
-                const isRotation =
-                  t.qr_id || (t.remarks || '').toLowerCase().includes('rotation');
-                return (
-                  isRotation ||
-                  t.status === 'pending_settlement' ||
-                  t.status === 'partially_settled'
-                );
-              })
-              .reduce((sum: number, t: any) => sum + Number(t.amount || 0), 0) || 0;
-
-          const billPayments =
-            txsData
-              .filter(
-                (t: any) =>
-                  t.type === 'bill_payment' && t.card_id && familyCardIds.includes(t.card_id)
-              )
-              .reduce((sum: number, t: any) => sum + Number(t.amount || 0), 0) || 0;
-
-          const ccSpends =
-            spendsData
-              .filter(
-                (s: any) =>
-                  s.payment_method === 'credit_card' &&
-                  s.card_id &&
-                  familyCardIds.includes(s.card_id)
-              )
-              .reduce((sum: number, s: any) => sum + Number(s.amount || 0), 0) || 0;
-
-          const available =
-            Number(primaryCard.total_limit || 0) - withdrawals - ccSpends + billPayments;
-          familyCardIds.forEach((id) => {
-            availableMap[id] = available;
-          });
-        });
+      // Card Available Map via @credics/core Canonical Engine
+      const availableMap = calculateCardAvailableMap(cardsData as any, txsData, spendsData);
       setCardAvailableMap(availableMap);
     } catch (err) {
       console.error('Error fetching lents data:', err);
@@ -387,11 +412,29 @@ export default function LentsScreen() {
             return (b.created_at || '').localeCompare(a.created_at || '');
           });
         } else if (activeTab === 'card') {
-          const { data: cRows } = await supabase
+          let targetCardIds: string[] = [];
+          if (selectedVaultCardId !== 'all') {
+            const selected = cards.find((c) => c.id === selectedVaultCardId);
+            if (selected) {
+              const primaryId = selected.is_primary ? selected.id : selected.parent_card_id;
+              targetCardIds = cards
+                .filter((c) => c.id === primaryId || c.parent_card_id === primaryId)
+                .map((c) => c.id);
+            } else {
+              targetCardIds = [selectedVaultCardId];
+            }
+          }
+
+          let cQuery = supabase
             .from('card_lent_ledger')
             .select('*')
-            .eq('borrower_id', borrowerId)
-            .order('transaction_date', { ascending: false });
+            .eq('borrower_id', borrowerId);
+
+          if (targetCardIds.length > 0) {
+            cQuery = cQuery.in('card_id', targetCardIds);
+          }
+
+          const { data: cRows } = await cQuery.order('transaction_date', { ascending: false });
 
           entriesList = (cRows || []).map((r) => ({
             ...r,
@@ -421,110 +464,143 @@ export default function LentsScreen() {
         setIsLedgerLoading(false);
       }
     },
-    [activeTab, currentUser]
+    [activeTab, currentUser, selectedVaultCardId, cards]
   );
 
-  // Compute borrower summaries according to active tab and selected vault card
-  const borrowerSummaries: BorrowerSummary[] = useMemo(() => {
-    let targetCardIds: string[] = [];
-    if (selectedVaultCardId !== 'all') {
-      const selected = cards.find((c) => c.id === selectedVaultCardId);
-      if (selected) {
-        const primaryId = selected.is_primary ? selected.id : selected.parent_card_id;
-        targetCardIds = cards
-          .filter((c) => c.id === primaryId || c.parent_card_id === primaryId)
-          .map((c) => c.id);
-      } else {
-        targetCardIds = [selectedVaultCardId];
+  // Compute borrower summaries per tab for seamless horizontal swipe paging
+  const getBorrowerSummariesForTab = useCallback(
+    (tab: TabType): BorrowerSummary[] => {
+      let targetCardIds: string[] = [];
+      if (selectedVaultCardId !== 'all') {
+        const selected = cards.find((c) => c.id === selectedVaultCardId);
+        if (selected) {
+          const primaryId = selected.is_primary ? selected.id : selected.parent_card_id;
+          targetCardIds = cards
+            .filter((c) => c.id === primaryId || c.parent_card_id === primaryId)
+            .map((c) => c.id);
+        } else {
+          targetCardIds = [selectedVaultCardId];
+        }
       }
-    }
 
-    return rawBorrowers
-      .map((b) => {
-        let given = 0;
-        let collected = 0;
-        let latestTimestamp = b.created_at || '';
+      return rawBorrowers
+        .map((b) => {
+          let given = 0;
+          let collected = 0;
+          let latestTimestamp = b.created_at || '';
 
-        // Card Ledger
-        if (activeTab === 'combined' || activeTab === 'card') {
-          cardEntries
-            .filter((e) => e.borrower_id === b.id)
-            .forEach((e) => {
-              if (selectedVaultCardId !== 'all' && !targetCardIds.includes(e.card_id)) return;
+          // Card Ledger
+          if (tab === 'combined' || tab === 'card') {
+            cardEntries
+              .filter((e) => e.borrower_id === b.id)
+              .forEach((e) => {
+                if (tab === 'card' && selectedVaultCardId !== 'all' && !targetCardIds.includes(e.card_id)) return;
 
-              const isGiven = e.entry_type === 'given' || e.entry_type === 'lent';
-              const isCollect = e.entry_type === 'collected' || e.entry_type === 'return';
-              if (isGiven) given += Number(e.amount || 0);
-              if (isCollect) collected += Number(e.amount || 0);
+                const isGiven = e.entry_type === 'given' || e.entry_type === 'lent';
+                const isCollect = e.entry_type === 'collected' || e.entry_type === 'return';
+                if (isGiven) given += Number(e.amount || 0);
+                if (isCollect) collected += Number(e.amount || 0);
 
-              const actTime = e.updated_at || e.transaction_date || e.created_at || '';
-              if (actTime > latestTimestamp) {
-                latestTimestamp = actTime;
-              }
-            });
-        }
+                const actTime = e.updated_at || e.transaction_date || e.created_at || '';
+                if (actTime > latestTimestamp) {
+                  latestTimestamp = actTime;
+                }
+              });
+          }
 
-        // Pocket Ledger (only recorded by currentUser)
-        if (activeTab === 'combined' || activeTab === 'pocket') {
-          pocketEntries
-            .filter((e) => e.borrower_id === b.id)
-            .forEach((e) => {
-              if (currentUser && e.recorded_by && e.recorded_by !== currentUser.id) return;
+          // Pocket Ledger (only recorded by currentUser)
+          if (tab === 'combined' || tab === 'pocket') {
+            pocketEntries
+              .filter((e) => e.borrower_id === b.id)
+              .forEach((e) => {
+                if (!currentUser || e.recorded_by !== currentUser.id) return;
 
-              const isGiven = e.entry_type === 'given' || e.entry_type === 'lent';
-              const isCollect = e.entry_type === 'collected' || e.entry_type === 'return';
-              if (isGiven) given += Number(e.amount || 0);
-              if (isCollect) collected += Number(e.amount || 0);
+                const isGiven = e.entry_type === 'given' || e.entry_type === 'lent';
+                const isCollect = e.entry_type === 'collected' || e.entry_type === 'return';
+                if (isGiven) given += Number(e.amount || 0);
+                if (isCollect) collected += Number(e.amount || 0);
 
-              const actTime = e.updated_at || e.transaction_date || e.created_at || '';
-              if (actTime > latestTimestamp) {
-                latestTimestamp = actTime;
-              }
-            });
-        }
+                const actTime = e.updated_at || e.transaction_date || e.created_at || '';
+                if (actTime > latestTimestamp) {
+                  latestTimestamp = actTime;
+                }
+              });
+          }
 
-        const netDue = given - collected;
-        return {
-          id: b.id,
-          name: b.name,
-          phone: b.phone,
-          netDue,
-          totalGiven: given,
-          rawActivity: latestTimestamp,
-          lastActivity: latestTimestamp
-            ? new Date(latestTimestamp).toLocaleDateString('en-GB', {
-                day: '2-digit',
-                month: 'short',
-              })
-            : 'Recent',
-        };
-      })
-      .filter((b) => b.totalGiven > 0 || b.netDue !== 0) // only active ledger profiles on main screen
-      .sort((a, b) => {
-        const timeDiff = (b.rawActivity || '').localeCompare(a.rawActivity || '');
-        if (timeDiff !== 0) return timeDiff;
-        return b.netDue - a.netDue;
-      });
-  }, [
-    rawBorrowers,
-    cardEntries,
-    pocketEntries,
-    activeTab,
-    selectedVaultCardId,
-    cards,
-    currentUser,
-  ]);
+          const netDue = given - collected;
+          return {
+            id: b.id,
+            name: b.name,
+            phone: b.phone,
+            netDue,
+            totalGiven: given,
+            rawActivity: latestTimestamp,
+            lastActivity: latestTimestamp
+              ? new Date(latestTimestamp).toLocaleDateString('en-GB', {
+                  day: '2-digit',
+                  month: 'short',
+                })
+              : 'Recent',
+          };
+        })
+        .filter((b) => b.totalGiven > 0 || b.netDue !== 0) // only active ledger profiles on main screen
+        .sort((a, b) => {
+          const timeDiff = (b.rawActivity || '').localeCompare(a.rawActivity || '');
+          if (timeDiff !== 0) return timeDiff;
+          return b.netDue - a.netDue;
+        });
+    },
+    [rawBorrowers, cardEntries, pocketEntries, selectedVaultCardId, cards, currentUser]
+  );
 
-  // Filtered by Search query
-  const filteredBorrowers = useMemo(() => {
-    if (!searchQuery.trim()) return borrowerSummaries;
-    const q = searchQuery.toLowerCase().trim();
-    return borrowerSummaries.filter(
+  const combinedSummaries = useMemo(
+    () => getBorrowerSummariesForTab('combined'),
+    [getBorrowerSummariesForTab]
+  );
+  const cardSummaries = useMemo(
+    () => getBorrowerSummariesForTab('card'),
+    [getBorrowerSummariesForTab]
+  );
+  const pocketSummaries = useMemo(
+    () => getBorrowerSummariesForTab('pocket'),
+    [getBorrowerSummariesForTab]
+  );
+
+  const borrowerSummaries = useMemo(() => {
+    if (activeTab === 'card') return cardSummaries;
+    if (activeTab === 'pocket') return pocketSummaries;
+    return combinedSummaries;
+  }, [activeTab, combinedSummaries, cardSummaries, pocketSummaries]);
+
+  // Filtered by Search query for each tab page
+  const filterBorrowers = useCallback((list: BorrowerSummary[], query: string) => {
+    if (!query.trim()) return list;
+    const q = query.toLowerCase().trim();
+    return list.filter(
       (b) =>
         b.name.toLowerCase().includes(q) ||
         (b.phone && b.phone.toLowerCase().includes(q))
     );
-  }, [borrowerSummaries, searchQuery]);
+  }, []);
+
+  const filteredCombined = useMemo(
+    () => filterBorrowers(combinedSummaries, searchQuery),
+    [filterBorrowers, combinedSummaries, searchQuery]
+  );
+  const filteredCard = useMemo(
+    () => filterBorrowers(cardSummaries, searchQuery),
+    [filterBorrowers, cardSummaries, searchQuery]
+  );
+  const filteredPocket = useMemo(
+    () => filterBorrowers(pocketSummaries, searchQuery),
+    [filterBorrowers, pocketSummaries, searchQuery]
+  );
+
+  const filteredBorrowers = useMemo(() => {
+    if (activeTab === 'card') return filteredCard;
+    if (activeTab === 'pocket') return filteredPocket;
+    return filteredCombined;
+  }, [activeTab, filteredCombined, filteredCard, filteredPocket]);
 
   // Aggregate Metrics for Hero Card
   const totalNetDue = useMemo(() => {
@@ -600,7 +676,6 @@ export default function LentsScreen() {
               transaction_type: 'debit',
               remarks: `Lent given to ${selectedBorrower.name}`,
               transaction_date: date,
-              created_at: originalCreatedAt,
             })
             .select('id')
             .single();
@@ -647,6 +722,26 @@ export default function LentsScreen() {
 
       // Rule 4: Success haptics on submit
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+      // WhatsApp & Push Alert Dispatch
+      const card = cards.find((c) => c.id === cardId);
+      const sourceName =
+        sourceType === 'pocket'
+          ? 'Personal Pocket'
+          : sourceType === 'cash_on_hand'
+          ? `Cash on Hand${card ? ` (${card.card_name})` : ''}`
+          : `Credit Card${card ? ` (${card.card_name})` : ''}`;
+
+      broadcastLentIssueAlert({
+        borrowerName: selectedBorrower.name,
+        sourceName,
+        entryUserName: currentUser.name || 'Member',
+        amount,
+        remarks: remarks || undefined,
+        profiles,
+      }).catch((alertErr) => {
+        console.warn('Failed to dispatch lent issue alert:', alertErr);
+      });
 
       // Celebration modal
       setSuccessTitle('Loan Given Recorded');
@@ -740,7 +835,6 @@ export default function LentsScreen() {
               transaction_type: 'credit',
               remarks: `Collected lent from ${selectedBorrower.name}`,
               transaction_date: date,
-              created_at: originalCreatedAt,
             })
             .select('id')
             .single();
@@ -756,6 +850,7 @@ export default function LentsScreen() {
             txDate: date,
             userId: currentUser.id,
             createdAt: originalCreatedAt,
+            remarks: remarks || undefined,
           });
 
           linkedBillingCycleId = paydownRes.cycleId;
@@ -788,6 +883,31 @@ export default function LentsScreen() {
 
       // Rule 4: Success haptics on submit
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+      // WhatsApp & Push Alert Dispatch
+      const isFull = (selectedBorrower.netDue - amount) <= 0;
+      const remaining = Math.max(0, selectedBorrower.netDue - amount);
+      const targetCard = cards.find((c) => c.id === cardId);
+      const receivedOn =
+        sourceType === 'credit_card'
+          ? `Card Bill Pay${targetCard ? ` (${targetCard.card_name})` : ''}`
+          : sourceType === 'cash_on_hand'
+          ? `Cash on Hand${targetCard ? ` (${targetCard.card_name})` : ''}`
+          : 'Personal Pocket';
+
+      broadcastLentRecoveryAlert({
+        borrowerName: selectedBorrower.name,
+        entryUserName: currentUser.name || 'Member',
+        amount,
+        fullAmount: selectedBorrower.netDue,
+        remainingDue: remaining,
+        receivedOn,
+        isFull,
+        remarks: remarks || undefined,
+        profiles,
+      }).catch((alertErr) => {
+        console.warn('Failed to dispatch lent recovery alert:', alertErr);
+      });
 
       // Celebration modal
       setSuccessTitle('Payment Recovery Recorded');
@@ -829,6 +949,7 @@ export default function LentsScreen() {
       phone: phone || null,
     });
     if (error) throw error;
+    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     await fetchData();
   };
 
@@ -847,6 +968,7 @@ export default function LentsScreen() {
       .update({ name, phone: phone || null })
       .eq('id', id);
     if (error) throw error;
+    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
     if (selectedBorrower?.id === id) {
       setSelectedBorrower((prev) =>
@@ -860,9 +982,63 @@ export default function LentsScreen() {
   const handleDeleteBorrower = async (borrowerId: string) => {
     const { error } = await supabase.from('borrowers').delete().eq('id', borrowerId);
     if (error) throw error;
+    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     setIsLedgerDrawerOpen(false);
     setSelectedBorrower(null);
     await fetchData();
+  };
+
+  const renderBorrowerList = (list: BorrowerSummary[]) => {
+    if (list.length === 0) {
+      return (
+        <View style={styles.emptyStateContainer}>
+          <View style={styles.emptyIconCircle}>
+            <Users size={32} color="#8CA394" />
+          </View>
+          <Text style={styles.emptyStateTitle}>
+            {searchQuery ? 'No matching borrowers' : 'No Active Receivables'}
+          </Text>
+          <Text style={styles.emptyStateSub}>
+            {searchQuery
+              ? 'Try searching with another name or phone number.'
+              : 'Tap the + button below or directory button to register a borrower.'}
+          </Text>
+          {!searchQuery && (
+            <View style={styles.emptyActionsRow}>
+              <TouchableOpacity
+                style={styles.emptyAddBtn}
+                onPress={() => setIsAddBorrowerOpen(true)}
+                activeOpacity={0.85}
+              >
+                <Plus size={16} color="#FFFFFF" strokeWidth={2.4} />
+                <Text style={styles.emptyAddBtnText}>Register Borrower</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.emptyDirectoryBtn}
+                onPress={() => setIsBorrowerPickerOpen(true)}
+                activeOpacity={0.85}
+              >
+                <Users size={16} color="#0B3F28" strokeWidth={2.4} />
+                <Text style={styles.emptyDirectoryBtnText}>All Borrowers</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      );
+    }
+
+    return list.map((borrower, index) => (
+      <Animated.View
+        key={borrower.id}
+        entering={FadeInDown.delay(Math.min(index * 35, 350)).springify()}
+        layout={LinearTransition.springify()}
+      >
+        <BorrowerCard
+          borrower={borrower}
+          onPress={() => handleBorrowerPress(borrower)}
+        />
+      </Animated.View>
+    ));
   };
 
   return (
@@ -894,10 +1070,6 @@ export default function LentsScreen() {
               )}
             </View>
             <View style={styles.userTextCol}>
-              <View style={styles.liveStatusRow}>
-                <View style={styles.livePulseDot} />
-                <Text style={styles.liveStatusText}>RECEIVABLES LEDGER • REALTIME</Text>
-              </View>
               <Text style={styles.headerTitle}>Lents & Loans</Text>
             </View>
           </TouchableOpacity>
@@ -913,12 +1085,96 @@ export default function LentsScreen() {
               <Text style={styles.vaultPillText} numberOfLines={1}>
                 {selectedVaultCardId === 'all'
                   ? 'All Cards'
-                  : cards.find((c) => c.id === selectedVaultCardId)?.card_name || 'Card'}
+                  : (() => {
+                      const c = cards.find((card) => card.id === selectedVaultCardId);
+                      if (!c) return 'Card';
+                      return !c.is_primary && c.parent_card_id ? `↳ ${c.card_name}` : c.card_name;
+                    })()}
               </Text>
-              <ChevronDown size={12} color="#CAD6C9" />
+              <Animated.View style={chevronAnimStyle}>
+                <ChevronDown size={12} color="#CAD6C9" />
+              </Animated.View>
             </TouchableOpacity>
           </Animated.View>
         </View>
+
+        {/* 120Hz Slide Accordion for Card Vault Selection */}
+        <Animated.View style={[styles.headerAccordion, accordionAnimStyle]}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.accordionScrollContent}
+          >
+            {/* All Cards Option */}
+            <TouchableOpacity
+              style={[
+                styles.accordionCardItem,
+                selectedVaultCardId === 'all' && styles.accordionCardItemActive,
+              ]}
+              onPress={() => {
+                setSelectedVaultCardId('all');
+                setIsHeaderExpanded(false);
+                headerExpandedProgress.value = withSpring(0, { damping: 20, stiffness: 220 });
+              }}
+              activeOpacity={0.8}
+            >
+              <View style={styles.accordionCardTopRow}>
+                <Layers size={13} color={selectedVaultCardId === 'all' ? '#10B981' : '#CAD6C9'} />
+                {selectedVaultCardId === 'all' && (
+                  <View style={styles.accordionActiveCheck}>
+                    <Check size={10} color="#FFFFFF" strokeWidth={3} />
+                  </View>
+                )}
+              </View>
+              <Text style={styles.accordionCardTitle} numberOfLines={1}>
+                All Cards
+              </Text>
+              <Text style={styles.accordionCardSub}>
+                Avail: ₹{totalUnifiedAvailable.toLocaleString('en-IN')}
+              </Text>
+            </TouchableOpacity>
+
+            {/* Hierarchical Cards List */}
+            {hierarchicalCards.map((c) => {
+              const isSelected = selectedVaultCardId === c.id;
+              const avail = cardAvailableMap[c.id] || 0;
+              return (
+                <TouchableOpacity
+                  key={c.id}
+                  style={[
+                    styles.accordionCardItem,
+                    isSelected && styles.accordionCardItemActive,
+                  ]}
+                  onPress={() => {
+                    setSelectedVaultCardId(c.id);
+                    setIsHeaderExpanded(false);
+                    headerExpandedProgress.value = withSpring(0, { damping: 20, stiffness: 220 });
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <View style={styles.accordionCardTopRow}>
+                    {c.isSub ? (
+                      <CornerDownRight size={13} color={isSelected ? '#10B981' : '#8CA394'} />
+                    ) : (
+                      <CreditCard size={13} color={isSelected ? '#10B981' : '#CAD6C9'} />
+                    )}
+                    {isSelected && (
+                      <View style={styles.accordionActiveCheck}>
+                        <Check size={10} color="#FFFFFF" strokeWidth={3} />
+                      </View>
+                    )}
+                  </View>
+                  <Text style={styles.accordionCardTitle} numberOfLines={1}>
+                    {c.isSub ? `↳ ${c.card_name}` : c.card_name}
+                  </Text>
+                  <Text style={styles.accordionCardSub} numberOfLines={1}>
+                    ••{c.last_4_digits} • ₹{avail.toLocaleString('en-IN')}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        </Animated.View>
 
         {/* Symmetrical Organic SVG Wave Transition */}
         <View style={styles.svgWaveWrapper}>
@@ -989,32 +1245,37 @@ export default function LentsScreen() {
         </Animated.View>
       </View>
 
-      {/* ================= 3. 3-TAB SEGMENTED CONTROLS ================= */}
-      <View style={styles.tabBarContainer}>
-        {(['combined', 'card', 'pocket'] as TabType[]).map((tab) => {
-          const isActive = activeTab === tab;
-          const label =
-            tab === 'combined'
-              ? 'Combined'
-              : tab === 'card'
-              ? 'Card & Cash'
-              : 'Personal Pocket';
-          return (
-            <TouchableOpacity
-              key={tab}
-              style={[styles.tabChip, isActive && styles.activeTabChip]}
-              onPress={() => setActiveTab(tab)}
-              activeOpacity={0.8}
-            >
-              <Text style={[styles.tabChipText, isActive && styles.activeTabChipText]}>
-                {label}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
+      {/* ================= 3. 3-TAB SEGMENTED CONTROLS (120HZ SLIDING PILL) ================= */}
+      <View style={styles.tabsContainer}>
+        <View style={styles.tabsTrack}>
+          {/* Animated 120Hz Sliding Background Pill */}
+          <Animated.View style={[styles.slidingTabIndicator, tabIndicatorAnimStyle]} />
+
+          {(['combined', 'card', 'pocket'] as const).map((tab, idx) => {
+            const isActive = activeTab === tab;
+            const label =
+              tab === 'combined'
+                ? 'Combined'
+                : tab === 'card'
+                ? 'Card & Cash'
+                : 'Personal Pocket';
+            return (
+              <TouchableOpacity
+                key={tab}
+                style={styles.tabButton}
+                onPress={() => handleTabSwitch(tab, idx)}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.tabButtonText, isActive && styles.tabButtonTextActive]}>
+                  {label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
       </View>
 
-      {/* ================= 4. SEARCH & BORROWER LIST ================= */}
+      {/* ================= 4. SEARCH BAR ================= */}
       <View style={styles.searchBarContainer}>
         <View style={styles.searchBox}>
           <Search size={15} color="#658270" strokeWidth={2.2} />
@@ -1040,6 +1301,7 @@ export default function LentsScreen() {
         </TouchableOpacity>
       </View>
 
+      {/* ================= 5. HORIZONTAL SWIPEABLE PAGER ================= */}
       {isLoading ? (
         <View style={styles.loaderContainer}>
           <ActivityIndicator size="large" color="#0B3F28" />
@@ -1047,65 +1309,74 @@ export default function LentsScreen() {
         </View>
       ) : (
         <ScrollView
-          style={styles.contentScroll}
-          contentContainerStyle={[styles.scrollContent, { paddingBottom: 130 }]}
-          showsVerticalScrollIndicator={false}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              colors={['#0B3F28']}
-              tintColor="#0B3F28"
-            />
-          }
+          ref={horizontalScrollRef}
+          horizontal
+          pagingEnabled
+          showsHorizontalScrollIndicator={false}
+          onMomentumScrollEnd={handlePageScrollEnd}
+          style={styles.horizontalPager}
+          contentContainerStyle={{ width: SCREEN_WIDTH * 3 }}
         >
-          {filteredBorrowers.length === 0 ? (
-            <View style={styles.emptyStateContainer}>
-              <View style={styles.emptyIconCircle}>
-                <Users size={32} color="#8CA394" />
-              </View>
-              <Text style={styles.emptyStateTitle}>
-                {searchQuery ? 'No matching borrowers' : 'No Active Receivables'}
-              </Text>
-              <Text style={styles.emptyStateSub}>
-                {searchQuery
-                  ? 'Try searching with another name or phone number.'
-                  : 'Tap the + button below or directory button to register a borrower.'}
-              </Text>
-              {!searchQuery && (
-                <View style={styles.emptyActionsRow}>
-                  <TouchableOpacity
-                    style={styles.emptyAddBtn}
-                    onPress={() => setIsAddBorrowerOpen(true)}
-                    activeOpacity={0.85}
-                  >
-                    <Plus size={16} color="#FFFFFF" strokeWidth={2.4} />
-                    <Text style={styles.emptyAddBtnText}>Register Borrower</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.emptyDirectoryBtn}
-                    onPress={() => setIsBorrowerPickerOpen(true)}
-                    activeOpacity={0.85}
-                  >
-                    <Users size={16} color="#0B3F28" strokeWidth={2.4} />
-                    <Text style={styles.emptyDirectoryBtnText}>All Borrowers</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-            </View>
-          ) : (
-            filteredBorrowers.map((borrower) => (
-              <BorrowerCard
-                key={borrower.id}
-                borrower={borrower}
-                onPress={() => handleBorrowerPress(borrower)}
-              />
-            ))
-          )}
+          {/* PAGE 0: COMBINED */}
+          <View style={{ width: SCREEN_WIDTH }}>
+            <ScrollView
+              style={styles.contentScroll}
+              contentContainerStyle={[styles.scrollContent, { paddingBottom: 130 }]}
+              showsVerticalScrollIndicator={false}
+              refreshControl={
+                <RefreshControl
+                  refreshing={refreshing}
+                  onRefresh={onRefresh}
+                  colors={['#0B3F28']}
+                  tintColor="#0B3F28"
+                />
+              }
+            >
+              {renderBorrowerList(filteredCombined)}
+            </ScrollView>
+          </View>
+
+          {/* PAGE 1: CARD & CASH */}
+          <View style={{ width: SCREEN_WIDTH }}>
+            <ScrollView
+              style={styles.contentScroll}
+              contentContainerStyle={[styles.scrollContent, { paddingBottom: 130 }]}
+              showsVerticalScrollIndicator={false}
+              refreshControl={
+                <RefreshControl
+                  refreshing={refreshing}
+                  onRefresh={onRefresh}
+                  colors={['#0B3F28']}
+                  tintColor="#0B3F28"
+                />
+              }
+            >
+              {renderBorrowerList(filteredCard)}
+            </ScrollView>
+          </View>
+
+          {/* PAGE 2: PERSONAL POCKET */}
+          <View style={{ width: SCREEN_WIDTH }}>
+            <ScrollView
+              style={styles.contentScroll}
+              contentContainerStyle={[styles.scrollContent, { paddingBottom: 130 }]}
+              showsVerticalScrollIndicator={false}
+              refreshControl={
+                <RefreshControl
+                  refreshing={refreshing}
+                  onRefresh={onRefresh}
+                  colors={['#0B3F28']}
+                  tintColor="#0B3F28"
+                />
+              }
+            >
+              {renderBorrowerList(filteredPocket)}
+            </ScrollView>
+          </View>
         </ScrollView>
       )}
 
-      {/* ================= 5. ELEVATED FLOATING ACTION BUTTON (FAB) ================= */}
+      {/* ================= 6. ELEVATED FLOATING ACTION BUTTON (FAB) ================= */}
       <Animated.View style={[styles.floatingFabContainer, fabAnimStyle]}>
         <TouchableOpacity
           style={styles.floatingFab}
@@ -1132,6 +1403,7 @@ export default function LentsScreen() {
         borrower={selectedBorrower}
         entries={borrowerLedger}
         isLoading={isLedgerLoading}
+        currentUserId={currentUser?.id}
         onGivePress={() => setIsGiveModalOpen(true)}
         onCollectPress={() => setIsCollectModalOpen(true)}
         onEditBorrowerPress={() => setIsEditBorrowerOpen(true)}
@@ -1212,72 +1484,6 @@ export default function LentsScreen() {
         subtitle={successSubtitle}
         amount={successAmount}
       />
-
-      {/* Vault Card Dropdown Filter Modal */}
-      <Modal visible={isCardDropdownOpen} transparent animationType="fade">
-        <TouchableOpacity
-          style={styles.modalBackdrop}
-          activeOpacity={1}
-          onPress={() => setIsCardDropdownOpen(false)}
-        >
-          <View style={styles.filterMenuBox}>
-            <View style={styles.filterMenuHeader}>
-              <Text style={styles.filterMenuTitle}>Select Vault Card</Text>
-              <TouchableOpacity onPress={() => setIsCardDropdownOpen(false)}>
-                <X size={16} color="#4A6B56" />
-              </TouchableOpacity>
-            </View>
-
-            <TouchableOpacity
-              style={[
-                styles.menuOption,
-                selectedVaultCardId === 'all' && styles.menuOptionActive,
-              ]}
-              onPress={() => {
-                setSelectedVaultCardId('all');
-                setIsCardDropdownOpen(false);
-              }}
-            >
-              <Text
-                style={[
-                  styles.menuOptionText,
-                  selectedVaultCardId === 'all' && styles.menuOptionTextActive,
-                ]}
-              >
-                All Vault Cards
-              </Text>
-              {selectedVaultCardId === 'all' && <Check size={14} color="#0B3F28" />}
-            </TouchableOpacity>
-
-            {cards.map((card) => {
-              const isSelected = selectedVaultCardId === card.id;
-              return (
-                <TouchableOpacity
-                  key={card.id}
-                  style={[styles.menuOption, isSelected && styles.menuOptionActive]}
-                  onPress={() => {
-                    setSelectedVaultCardId(card.id);
-                    setIsCardDropdownOpen(false);
-                  }}
-                >
-                  <View>
-                    <Text
-                      style={[
-                        styles.menuOptionText,
-                        isSelected && styles.menuOptionTextActive,
-                      ]}
-                    >
-                      {card.card_name}
-                    </Text>
-                    <Text style={styles.menuOptionSub}>**{card.last_4_digits}</Text>
-                  </View>
-                  {isSelected && <Check size={14} color="#0B3F28" />}
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </TouchableOpacity>
-      </Modal>
     </View>
   );
 }
@@ -1333,46 +1539,77 @@ const styles = StyleSheet.create({
   userTextCol: {
     justifyContent: 'center',
   },
-  liveStatusRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    marginBottom: 2,
-  },
-  livePulseDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#10B981',
-  },
-  liveStatusText: {
-    fontSize: 9,
-    fontWeight: '800',
-    color: '#8CA394',
-    letterSpacing: 0.6,
-  },
   headerTitle: {
-    fontSize: 18,
-    fontWeight: '900',
+    fontSize: 20,
+    fontWeight: '800',
     color: '#FFFFFF',
     letterSpacing: -0.3,
   },
   vaultPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.12)',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.18)',
     gap: 6,
-    maxWidth: 130,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.16)',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 20,
   },
   vaultPillText: {
+    color: '#CAD6C9',
     fontSize: 11,
     fontWeight: '700',
-    color: '#CAD6C9',
+    maxWidth: 90,
+  },
+  headerAccordion: {
+    overflow: 'hidden',
+  },
+  accordionScrollContent: {
+    paddingHorizontal: 20,
+    gap: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 4,
+  },
+  accordionCardItem: {
+    width: 144,
+    height: 74,
+    borderRadius: 14,
+    padding: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.14)',
+    justifyContent: 'space-between',
+  },
+  accordionCardItemActive: {
+    backgroundColor: 'rgba(16, 185, 129, 0.22)',
+    borderColor: '#10B981',
+    borderWidth: 1.5,
+  },
+  accordionCardTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  accordionActiveCheck: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#10B981',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  accordionCardTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: -0.2,
+  },
+  accordionCardSub: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#A7F3D0',
   },
   svgWaveWrapper: {
     position: 'absolute',
@@ -1460,34 +1697,51 @@ const styles = StyleSheet.create({
     color: '#CAD6C9',
     marginTop: 2,
   },
-  tabBarContainer: {
-    flexDirection: 'row',
-    paddingHorizontal: 18,
-    gap: 8,
-    marginBottom: 10,
+  tabsContainer: {
+    paddingHorizontal: 16,
+    marginBottom: 8,
   },
-  tabChip: {
+  tabsTrack: {
+    flexDirection: 'row',
+    backgroundColor: '#E2ECE4',
+    borderRadius: 16,
+    padding: 4,
+    position: 'relative',
+    borderWidth: 1,
+    borderColor: '#D4E2D7',
+  },
+  slidingTabIndicator: {
+    position: 'absolute',
+    top: 4,
+    left: 4,
+    bottom: 4,
+    width: TAB_ITEM_WIDTH,
+    backgroundColor: '#0B3F28',
+    borderRadius: 12,
+    shadowColor: '#072C1C',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  tabButton: {
     flex: 1,
-    paddingVertical: 8,
-    borderRadius: 14,
-    backgroundColor: '#E4ECE5',
+    paddingVertical: 10,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#DFE8E0',
+    zIndex: 1,
   },
-  activeTabChip: {
-    backgroundColor: '#0B3F28',
-    borderColor: '#072C1C',
-  },
-  tabChipText: {
-    fontSize: 11,
+  tabButtonText: {
+    fontSize: 12,
     fontWeight: '700',
     color: '#4A6B56',
   },
-  activeTabChipText: {
+  tabButtonTextActive: {
     color: '#FFFFFF',
     fontWeight: '800',
+  },
+  horizontalPager: {
+    flex: 1,
   },
   searchBarContainer: {
     flexDirection: 'row',
@@ -1629,59 +1883,5 @@ const styles = StyleSheet.create({
     borderRadius: 28,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.45)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-  },
-  filterMenuBox: {
-    width: '100%',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 20,
-    padding: 16,
-    maxHeight: 380,
-  },
-  filterMenuHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingBottom: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#DFE8E0',
-    marginBottom: 8,
-  },
-  filterMenuTitle: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#072C1C',
-  },
-  menuOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-  },
-  menuOptionActive: {
-    backgroundColor: '#EBF3EC',
-  },
-  menuOptionText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#2F5C3F',
-  },
-  menuOptionTextActive: {
-    color: '#0B3F28',
-    fontWeight: '900',
-  },
-  menuOptionSub: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#8CA394',
-    marginTop: 2,
   },
 });

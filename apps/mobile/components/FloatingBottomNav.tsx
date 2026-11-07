@@ -8,7 +8,11 @@ import {
   Pressable,
   LayoutChangeEvent,
 } from 'react-native';
-import { BottomTabBarProps } from '@react-navigation/bottom-tabs';
+export interface FloatingBottomNavProps {
+  state: any;
+  descriptors: any;
+  navigation: any;
+}
 import { CedarTypography } from '@credics/core';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
@@ -44,7 +48,7 @@ const SPRING_CONFIG = {
 
 const DRAWER_HEIGHT = 98; // Compact height for mini chips
 
-export function FloatingBottomNav({ state, descriptors, navigation }: BottomTabBarProps) {
+export function FloatingBottomNav({ state, descriptors, navigation }: FloatingBottomNavProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [navWidth, setNavWidth] = useState(0);
 
@@ -62,6 +66,14 @@ export function FloatingBottomNav({ state, descriptors, navigation }: BottomTabB
   const scale3 = useSharedValue(1);
   const scale4 = useSharedValue(1);
   const iconScales = useRef([scale0, scale1, scale2, scale3, scale4]).current;
+
+  // Pre-declared 120Hz worklet styles to strictly comply with React Rules of Hooks
+  const iconPopStyle0 = useAnimatedStyle(() => ({ transform: [{ scale: scale0.value }] }));
+  const iconPopStyle1 = useAnimatedStyle(() => ({ transform: [{ scale: scale1.value }] }));
+  const iconPopStyle2 = useAnimatedStyle(() => ({ transform: [{ scale: scale2.value }] }));
+  const iconPopStyle3 = useAnimatedStyle(() => ({ transform: [{ scale: scale3.value }] }));
+  const iconPopStyle4 = useAnimatedStyle(() => ({ transform: [{ scale: scale4.value }] }));
+  const iconPopStyles = [iconPopStyle0, iconPopStyle1, iconPopStyle2, iconPopStyle3, iconPopStyle4];
 
   const toggleExpand = useCallback((expand: boolean) => {
     setIsExpanded(expand);
@@ -83,9 +95,11 @@ export function FloatingBottomNav({ state, descriptors, navigation }: BottomTabB
   const panGesture = Gesture.Pan()
     .activeOffsetY([-8, 8])
     .onStart(() => {
+      'worklet';
       contextY.value = translateY.value;
     })
     .onUpdate((event) => {
+      'worklet';
       const nextY = contextY.value + event.translationY;
       if (nextY < -DRAWER_HEIGHT) {
         translateY.value = -DRAWER_HEIGHT + (nextY + DRAWER_HEIGHT) * 0.15;
@@ -96,6 +110,7 @@ export function FloatingBottomNav({ state, descriptors, navigation }: BottomTabB
       }
     })
     .onEnd((event) => {
+      'worklet';
       if (event.translationY < -12 || event.velocityY < -280) {
         openDrawer();
       } else if (event.translationY > 12 || event.velocityY > 280) {
@@ -300,15 +315,11 @@ export function FloatingBottomNav({ state, descriptors, navigation }: BottomTabB
               )}
 
               {visibleTabs.map((item) => {
-                const routeIndex = state.routes.findIndex((r) => r.name === item.name);
+                const routeIndex = state.routes.findIndex((r: any) => r.name === item.name);
                 const isFocused = currentRouteName === item.name;
                 const route = routeIndex >= 0 ? state.routes[routeIndex] : null;
                 const IconComponent = item.icon;
-                const iconScale = iconScales[item.slotIndex];
-
-                const iconPopStyle = useAnimatedStyle(() => ({
-                  transform: [{ scale: iconScale.value }],
-                }));
+                const iconPopStyle = iconPopStyles[item.slotIndex];
 
                 // Special Circular Styling for QR button when not selected
                 if (item.isQr && !isFocused) {

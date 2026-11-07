@@ -36,6 +36,7 @@ import { SwipeDownDrawer, DrawerScrollView } from '../../components/SwipeDownDra
 import { HapticButton } from '../../components/HapticButton';
 import { HomeSkeleton } from '../../components/Skeleton';
 import { HeroCardLimitChart, CardLimitStat } from '../../components/HeroCardLimitChart';
+import { VaultCardSelectorDrawer } from '../../components/VaultCardSelectorDrawer';
 import { UrgentBillBottomSheet } from '../../components/UrgentBillBottomSheet';
 import { broadcastBillEntryAlert } from '../../lib/alertDispatcher';
 import { supabase } from '../../lib/supabase';
@@ -294,12 +295,22 @@ export default function HomeScreen() {
 
   const getActiveCardName = () => {
     if (selectedCardId === 'all') return 'All Vault Cards';
+    const card = accessibleCards.find((c) => c.id === selectedCardId);
+    if (card) {
+      if (!card.is_primary && card.parent_card_id) {
+        return `↳ ${card.card_name} (••${card.last_4_digits})`;
+      }
+      const fam = cardLimitStats.find((c) => c.id === card.id);
+      if (fam?.hasSubCards) {
+        return `${card.card_name} (+${fam.subCardsCount} sub)`;
+      }
+      return `${card.card_name} (••${card.last_4_digits})`;
+    }
     const fam = cardLimitStats.find((c) => c.id === selectedCardId);
     if (fam) {
       return fam.hasSubCards ? `${fam.name} (+${fam.subCardsCount} sub)` : `${fam.name} (••${fam.last4})`;
     }
-    const card = accessibleCards.find((c) => c.id === selectedCardId);
-    return card ? `${card.card_name} (••${card.last_4_digits})` : 'All Vault Cards';
+    return 'All Vault Cards';
   };
 
   // Open User Detail Ledger Modal (Parity with Web App Analytics)
@@ -735,7 +746,14 @@ export default function HomeScreen() {
                   <HeroCardLimitChart
                     isAllCards={selectedCardId === 'all'}
                     cards={cardLimitStats}
-                    singleCard={cardLimitStats.find((c) => c.id === selectedCardId)}
+                    singleCard={
+                      cardLimitStats.find((c) => c.id === selectedCardId) ||
+                      cardLimitStats.find(
+                        (c) =>
+                          c.id ===
+                          accessibleCards.find((card) => card.id === selectedCardId)?.parent_card_id
+                      )
+                    }
                   />
                 </View>
 
@@ -1233,69 +1251,14 @@ export default function HomeScreen() {
         </ScrollView>
 
         {/* ================= CARD SELECTOR DRAWER (Slide Down to Dismiss) ================= */}
-        <SwipeDownDrawer
+        <VaultCardSelectorDrawer
           visible={cardModalVisible}
           onClose={() => setCardModalVisible(false)}
+          cards={accessibleCards}
+          selectedCardId={selectedCardId}
+          onSelectCard={(id) => setSelectedCardId(id)}
           title="Select Credit Vault"
-          subtitle="Filter dashboard metrics by individual card or unified vault"
-          heightPercent={0.65}
-        >
-          <DrawerScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 18, gap: 10 }}>
-            <TouchableOpacity
-              style={[
-                styles.cardOptionRow,
-                selectedCardId === 'all' && styles.cardOptionSelected,
-              ]}
-              onPress={() => {
-                setSelectedCardId('all');
-                setCardModalVisible(false);
-              }}
-            >
-              <View style={styles.cardOptionLeft}>
-                <CreditCard size={18} color="#34D399" />
-                <View>
-                  <Text style={styles.cardOptionName}>All Vault Cards (Unified)</Text>
-                  <Text style={styles.cardOptionDigits}>
-                    {cardLimitStats.length} Card {cardLimitStats.length === 1 ? 'Family' : 'Families'} • Total Limit: ₹{totalLimit.toLocaleString('en-IN')}
-                  </Text>
-                </View>
-              </View>
-              {selectedCardId === 'all' && <CheckCircle2 size={18} color="#34D399" />}
-            </TouchableOpacity>
-
-            {cardLimitStats.map((fam) => {
-              const isSelected = selectedCardId === fam.id;
-              return (
-                <TouchableOpacity
-                  key={fam.id}
-                  style={[styles.cardOptionRow, isSelected && styles.cardOptionSelected]}
-                  onPress={() => {
-                    setSelectedCardId(fam.id);
-                    setCardModalVisible(false);
-                  }}
-                >
-                  <View style={styles.cardOptionLeft}>
-                    <CreditCard size={18} color={isSelected ? '#34D399' : '#8EAA97'} />
-                    <View style={{ flex: 1 }}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                        <Text style={styles.cardOptionName} numberOfLines={1}>{fam.name}</Text>
-                        {fam.hasSubCards && (
-                          <View style={styles.subCardBadge}>
-                            <Text style={styles.subCardBadgeText}>+{fam.subCardsCount} Sub</Text>
-                          </View>
-                        )}
-                      </View>
-                      <Text style={styles.cardOptionDigits}>
-                        •••• {fam.last4} {fam.subCardsLast4 && fam.subCardsLast4.length > 0 ? `(Sub: ••${fam.subCardsLast4.join(', ••')})` : ''} | Limit: ₹{Number(fam.totalLimit).toLocaleString('en-IN')}
-                      </Text>
-                    </View>
-                  </View>
-                  {isSelected && <CheckCircle2 size={18} color="#34D399" />}
-                </TouchableOpacity>
-              );
-            })}
-          </DrawerScrollView>
-        </SwipeDownDrawer>
+        />
 
         {/* ================= BILL ENTRY DRAWER (Slide Down to Dismiss) ================= */}
         <SwipeDownDrawer
