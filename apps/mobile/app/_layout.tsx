@@ -82,7 +82,7 @@ function AppNavigationTree() {
 
   return (
     <SafeAreaProvider>
-      <StatusBar style="dark" backgroundColor={CedarColors.canvas} translucent={false} />
+      <StatusBar style="dark" />
       <OfflineSyncBadge />
       <Stack
         screenOptions={{

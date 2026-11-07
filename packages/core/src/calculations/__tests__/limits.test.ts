@@ -133,6 +133,31 @@ describe('Pillar 4A: Dashboard Limits & Card Family Utilization', () => {
       expect(metrics.utilizedLimit).toBe(50000);
     });
 
+    it('should deduct settled lent withdrawals from available limit without inflating inTransitAmount', () => {
+      const transactions = [
+        {
+          amount: 40000,
+          type: 'withdrawal',
+          status: 'settled',
+          remarks: 'Lent given to Rahim',
+        },
+      ];
+
+      const spends: any[] = [];
+
+      const metrics = calculateCardLimits({
+        totalLimit: 100000,
+        transactions,
+        spends,
+      });
+
+      // Available = 100k - 40k = 60k
+      expect(metrics.availableLimit).toBe(60000);
+      expect(metrics.utilizedLimit).toBe(40000);
+      // In-transit MUST be 0 because a loan is settled, not an in-transit rotation
+      expect(metrics.inTransitAmount).toBe(0);
+    });
+
     it('should add back bill payments when calculating available limit', () => {
       const transactions = [
         { amount: 50000, type: 'withdrawal', status: 'pending_settlement', qr_id: 'qr-1' },

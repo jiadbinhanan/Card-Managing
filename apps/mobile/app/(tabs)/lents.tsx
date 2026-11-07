@@ -688,7 +688,7 @@ export default function LentsScreen() {
               card_id: cardId,
               amount,
               type: 'withdrawal',
-              status: 'pending_settlement',
+              status: 'settled',
               transaction_date: date,
               created_at: originalCreatedAt,
               recorded_by: currentUser.id,

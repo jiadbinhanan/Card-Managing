@@ -4,7 +4,16 @@ import {
   Text,
   StyleSheet,
   Pressable,
+  Image,
+  TouchableOpacity,
 } from 'react-native';
+import Animated, {
+  useAnimatedStyle,
+  withSpring,
+  LinearTransition,
+  FadeInUp,
+  FadeOutUp,
+} from 'react-native-reanimated';
 import { CedarTypography } from '@credics/core';
 import {
   ArrowDownLeft,
@@ -13,6 +22,8 @@ import {
   Receipt,
   ChevronDown,
   ArrowLeftRight,
+  Trash2,
+  Handshake,
 } from 'lucide-react-native';
 
 export interface CashSourceBreakdownItem {
@@ -30,7 +41,7 @@ export interface UnifiedTransactionItem {
   status: string;
   title: string;
   subtitle: string;
-  iconName: 'withdrawal' | 'bill_payment' | 'spend' | 'repayment';
+  iconName: 'withdrawal' | 'bill_payment' | 'spend' | 'repayment' | 'lent';
   color: string;
   bgColor: string;
   remarks?: string;
@@ -39,6 +50,7 @@ export interface UnifiedTransactionItem {
   paymentMethod: string;
   recordedBy: string;
   userId: string;
+  avatarUrl?: string;
   isRepaymentFlag?: boolean;
   cashSourceBreakdown?: CashSourceBreakdownItem[];
   isCrossCardCash?: boolean;
@@ -49,6 +61,7 @@ interface TransactionItemCardProps {
   isExpanded: boolean;
   onToggle: () => void;
   onTrace?: () => void;
+  onDelete?: () => void;
 }
 
 export const TransactionItemCard = React.memo(function TransactionItemCard({
@@ -56,6 +69,7 @@ export const TransactionItemCard = React.memo(function TransactionItemCard({
   isExpanded,
   onToggle,
   onTrace,
+  onDelete,
 }: TransactionItemCardProps) {
   const isNegative =
     item.type === 'withdrawal' || (item.type === 'spend' && !item.isRepaymentFlag);
@@ -64,78 +78,107 @@ export const TransactionItemCard = React.memo(function TransactionItemCard({
     ? item.displayDate.split('-').reverse().join('/')
     : '';
 
-  return (
-    <Pressable
-      style={({ pressed }) => [
-        styles.txCard,
-        isExpanded && styles.txCardExpanded,
-        pressed && styles.txCardPressed,
-      ]}
-      onPress={onToggle}
-    >
-      <View style={styles.txMainRow}>
-        {/* Type Icon Badge */}
-        <View style={[styles.txIconBox, { backgroundColor: item.bgColor }]}>
-          {item.iconName === 'withdrawal' && (
-            <ArrowDownLeft size={16} color={item.color} strokeWidth={2.4} />
-          )}
-          {item.iconName === 'bill_payment' && (
-            <CheckCircle2 size={16} color={item.color} strokeWidth={2.4} />
-          )}
-          {item.iconName === 'repayment' && (
-            <Wallet size={16} color={item.color} strokeWidth={2.4} />
-          )}
-          {item.iconName === 'spend' && (
-            <Receipt size={16} color={item.color} strokeWidth={2.4} />
-          )}
-        </View>
+  const chevronAnimStyle = useAnimatedStyle(() => ({
+    transform: [
+      {
+        rotate: withSpring(isExpanded ? '180deg' : '0deg', {
+          damping: 30,
+          stiffness: 240,
+        }),
+      },
+    ],
+  }));
 
-        {/* Center Details */}
-        <View style={styles.txInfoCol}>
-          <View style={styles.txTitleRow}>
-            <Text style={styles.txTitle} numberOfLines={1}>
-              {item.title}
-            </Text>
-            {item.isCrossCardCash && (
-              <View style={styles.crossCardBadge}>
-                <Text style={styles.crossCardBadgeText}>Cross-Card</Text>
-              </View>
+  return (
+    <Animated.View layout={LinearTransition.springify().damping(28).stiffness(240)}>
+      <Pressable
+        style={({ pressed }) => [
+          styles.txCard,
+          isExpanded && styles.txCardExpanded,
+          pressed && styles.txCardPressed,
+        ]}
+        onPress={onToggle}
+      >
+        <View style={styles.txMainRow}>
+          {/* Type Icon Badge */}
+          <View style={[styles.txIconBox, { backgroundColor: item.bgColor }]}>
+            {item.iconName === 'withdrawal' && (
+              <ArrowDownLeft size={16} color={item.color} strokeWidth={2.4} />
+            )}
+            {item.iconName === 'bill_payment' && (
+              <CheckCircle2 size={16} color={item.color} strokeWidth={2.4} />
+            )}
+            {item.iconName === 'repayment' && (
+              <Wallet size={16} color={item.color} strokeWidth={2.4} />
+            )}
+            {item.iconName === 'spend' && (
+              <Receipt size={16} color={item.color} strokeWidth={2.4} />
+            )}
+            {item.iconName === 'lent' && (
+              <Handshake size={16} color={item.color} strokeWidth={2.4} />
             )}
           </View>
 
-          {/* Truncated remarks when collapsed */}
-          {item.remarks ? (
-            <Text style={styles.txRemarks} numberOfLines={1}>
-              &quot;{item.remarks}&quot;
-            </Text>
-          ) : null}
+          {/* Center Details */}
+          <View style={styles.txInfoCol}>
+            <View style={styles.txTitleRow}>
+              <Text style={styles.txTitle} numberOfLines={1}>
+                {item.title}
+              </Text>
+              {item.isCrossCardCash && (
+                <View style={styles.crossCardBadge}>
+                  <Text style={styles.crossCardBadgeText}>Cross-Card</Text>
+                </View>
+              )}
+            </View>
 
-          <Text style={styles.txSubtitle}>{item.subtitle}</Text>
-        </View>
+            {/* Truncated remarks when collapsed */}
+            {item.remarks ? (
+              <Text style={styles.txRemarks} numberOfLines={1}>
+                &quot;{item.remarks}&quot;
+              </Text>
+            ) : null}
 
-        {/* Right Amount & Date */}
-        <View style={styles.txAmountCol}>
-          <Text style={[styles.txAmountText, { color: item.color }]}>
-            {isNegative ? '-' : '+'}₹{item.amount.toLocaleString('en-IN')}
-          </Text>
-          <View style={styles.chevronRow}>
-            <Text style={styles.txCardPillText}>
-              {item.cardDetails ? item.cardDetails.split(' ')[0] : 'Card'}
+            {/* Subtitle with User DP / Initials */}
+            <View style={styles.userSubtitleRow}>
+              {item.avatarUrl ? (
+                <Image source={{ uri: item.avatarUrl }} style={styles.userAvatarMini} />
+              ) : (
+                <View style={styles.userInitialMini}>
+                  <Text style={styles.userInitialMiniText}>
+                    {item.recordedBy.charAt(0).toUpperCase()}
+                  </Text>
+                </View>
+              )}
+              <Text style={styles.txSubtitle} numberOfLines={1}>
+                {item.subtitle}
+              </Text>
+            </View>
+          </View>
+
+          {/* Right Amount & Date */}
+          <View style={styles.txAmountCol}>
+            <Text style={[styles.txAmountText, { color: item.color }]}>
+              {isNegative ? '-' : '+'}₹{item.amount.toLocaleString('en-IN')}
             </Text>
-            <ChevronDown
-              size={12}
-              color="#4A6B56"
-              style={{
-                transform: [{ rotate: isExpanded ? '180deg' : '0deg' }],
-              }}
-            />
+            <View style={styles.chevronRow}>
+              <Text style={styles.txCardPillText}>
+                {item.cardDetails ? item.cardDetails.split(' ')[0] : 'Card'}
+              </Text>
+              <Animated.View style={chevronAnimStyle}>
+                <ChevronDown size={12} color="#4A6B56" />
+              </Animated.View>
+            </View>
           </View>
         </View>
-      </View>
 
-      {/* Responsive 120Hz Expanded Deep Breakdown */}
-      {isExpanded && (
-        <View style={styles.expandedContent}>
+        {/* Responsive 120Hz Expanded Deep Breakdown */}
+        {isExpanded && (
+          <Animated.View
+            entering={FadeInUp.duration(180)}
+            exiting={FadeOutUp.duration(140)}
+            style={styles.expandedContent}
+          >
           <View style={styles.expandedDivider} />
 
           <View style={styles.expandedGrid}>
@@ -156,7 +199,18 @@ export const TransactionItemCard = React.memo(function TransactionItemCard({
 
             <View style={styles.expandedGridItem}>
               <Text style={styles.expandedFieldLabel}>Recorded By</Text>
-              <Text style={styles.expandedFieldValue}>{item.recordedBy}</Text>
+              <View style={styles.expandedUserRow}>
+                {item.avatarUrl ? (
+                  <Image source={{ uri: item.avatarUrl }} style={styles.userAvatarSmall} />
+                ) : (
+                  <View style={styles.userInitialSmall}>
+                    <Text style={styles.userInitialSmallText}>
+                      {item.recordedBy.charAt(0).toUpperCase()}
+                    </Text>
+                  </View>
+                )}
+                <Text style={styles.expandedFieldValue}>{item.recordedBy}</Text>
+              </View>
             </View>
           </View>
 
@@ -185,24 +239,46 @@ export const TransactionItemCard = React.memo(function TransactionItemCard({
             </View>
           ) : null}
 
-          {/* Journey Trace Flow Button */}
-          {onTrace && (
-            <Pressable
-              style={styles.traceBtn}
-              onPress={onTrace}
-            >
-              <ArrowLeftRight size={13} color="#2D7A5D" strokeWidth={2.4} />
-              <Text style={styles.traceBtnText}>View DB Trace Flow</Text>
-            </Pressable>
-          )}
-        </View>
-      )}
-    </Pressable>
+          {/* Actions Row: Trace & Optional Delete */}
+          <View style={styles.actionRow}>
+            {onTrace && (
+              <TouchableOpacity
+                style={styles.traceBtn}
+                onPress={onTrace}
+                activeOpacity={0.8}
+              >
+                <ArrowLeftRight size={13} color="#2D7A5D" strokeWidth={2.4} />
+                <Text style={styles.traceBtnText}>View DB Trace Flow</Text>
+              </TouchableOpacity>
+            )}
+
+            {onDelete && (
+              <TouchableOpacity
+                style={styles.deleteBtn}
+                onPress={onDelete}
+                activeOpacity={0.8}
+              >
+                <Trash2 size={13} color="#E05D52" strokeWidth={2.2} />
+                <Text style={styles.deleteBtnText}>Delete</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+          </Animated.View>
+        )}
+      </Pressable>
+    </Animated.View>
   );
 });
 
 const styles = StyleSheet.create({
+  actionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 8,
+  },
   traceBtn: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -210,7 +286,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(45, 122, 93, 0.1)',
     borderRadius: 12,
     paddingVertical: 8,
-    marginTop: 8,
     borderWidth: 1,
     borderColor: 'rgba(45, 122, 93, 0.25)',
   },
@@ -219,6 +294,24 @@ const styles = StyleSheet.create({
     fontFamily: CedarTypography.bodySemiBold,
     fontWeight: '700',
     color: '#2D7A5D',
+  },
+  deleteBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    backgroundColor: 'rgba(224, 93, 82, 0.1)',
+    borderRadius: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(224, 93, 82, 0.25)',
+  },
+  deleteBtnText: {
+    fontSize: 11,
+    fontFamily: CedarTypography.bodySemiBold,
+    fontWeight: '700',
+    color: '#E05D52',
   },
   txCard: {
     backgroundColor: '#FFFFFF',
@@ -293,11 +386,34 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
     marginTop: 1,
   },
+  userSubtitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: 2,
+  },
+  userAvatarMini: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+  },
+  userInitialMini: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: '#072C1C',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  userInitialMiniText: {
+    fontSize: 8,
+    color: '#FFFFFF',
+    fontWeight: '800',
+  },
   txSubtitle: {
-    fontSize: 9,
+    fontSize: 10,
     fontFamily: CedarTypography.body,
     color: '#6B8272',
-    marginTop: 1,
   },
   txAmountCol: {
     alignItems: 'flex-end',
@@ -355,6 +471,30 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#072C1C',
     marginTop: 2,
+  },
+  expandedUserRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 2,
+  },
+  userAvatarSmall: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+  },
+  userInitialSmall: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#072C1C',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  userInitialSmallText: {
+    fontSize: 9,
+    color: '#FFFFFF',
+    fontWeight: '800',
   },
   breakdownBox: {
     marginTop: 8,

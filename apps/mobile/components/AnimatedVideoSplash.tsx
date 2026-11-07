@@ -115,7 +115,7 @@ export function AnimatedVideoSplash({ onFinish }: AnimatedVideoSplashProps) {
 
 const styles = StyleSheet.create({
   container: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: CedarColors.canvas,
     zIndex: 999999,
     justifyContent: 'center',

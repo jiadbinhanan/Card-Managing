@@ -9,8 +9,13 @@ import {
   Alert,
   Linking,
   ActivityIndicator,
+  Image,
 } from 'react-native';
-import * as Haptics from 'expo-haptics';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
+} from 'react-native-reanimated';
 import { SwipeDownDrawer, DrawerScrollView } from '../SwipeDownDrawer';
 import {
   QrCode,
@@ -21,7 +26,15 @@ import {
   Clock,
   Layers,
   ArrowRight,
+  Download,
+  AlertTriangle,
+  RefreshCw,
 } from 'lucide-react-native';
+import {
+  generateAntiFraudAmounts,
+  validateRotationAmount,
+  computeTotalRotationAmount,
+} from '@credics/core';
 
 export interface QRData {
   id: string;
@@ -68,73 +81,89 @@ export function QRPaymentModal({
 }: QRPaymentModalProps) {
   const [paymentMode, setPaymentMode] = useState<'once' | 'multiple'>('once');
   const [splitCount, setSplitCount] = useState<number>(2);
-  const [targetAmount, setTargetAmount] = useState<string>('5000');
-  const [generatedAmounts, setGeneratedAmounts] = useState<number[]>([5000]);
+  const [amountStrings, setAmountStrings] = useState<string[]>(['1940']);
   const [selectedCardId, setSelectedCardId] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // 120Hz Spring Feedback for buttons
+  const generateScale = useSharedValue(1);
+  const generateAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: generateScale.value }],
+  }));
+
+  const submitScale = useSharedValue(1);
+  const submitAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: submitScale.value }],
+  }));
+
+  // Trigger Under-₹2,000 Anti-Fraud Generation Engine
+  const handleGenerate = (mode: 'once' | 'multiple' = paymentMode, count: number = splitCount) => {
+    const raw = generateAntiFraudAmounts(mode, count);
+    setAmountStrings(raw.map((n) => String(n)));
+  };
 
   useEffect(() => {
     if (visible) {
       if (cards.length > 0 && !selectedCardId) {
         setSelectedCardId(cards[0].id);
       }
-      generateAmounts(targetAmount, paymentMode, splitCount);
+      handleGenerate(paymentMode, splitCount);
     }
   }, [visible, cards]);
 
-  const generateSplits = (total: number, count: number): number[] => {
-    if (count <= 1) return [total];
-    let remaining = total;
-    const splits: number[] = [];
-    for (let i = 0; i < count - 1; i++) {
-      const avg = remaining / (count - i);
-      const min = Math.max(500, Math.floor(avg * 0.7));
-      const max = Math.min(remaining - 500 * (count - i - 1), Math.floor(avg * 1.3));
-      const val = Math.floor((Math.random() * (max - min) + min) / 100) * 100;
-      splits.push(val);
-      remaining -= val;
-    }
-    splits.push(remaining);
-    return splits;
-  };
-
-  const generateAmounts = (totalStr: string, mode: 'once' | 'multiple', splits: number) => {
-    const total = Number(totalStr) || 0;
-    if (total <= 0) {
-      setGeneratedAmounts([]);
-      return;
-    }
-    if (mode === 'once') {
-      setGeneratedAmounts([total]);
-    } else {
-      setGeneratedAmounts(generateSplits(total, splits));
-    }
-  };
-
-  const handleAmountChange = (text: string) => {
-    setTargetAmount(text);
-    generateAmounts(text, paymentMode, splitCount);
-  };
-
   const handleModeChange = (mode: 'once' | 'multiple') => {
     setPaymentMode(mode);
-    generateAmounts(targetAmount, mode, splitCount);
+    handleGenerate(mode, splitCount);
   };
 
   const handleSplitCountChange = (count: number) => {
     setSplitCount(count);
-    generateAmounts(targetAmount, paymentMode, count);
+    handleGenerate(paymentMode, count);
   };
 
-  const getUpiUrl = (amountVal?: number): string => {
-    if (!qr) return '#';
-    if (qr.base_payment_link) {
-      const link = qr.base_payment_link.trim();
-      if (amountVal && amountVal > 0 && !link.includes('am=')) {
-        const separator = link.includes('?') ? '&' : '?';
-        return `${link}${separator}am=${amountVal}`;
+  // Editable Amount Handler
+  const handleAmountEdit = (index: number, text: string) => {
+    const cleaned = text.replace(/[^0-9]/g, '');
+    const updated = [...amountStrings];
+    updated[index] = cleaned;
+    setAmountStrings(updated);
+  };
+
+  // Validation across all entries
+  const validationResults = amountStrings.map((s) => {
+    const num = Number(s);
+    return validateRotationAmount(num);
+  });
+  const hasError = validationResults.some((v) => !v.isValid);
+  const firstErrorMessage = validationResults.find((v) => !v.isValid)?.error;
+
+  const numericAmounts = amountStrings.map((s) => Number(s) || 0);
+  const grandTotal = computeTotalRotationAmount(numericAmounts);
+
+  // Download / View QR Code
+  const handleDownloadQr = async () => {
+    if (!qr?.qr_image_url) {
+      Alert.alert('Notice', 'No image URL available for this QR.');
+      return;
+    }
+    try {
+      const supported = await Linking.canOpenURL(qr.qr_image_url);
+      if (supported) {
+        await Linking.openURL(qr.qr_image_url);
+      } else {
+        Alert.alert('QR Image Link', qr.qr_image_url);
       }
-      return link;
+    } catch {
+      Alert.alert('Notice', 'Unable to open QR image.');
+    }
+  };
+
+  // UPI Link generation matching Web canonical policy
+  const getCleanPaymentLink = (amountVal?: number) => {
+    if (!qr) return '#';
+    // Web parity: If custom base_payment_link exists, do not corrupt it with query params
+    if (qr.base_payment_link) {
+      return qr.base_payment_link;
     }
     const upi = qr.upi_id || '';
     const name = encodeURIComponent(qr.merchant_name || 'Merchant');
@@ -145,24 +174,23 @@ export function QRPaymentModal({
   };
 
   const handleOpenUpi = async (amountVal?: number) => {
-    const url = getUpiUrl(amountVal);
+    const url = getCleanPaymentLink(amountVal);
     try {
       const supported = await Linking.canOpenURL(url);
       if (supported) {
         await Linking.openURL(url);
       } else {
-        // Fallback generic UPI intent
         await Linking.openURL(`upi://pay?pa=${qr?.upi_id || ''}&cu=INR`);
       }
-    } catch (err: any) {
-      Alert.alert('Unable to Open UPI', 'Please launch your payment app manually.');
+    } catch {
+      Alert.alert('Payment Link', 'Unable to open UPI app directly. Please launch your payment app manually.');
     }
   };
 
+  // Submit Rotation Record
   const handleSave = async () => {
-    const totalAmt = Number(targetAmount);
-    if (!qr || !selectedCardId || !totalAmt || totalAmt <= 0) {
-      Alert.alert('Required Fields', 'Please ensure amount and card are selected.');
+    if (!qr || !selectedCardId || grandTotal <= 0 || hasError) {
+      Alert.alert('Validation Error', firstErrorMessage || 'Please enter valid amounts under ₹2,000.');
       return;
     }
 
@@ -171,12 +199,9 @@ export function QRPaymentModal({
       await onRecordRotation({
         cardId: selectedCardId,
         qrId: qr.id,
-        amount: totalAmt,
-        remarks: `QR Rotation • ${qr.merchant_name} (${paymentMode === 'multiple' ? `${splitCount} splits` : 'Single'})`,
+        amount: grandTotal,
+        remarks: 'Qr rotation withdraw',
       });
-      try {
-        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      } catch {}
       onClose();
     } catch (err: any) {
       Alert.alert('Error', err?.message || 'Failed to record rotation withdrawal.');
@@ -188,179 +213,278 @@ export function QRPaymentModal({
   if (!qr) return null;
 
   return (
-    <SwipeDownDrawer visible={visible} onClose={onClose} heightPercent={0.85}>
+    <SwipeDownDrawer visible={visible} onClose={onClose} heightPercent={0.92}>
       <View style={styles.container}>
+        {/* Header Bar */}
         <View style={styles.headerBox}>
           <View style={styles.qrIconSquare}>
-          <QrCode size={22} color="#10B981" />
-        </View>
-        <View style={styles.headerDetailsCol}>
-          <Text style={styles.merchantTitle} numberOfLines={1}>
-            {qr.merchant_name}
-          </Text>
-          <Text style={styles.merchantUpi} numberOfLines={1}>
-            {qr.upi_id || 'Static QR'} • {qr.platform || 'UPI QR'}
-          </Text>
-        </View>
-        <View style={styles.settlementBadge}>
-          <Clock size={11} color="#0B3F28" />
-          <Text style={styles.settlementBadgeText}>{qr.settlement_time || 'T+0'}</Text>
-        </View>
-      </View>
-
-      <DrawerScrollView style={styles.bodyScroll} contentContainerStyle={styles.bodyContent}>
-        {/* Payment Amount Input */}
-        <View style={styles.sectionBox}>
-          <Text style={styles.fieldLabel}>Total Swipe Amount (₹)</Text>
-          <View style={styles.amountInputRow}>
-            <Text style={styles.currencySymbol}>₹</Text>
-            <TextInput
-              style={styles.amountInput}
-              keyboardType="numeric"
-              placeholder="5000"
-              placeholderTextColor="#8CA394"
-              value={targetAmount}
-              onChangeText={handleAmountChange}
-            />
+            <QrCode size={22} color="#10B981" />
+          </View>
+          <View style={styles.headerDetailsCol}>
+            <Text style={styles.merchantTitle} numberOfLines={1}>
+              {qr.merchant_name}
+            </Text>
+            <Text style={styles.merchantUpi} numberOfLines={1}>
+              {qr.upi_id || 'Static QR'} • {qr.platform || 'UPI QR'}
+            </Text>
+          </View>
+          <View style={styles.settlementBadge}>
+            <Clock size={11} color="#0B3F28" />
+            <Text style={styles.settlementBadgeText}>{qr.settlement_time || 'T+0'}</Text>
           </View>
         </View>
 
-        {/* Payment Mode Selector */}
-        <View style={styles.sectionBox}>
-          <Text style={styles.fieldLabel}>Payment Mode</Text>
-          <View style={styles.modeRow}>
-            <TouchableOpacity
-              style={[styles.modeBtn, paymentMode === 'once' && styles.modeBtnActive]}
-              onPress={() => handleModeChange('once')}
-              activeOpacity={0.8}
-            >
-              <Zap size={14} color={paymentMode === 'once' ? '#FFFFFF' : '#4A6B56'} />
-              <Text style={[styles.modeBtnText, paymentMode === 'once' && styles.modeBtnTextActive]}>
-                Single Swipe
-              </Text>
-            </TouchableOpacity>
+        <DrawerScrollView style={styles.bodyScroll} contentContainerStyle={styles.bodyContent}>
+          {/* ================= 1. QR CODE DISPLAY & DOWNLOAD ================= */}
+          <View style={styles.qrVisualSection}>
+            <View style={styles.qrVisualCard}>
+              {qr.qr_image_url ? (
+                <Image
+                  source={{ uri: qr.qr_image_url }}
+                  style={styles.qrImage}
+                  resizeMode="contain"
+                />
+              ) : (
+                <View style={styles.qrPlaceholderBox}>
+                  <QrCode size={56} color="#A0B3A6" />
+                  <Text style={styles.qrPlaceholderText}>Photo Not Available</Text>
+                </View>
+              )}
+            </View>
 
-            <TouchableOpacity
-              style={[styles.modeBtn, paymentMode === 'multiple' && styles.modeBtnActive]}
-              onPress={() => handleModeChange('multiple')}
-              activeOpacity={0.8}
-            >
-              <Layers size={14} color={paymentMode === 'multiple' ? '#FFFFFF' : '#4A6B56'} />
-              <Text style={[styles.modeBtnText, paymentMode === 'multiple' && styles.modeBtnTextActive]}>
-                Split Batches
-              </Text>
-            </TouchableOpacity>
+            {qr.qr_image_url ? (
+              <TouchableOpacity
+                style={styles.downloadQrBtn}
+                onPress={handleDownloadQr}
+                activeOpacity={0.8}
+              >
+                <Download size={13} color="#0B3F28" />
+                <Text style={styles.downloadQrBtnText}>Download QR Photo</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
 
-          {/* Split Count Pills */}
-          {paymentMode === 'multiple' && (
-            <View style={styles.splitRow}>
-              {[2, 3, 4].map((count) => {
-                const isActive = splitCount === count;
+          {/* ================= 2. PAYMENT STRATEGY & ENGINE ================= */}
+          <View style={styles.sectionBox}>
+            <View style={styles.sectionTitleRow}>
+              <Text style={styles.fieldLabel}>Payment Strategy</Text>
+              <Text style={styles.engineBadge}>Under ₹2,000 Anti-Fraud</Text>
+            </View>
+
+            {/* Mode Selector */}
+            <View style={styles.modeRow}>
+              <TouchableOpacity
+                style={[styles.modeBtn, paymentMode === 'once' && styles.modeBtnActive]}
+                onPress={() => handleModeChange('once')}
+                activeOpacity={0.8}
+              >
+                <Zap size={14} color={paymentMode === 'once' ? '#FFFFFF' : '#4A6B56'} />
+                <Text style={[styles.modeBtnText, paymentMode === 'once' && styles.modeBtnTextActive]}>
+                  Single Swipe
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.modeBtn, paymentMode === 'multiple' && styles.modeBtnActive]}
+                onPress={() => handleModeChange('multiple')}
+                activeOpacity={0.8}
+              >
+                <Layers size={14} color={paymentMode === 'multiple' ? '#FFFFFF' : '#4A6B56'} />
+                <Text style={[styles.modeBtnText, paymentMode === 'multiple' && styles.modeBtnTextActive]}>
+                  Split Batches
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Split Count Selector */}
+            {paymentMode === 'multiple' && (
+              <View style={styles.splitRow}>
+                {[2, 3].map((count) => {
+                  const isActive = splitCount === count;
+                  return (
+                    <TouchableOpacity
+                      key={count}
+                      style={[styles.splitPill, isActive && styles.splitPillActive]}
+                      onPress={() => handleSplitCountChange(count)}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={[styles.splitPillText, isActive && styles.splitPillTextActive]}>
+                        {count} Swipes
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
+
+            {/* Generate Amount Action Button */}
+            <Animated.View style={generateAnimStyle}>
+              <TouchableOpacity
+                style={styles.generateBtn}
+                onPress={() => {
+                  generateScale.value = withSpring(0.96, { damping: 12, stiffness: 260 }, () => {
+                    generateScale.value = withSpring(1, { damping: 12, stiffness: 260 });
+                  });
+                  handleGenerate();
+                }}
+                activeOpacity={0.88}
+              >
+                <View style={styles.generateBtnLeft}>
+                  <Zap size={15} color="#0B3F28" />
+                  <Text style={styles.generateBtnText}>Generate Random Amounts</Text>
+                </View>
+                <RefreshCw size={13} color="#4A6B56" />
+              </TouchableOpacity>
+            </Animated.View>
+          </View>
+
+          {/* ================= 3. EDITABLE AMOUNT INPUTS ================= */}
+          <View style={styles.sectionBox}>
+            <View style={styles.sectionTitleRow}>
+              <Text style={styles.fieldLabel}>Generated Amounts (Editable)</Text>
+              <Text style={styles.fieldSubLabel}>Max ₹1,999 per swipe</Text>
+            </View>
+
+            <View style={styles.amountsList}>
+              {amountStrings.map((amtStr, idx) => {
+                const num = Number(amtStr) || 0;
+                const isInvalid = num <= 0 || num >= 2000;
                 return (
-                  <TouchableOpacity
-                    key={count}
-                    style={[styles.splitPill, isActive && styles.splitPillActive]}
-                    onPress={() => handleSplitCountChange(count)}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={[styles.splitPillText, isActive && styles.splitPillTextActive]}>
-                      {count} Transactions
-                    </Text>
-                  </TouchableOpacity>
+                  <View key={idx} style={[styles.amountCardRow, isInvalid && styles.amountCardRowError]}>
+                    <View style={styles.swipeBadge}>
+                      <Text style={styles.swipeBadgeText}>
+                        {amountStrings.length > 1 ? `Swipe ${idx + 1}` : 'Amount'}
+                      </Text>
+                    </View>
+
+                    <View style={styles.amountInputWrap}>
+                      <Text style={styles.currencyPrefix}>₹</Text>
+                      <TextInput
+                        style={styles.amountField}
+                        value={amtStr}
+                        onChangeText={(txt) => handleAmountEdit(idx, txt)}
+                        keyboardType="numeric"
+                        placeholder="0"
+                        placeholderTextColor="#A0B3A6"
+                        maxLength={4}
+                      />
+                    </View>
+
+                    <TouchableOpacity
+                      style={styles.quickPayBtn}
+                      onPress={() => handleOpenUpi(num)}
+                      activeOpacity={0.8}
+                    >
+                      <Send size={11} color="#FFFFFF" />
+                      <Text style={styles.quickPayBtnText}>Pay</Text>
+                    </TouchableOpacity>
+                  </View>
                 );
               })}
             </View>
-          )}
 
-          {/* Generated Amounts Display */}
-          {generatedAmounts.length > 0 && (
-            <View style={styles.generatedBox}>
-              <Text style={styles.generatedTitle}>
-                {paymentMode === 'multiple' ? 'Split Amounts Generator' : 'Target Amount'}
-              </Text>
-              <View style={styles.generatedPillsWrap}>
-                {generatedAmounts.map((amt, idx) => (
+            {/* Error Message Notice if any amount exceeds ₹2000 */}
+            {hasError && (
+              <View style={styles.errorNoticeBox}>
+                <AlertTriangle size={13} color="#D92D20" />
+                <Text style={styles.errorNoticeText}>
+                  {firstErrorMessage || 'Each amount must be strictly under ₹2,000'}
+                </Text>
+              </View>
+            )}
+
+            {/* ================= 4. AGGREGATE TOTAL SUMMARY ================= */}
+            <View style={styles.aggregateSummaryCard}>
+              <View style={styles.aggregateTopRow}>
+                <Text style={styles.aggregateLabel}>TOTAL ROTATION WITHDRAWAL</Text>
+                <Text style={styles.aggregateValue}>₹{grandTotal.toLocaleString('en-IN')}</Text>
+              </View>
+              {amountStrings.length > 1 && (
+                <View style={styles.aggregateBreakdownRow}>
+                  <Text style={styles.aggregateBreakdownText}>
+                    Calculation: {amountStrings.map((a) => `₹${Number(a) || 0}`).join(' + ')}
+                  </Text>
+                </View>
+              )}
+            </View>
+          </View>
+
+          {/* ================= 5. PAYING CREDIT CARD ================= */}
+          <View style={styles.sectionBox}>
+            <Text style={styles.fieldLabel}>Paying Credit Card</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.cardScroll}>
+              {cards.map((card) => {
+                const isSelected = selectedCardId === card.id;
+                const available = cardAvailableMap[card.id] || 0;
+                return (
                   <TouchableOpacity
-                    key={idx}
-                    style={styles.amountChip}
-                    onPress={() => handleOpenUpi(amt)}
-                    activeOpacity={0.85}
+                    key={card.id}
+                    style={[styles.cardItem, isSelected && styles.cardItemActive]}
+                    onPress={() => setSelectedCardId(card.id)}
+                    activeOpacity={0.8}
                   >
-                    <View style={styles.amountChipLeft}>
-                      <Text style={styles.amountChipNum}>#{idx + 1}</Text>
-                      <Text style={styles.amountChipVal}>₹{amt.toLocaleString('en-IN')}</Text>
-                    </View>
-                    <View style={styles.amountChipPayBtn}>
-                      <Send size={11} color="#0B3F28" />
-                      <Text style={styles.amountChipPayText}>Pay</Text>
+                    <CreditCard size={15} color={isSelected ? '#FFFFFF' : '#0B3F28'} />
+                    <View>
+                      <Text style={[styles.cardItemName, isSelected && styles.cardItemNameActive]}>
+                        {card.card_name}
+                      </Text>
+                      <Text style={[styles.cardItemSub, isSelected && styles.cardItemSubActive]}>
+                        **{card.last_4_digits} • Avail: ₹{available.toLocaleString('en-IN')}
+                      </Text>
                     </View>
                   </TouchableOpacity>
-                ))}
+                );
+              })}
+            </ScrollView>
+          </View>
+
+          {/* ================= 6. LAUNCH UPI PAYMENT APP ================= */}
+          <TouchableOpacity
+            style={styles.upiLaunchBtn}
+            onPress={() => handleOpenUpi()}
+            activeOpacity={0.85}
+          >
+            <View style={styles.upiLaunchLeft}>
+              <Send size={15} color="#0B3F28" />
+              <View>
+                <Text style={styles.upiLaunchBtnText}>Launch UPI Payment App</Text>
+                <Text style={styles.upiLaunchBtnSub}>Enter amount manually in payment app</Text>
               </View>
             </View>
-          )}
+            <ArrowRight size={14} color="#0B3F28" />
+          </TouchableOpacity>
+        </DrawerScrollView>
+
+        {/* ================= 7. FOOTER SUBMIT BUTTON ================= */}
+        <View style={styles.footerContainer}>
+          <Animated.View style={submitAnimStyle}>
+            <TouchableOpacity
+              style={[
+                styles.submitBtn,
+                (isSubmitting || hasError || grandTotal <= 0) && styles.submitBtnDisabled,
+              ]}
+              onPress={() => {
+                submitScale.value = withSpring(0.96, { damping: 12, stiffness: 260 }, () => {
+                  submitScale.value = withSpring(1, { damping: 12, stiffness: 260 });
+                });
+                handleSave();
+              }}
+              disabled={isSubmitting || hasError || grandTotal <= 0}
+              activeOpacity={0.88}
+            >
+              {isSubmitting ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <>
+                  <CheckCircle2 size={18} color="#FFFFFF" />
+                  <Text style={styles.submitBtnText}>
+                    RECORD ROTATION (₹{grandTotal.toLocaleString('en-IN')})
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </Animated.View>
         </View>
-
-        {/* Card Used for Withdrawal */}
-        <View style={styles.sectionBox}>
-          <Text style={styles.fieldLabel}>Paying Credit Card</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.cardScroll}>
-            {cards.map((card) => {
-              const isSelected = selectedCardId === card.id;
-              const available = cardAvailableMap[card.id] || 0;
-              return (
-                <TouchableOpacity
-                  key={card.id}
-                  style={[styles.cardItem, isSelected && styles.cardItemActive]}
-                  onPress={() => setSelectedCardId(card.id)}
-                  activeOpacity={0.8}
-                >
-                  <CreditCard size={15} color={isSelected ? '#FFFFFF' : '#0B3F28'} />
-                  <View>
-                    <Text style={[styles.cardItemName, isSelected && styles.cardItemNameActive]}>
-                      {card.card_name}
-                    </Text>
-                    <Text style={[styles.cardItemSub, isSelected && styles.cardItemSubActive]}>
-                      **{card.last_4_digits} • Avail: ₹{available.toLocaleString('en-IN')}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-        </View>
-
-        {/* Quick Launch Direct App Button */}
-        <TouchableOpacity
-          style={styles.upiLaunchBtn}
-          onPress={() => handleOpenUpi()}
-          activeOpacity={0.85}
-        >
-          <Send size={15} color="#0B3F28" />
-          <Text style={styles.upiLaunchBtnText}>Launch UPI Payment App</Text>
-          <ArrowRight size={14} color="#0B3F28" />
-        </TouchableOpacity>
-      </DrawerScrollView>
-
-      {/* Footer Submit Button */}
-      <View style={styles.footerContainer}>
-        <TouchableOpacity
-          style={[styles.submitBtn, isSubmitting && styles.submitBtnDisabled]}
-          onPress={handleSave}
-          disabled={isSubmitting}
-          activeOpacity={0.88}
-        >
-          {isSubmitting ? (
-            <ActivityIndicator size="small" color="#FFFFFF" />
-          ) : (
-            <>
-              <CheckCircle2 size={18} color="#FFFFFF" />
-              <Text style={styles.submitBtnText}>Record Rotation Withdrawal</Text>
-            </>
-          )}
-        </TouchableOpacity>
-      </View>
       </View>
     </SwipeDownDrawer>
   );
@@ -431,6 +555,58 @@ const styles = StyleSheet.create({
     paddingBottom: 24,
     gap: 14,
   },
+  qrVisualSection: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  qrVisualCard: {
+    width: 168,
+    height: 168,
+    borderRadius: 20,
+    backgroundColor: '#FFFFFF',
+    padding: 10,
+    borderWidth: 1.5,
+    borderColor: '#DFE8E0',
+    shadowColor: '#072C1C',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  qrImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 12,
+  },
+  qrPlaceholderBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  qrPlaceholderText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#8CA394',
+  },
+  downloadQrBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#DFE8E0',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+  },
+  downloadQrBtnText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#0B3F28',
+  },
   sectionBox: {
     backgroundColor: '#FFFFFF',
     borderRadius: 16,
@@ -439,6 +615,11 @@ const styles = StyleSheet.create({
     borderColor: '#DFE8E0',
     gap: 10,
   },
+  sectionTitleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
   fieldLabel: {
     fontSize: 10,
     fontWeight: '800',
@@ -446,28 +627,21 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
     textTransform: 'uppercase',
   },
-  amountInputRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#EFF3EE',
-    borderWidth: 1.2,
-    borderColor: '#DFE8E0',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    height: 48,
+  fieldSubLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#8CA394',
   },
-  currencySymbol: {
-    fontSize: 18,
+  engineBadge: {
+    fontSize: 9,
     fontWeight: '800',
-    color: '#072C1C',
-    marginRight: 6,
-  },
-  amountInput: {
-    flex: 1,
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#072C1C',
-    padding: 0,
+    color: '#059669',
+    backgroundColor: '#ECFDF5',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
   },
   modeRow: {
     flexDirection: 'row',
@@ -524,51 +698,78 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: '800',
   },
-  generatedBox: {
-    backgroundColor: '#EFF3EE',
-    borderRadius: 12,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: '#DFE8E0',
-    gap: 8,
-  },
-  generatedTitle: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#4A6B56',
-    letterSpacing: 0.4,
-    textTransform: 'uppercase',
-  },
-  generatedPillsWrap: {
-    gap: 8,
-  },
-  amountChip: {
+  generateBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 10,
+    backgroundColor: '#E2ECE4',
+    borderWidth: 1,
+    borderColor: '#D4E2D7',
+    borderRadius: 12,
     paddingHorizontal: 12,
     paddingVertical: 10,
+  },
+  generateBtnLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  generateBtnText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#0B3F28',
+  },
+  amountsList: {
+    gap: 8,
+  },
+  amountCardRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EFF3EE',
+    borderWidth: 1.2,
+    borderColor: '#DFE8E0',
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    gap: 8,
+  },
+  amountCardRowError: {
+    borderColor: '#FDA29B',
+    backgroundColor: '#FEF3F2',
+  },
+  swipeBadge: {
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: '#DFE8E0',
   },
-  amountChipLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  amountChipNum: {
+  swipeBadgeText: {
     fontSize: 10,
     fontWeight: '800',
-    color: '#8CA394',
+    color: '#4A6B56',
+    letterSpacing: 0.2,
   },
-  amountChipVal: {
-    fontSize: 14,
+  amountInputWrap: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  currencyPrefix: {
+    fontSize: 16,
     fontWeight: '800',
     color: '#072C1C',
+    marginRight: 4,
   },
-  amountChipPayBtn: {
+  amountField: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#072C1C',
+    padding: 0,
+  },
+  quickPayBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
@@ -577,10 +778,61 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 8,
   },
-  amountChipPayText: {
+  quickPayBtnText: {
     fontSize: 11,
     fontWeight: '800',
     color: '#FFFFFF',
+  },
+  errorNoticeBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#FEF3F2',
+    borderWidth: 1,
+    borderColor: '#FECDCA',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  errorNoticeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#D92D20',
+  },
+  aggregateSummaryCard: {
+    backgroundColor: '#EFF8F2',
+    borderWidth: 1.2,
+    borderColor: '#D1E9D7',
+    borderRadius: 12,
+    padding: 12,
+    gap: 4,
+  },
+  aggregateTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  aggregateLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#2B6E4A',
+    letterSpacing: 0.5,
+  },
+  aggregateValue: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: '#072C1C',
+  },
+  aggregateBreakdownRow: {
+    borderTopWidth: 1,
+    borderTopColor: '#D1E9D7',
+    paddingTop: 4,
+    marginTop: 2,
+  },
+  aggregateBreakdownText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#4A6B56',
   },
   cardScroll: {
     flexDirection: 'row',
@@ -627,12 +879,23 @@ const styles = StyleSheet.create({
     borderWidth: 1.2,
     borderColor: '#DFE8E0',
     paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingVertical: 12,
+  },
+  upiLaunchLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
   },
   upiLaunchBtnText: {
     fontSize: 13,
     fontWeight: '800',
     color: '#0B3F28',
+  },
+  upiLaunchBtnSub: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#658270',
+    marginTop: 1,
   },
   footerContainer: {
     paddingHorizontal: 16,
@@ -651,7 +914,7 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
   },
   submitBtnDisabled: {
-    opacity: 0.6,
+    opacity: 0.5,
   },
   submitBtnText: {
     fontSize: 13,

@@ -4,6 +4,8 @@ import {
   filterSuggestedQRs,
   generateAntiFraudAmounts,
   buildUpiPaymentLink,
+  validateRotationAmount,
+  computeTotalRotationAmount,
 } from '../qrs';
 import { QRItem } from '../../types';
 
@@ -174,6 +176,31 @@ describe('Pillar 4D: Smart QR Cooldowns, Fraud Splits & Recommendation Engine', 
 
       const link = buildUpiPaymentLink(customQr, 1890);
       expect(link).toBe('https://pay.example.com/checkout?mid=123&token=abc&am=1890');
+    });
+  });
+
+  describe('5. Rotation Amount Validation & Total Calculation', () => {
+    it('should validate amounts strictly under ₹2,000 and reject >= 2000 or <= 0', () => {
+      expect(validateRotationAmount(1950).isValid).toBe(true);
+      expect(validateRotationAmount(500).isValid).toBe(true);
+      expect(validateRotationAmount(1999).isValid).toBe(true);
+
+      const tooHigh = validateRotationAmount(2000);
+      expect(tooHigh.isValid).toBe(false);
+      expect(tooHigh.error).toContain('under ₹2,000');
+
+      const zero = validateRotationAmount(0);
+      expect(zero.isValid).toBe(false);
+
+      const negative = validateRotationAmount(-50);
+      expect(negative.isValid).toBe(false);
+    });
+
+    it('should accurately compute total rotation amount across single and multiple batches', () => {
+      expect(computeTotalRotationAmount([1950])).toBe(1950);
+      expect(computeTotalRotationAmount([1200, 750])).toBe(1950);
+      expect(computeTotalRotationAmount([1850, 1920, 1890])).toBe(5660);
+      expect(computeTotalRotationAmount([])).toBe(0);
     });
   });
 });

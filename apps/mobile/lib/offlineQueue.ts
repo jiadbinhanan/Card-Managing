@@ -165,12 +165,16 @@ async function executeSingleMutation(item: OfflineMutationItem) {
       if (!cardRow) throw new Error('Card not found during sync');
 
       // 2. Insert with EXACT ORIGINAL creation timestamp
+      const isManual = !selectedQrId || selectedQrId === 'manual';
+      const finalQrId = isManual ? null : selectedQrId;
+      const defaultRemarks = isManual ? 'Manual Rotation Withdrawal' : 'Rotation Withdrawal';
+
       const { error } = await supabase.from('card_transactions').insert({
         card_id: activeCardId,
         type: 'withdrawal',
         amount: numAmount,
-        qr_id: selectedQrId || null,
-        remarks: remarks || 'Rotation Withdrawal',
+        qr_id: finalQrId,
+        remarks: remarks || defaultRemarks,
         status: 'pending_settlement',
         transaction_date,
         created_at: original_created_at, // Preserves exact original user entry time!
@@ -179,8 +183,8 @@ async function executeSingleMutation(item: OfflineMutationItem) {
 
       if (error) throw error;
 
-      if (selectedQrId) {
-        await supabase.from('qrs').update({ last_used_date: original_created_at }).eq('id', selectedQrId);
+      if (finalQrId) {
+        await supabase.from('qrs').update({ last_used_date: original_created_at }).eq('id', finalQrId);
       }
       break;
     }
@@ -222,6 +226,7 @@ async function executeSingleMutation(item: OfflineMutationItem) {
         activeCardId,
         numAmount,
         billMethod,
+        ownPocketAmount,
         remarks,
         actingUserId,
         isDebtRepayment,
@@ -233,74 +238,176 @@ async function executeSingleMutation(item: OfflineMutationItem) {
       const billResult = await processBillPaymentFIFO(supabase, activeCardId, numAmount);
       const activeCycleId = billResult.cycleId;
 
-      // 2. Insert into card_transactions preserving original timestamp
-      const { data: billTx, error: txErr } = await supabase
-        .from('card_transactions')
-        .insert({
-          card_id: activeCardId,
-          amount: numAmount,
-          type: 'bill_payment',
-          status: 'settled',
-          transaction_date,
-          created_at: original_created_at, // Preserves exact original user entry time!
-          recorded_by: actingUserId,
-          payment_method: billMethod,
-          remarks: remarks || 'Card Bill Payment',
-          billing_cycle_id: activeCycleId,
-          cash_source_breakdown: billMethod === 'cash_on_hand' ? breakdownForInsert : null,
-        })
-        .select('id')
-        .single();
+      if (billMethod === 'hybrid') {
+        const cardCashPortion = (validCashSources || []).reduce(
+          (sum: number, s: any) => sum + Number(s.amount || 0),
+          0
+        );
+        const ownPocketPortion =
+          ownPocketAmount || Math.max(0, numAmount - cardCashPortion);
+        let linkTxId: string | null = null;
 
-      if (txErr) throw txErr;
+        if (cardCashPortion > 0) {
+          const { data: bTxCash } = await supabase
+            .from('card_transactions')
+            .insert({
+              card_id: activeCardId,
+              amount: cardCashPortion,
+              type: 'bill_payment',
+              status: 'settled',
+              transaction_date,
+              created_at: original_created_at,
+              recorded_by: actingUserId,
+              payment_method: 'cash_on_hand',
+              remarks: remarks ? `${remarks} (Cash)` : 'Card Bill Payment (Cash)',
+              billing_cycle_id: activeCycleId,
+              cash_source_breakdown: (validCashSources || []).map((s: any) => ({
+                card_id: s.cardId,
+                amount: s.amount,
+              })),
+            })
+            .select('id')
+            .single();
 
-      // 3. Fund source adjustment
-      if (billMethod === 'cash_on_hand' && validCashSources && validCashSources.length > 0) {
-        await deductCashFromSources(supabase, {
-          userId: actingUserId,
-          sources: validCashSources,
-          note: `Bill payment ${remarks ? '- ' + remarks : ''}`,
-          linkedCardTxId: billTx?.id || null,
-          txDate: transaction_date,
-          createdAt: original_created_at,
-        });
-      } else if (billMethod === 'own_pocket') {
-        await supabase.from('pocket_advances_ledger').insert({
-          user_id: actingUserId,
-          card_id: activeCardId,
-          amount: -numAmount,
-          entry_type: 'advance',
-          transaction_date,
-          created_at: original_created_at,
-          linked_card_transaction_id: billTx?.id || null,
-          remarks: `Card bill payment advanced from pocket ${remarks ? '- ' + remarks : ''}`,
-        });
+          linkTxId = bTxCash?.id || null;
+          await deductCashFromSources(supabase, {
+            userId: actingUserId,
+            sources: validCashSources,
+            note: `Bill payment ${remarks ? '- ' + remarks : ''}`,
+            linkedCardTxId: linkTxId,
+            txDate: transaction_date,
+            createdAt: original_created_at,
+          });
+        }
 
-        const { data: curAdv } = await supabase
-          .from('pocket_advances')
-          .select('current_balance')
-          .eq('user_id', actingUserId)
-          .eq('card_id', activeCardId)
-          .maybeSingle();
+        if (ownPocketPortion > 0) {
+          const { data: bTxPocket } = await supabase
+            .from('card_transactions')
+            .insert({
+              card_id: activeCardId,
+              amount: ownPocketPortion,
+              type: 'bill_payment',
+              status: 'settled',
+              transaction_date,
+              created_at: original_created_at,
+              recorded_by: actingUserId,
+              payment_method: 'own_pocket',
+              remarks: remarks ? `${remarks} (Own Pocket)` : 'Card Bill Payment (Own Pocket)',
+              billing_cycle_id: activeCycleId,
+              cash_source_breakdown: null,
+            })
+            .select('id')
+            .single();
 
-        const nextAdv = (Number(curAdv?.current_balance) || 0) - numAmount;
-        await supabase
-          .from('pocket_advances')
-          .upsert({ user_id: actingUserId, card_id: activeCardId, current_balance: nextAdv });
-      }
+          if (!linkTxId) linkTxId = bTxPocket?.id || null;
 
-      if (isDebtRepayment) {
-        await supabase.from('spends').insert({
-          user_id: actingUserId,
-          amount: -numAmount,
-          spend_type: 'repayment',
-          payment_method: billMethod,
-          remarks: 'Debt Cleared' + (remarks ? `: ${remarks}` : ''),
-          spend_date: transaction_date,
-          created_at: original_created_at,
-          card_id: activeCardId,
-          linked_card_transaction_id: billTx?.id || null,
-        });
+          await supabase.from('pocket_advances_ledger').insert({
+            user_id: actingUserId,
+            card_id: activeCardId,
+            amount: -ownPocketPortion,
+            entry_type: 'advance',
+            transaction_date,
+            created_at: original_created_at,
+            linked_card_transaction_id: bTxPocket?.id || null,
+            remarks: `Card bill payment advanced from pocket ${remarks ? '- ' + remarks : ''}`,
+          });
+
+          const { data: curAdv } = await supabase
+            .from('pocket_advances')
+            .select('current_balance')
+            .eq('user_id', actingUserId)
+            .eq('card_id', activeCardId)
+            .maybeSingle();
+
+          const nextAdv = (Number(curAdv?.current_balance) || 0) - ownPocketPortion;
+          await supabase
+            .from('pocket_advances')
+            .upsert({ user_id: actingUserId, card_id: activeCardId, current_balance: nextAdv });
+        }
+
+        if (isDebtRepayment) {
+          await supabase.from('spends').insert({
+            user_id: actingUserId,
+            amount: -numAmount,
+            spend_type: 'repayment',
+            payment_method: 'cash_on_hand',
+            remarks: 'Debt Cleared' + (remarks ? `: ${remarks}` : ''),
+            spend_date: transaction_date,
+            created_at: original_created_at,
+            card_id: activeCardId,
+            linked_card_transaction_id: linkTxId,
+          });
+        }
+      } else {
+        // 2. Insert into card_transactions preserving original timestamp
+        const { data: billTx, error: txErr } = await supabase
+          .from('card_transactions')
+          .insert({
+            card_id: activeCardId,
+            amount: numAmount,
+            type: 'bill_payment',
+            status: 'settled',
+            transaction_date,
+            created_at: original_created_at, // Preserves exact original user entry time!
+            recorded_by: actingUserId,
+            payment_method: billMethod,
+            remarks: remarks || 'Card Bill Payment',
+            billing_cycle_id: activeCycleId,
+            cash_source_breakdown: billMethod === 'cash_on_hand' ? breakdownForInsert : null,
+          })
+          .select('id')
+          .single();
+
+        if (txErr) throw txErr;
+
+        // 3. Fund source adjustment
+        if (billMethod === 'cash_on_hand' && validCashSources && validCashSources.length > 0) {
+          await deductCashFromSources(supabase, {
+            userId: actingUserId,
+            sources: validCashSources,
+            note: `Bill payment ${remarks ? '- ' + remarks : ''}`,
+            linkedCardTxId: billTx?.id || null,
+            txDate: transaction_date,
+            createdAt: original_created_at,
+          });
+        } else if (billMethod === 'own_pocket') {
+          await supabase.from('pocket_advances_ledger').insert({
+            user_id: actingUserId,
+            card_id: activeCardId,
+            amount: -numAmount,
+            entry_type: 'advance',
+            transaction_date,
+            created_at: original_created_at,
+            linked_card_transaction_id: billTx?.id || null,
+            remarks: `Card bill payment advanced from pocket ${remarks ? '- ' + remarks : ''}`,
+          });
+
+          const { data: curAdv } = await supabase
+            .from('pocket_advances')
+            .select('current_balance')
+            .eq('user_id', actingUserId)
+            .eq('card_id', activeCardId)
+            .maybeSingle();
+
+          const nextAdv = (Number(curAdv?.current_balance) || 0) - numAmount;
+          await supabase
+            .from('pocket_advances')
+            .upsert({ user_id: actingUserId, card_id: activeCardId, current_balance: nextAdv });
+        }
+
+        if (isDebtRepayment) {
+          await supabase.from('spends').insert({
+            user_id: actingUserId,
+            amount: -numAmount,
+            spend_type: 'repayment',
+            payment_method: billMethod,
+            remarks: 'Debt Cleared' + (remarks ? `: ${remarks}` : ''),
+            spend_date: transaction_date,
+            created_at: original_created_at,
+            card_id: activeCardId,
+            linked_card_transaction_id: billTx?.id || null,
+          });
+        }
       }
       break;
     }
@@ -347,7 +454,7 @@ async function executeSingleMutation(item: OfflineMutationItem) {
               card_id: cardId,
               amount,
               type: 'withdrawal',
-              status: 'pending_settlement',
+              status: 'settled',
               transaction_date,
               created_at: original_created_at,
               recorded_by: userId,

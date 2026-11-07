@@ -56,9 +56,8 @@ export function calculateCardLimits(params: {
   const withdrawals = transactions
     .filter((t) => {
       if (t.type !== 'withdrawal') return false;
-      const isRotation = t.qr_id || t.settled_to_user || (t.remarks || '').toLowerCase().includes('rotation');
-      if (isRotation) return true;
-      return t.status === 'pending_settlement' || t.status === 'partially_settled';
+      // All withdrawals on a card reduce limit; also capture rotations, lents, or in-transit
+      return true;
     })
     .reduce((sum, t) => sum + Number(t.amount || 0), 0);
 

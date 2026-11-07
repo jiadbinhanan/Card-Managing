@@ -48,6 +48,10 @@ import {
   calculateCardAvailableMap,
 } from '@credics/core';
 import { useOfflineQueueStore } from '../../lib/offlineQueue';
+import {
+  broadcastRotationWithdrawAlert,
+  broadcastRotationSettlementAlert,
+} from '../../lib/alertDispatcher';
 import { QRVaultTab, ActiveCooldown } from '../../components/settlements/QRVaultTab';
 import { InTransitTab, InTransitTransaction } from '../../components/settlements/InTransitTab';
 import { SettledHistoryTab, SettledTransaction } from '../../components/settlements/SettledHistoryTab';
@@ -58,6 +62,7 @@ import { EditQRDrawer } from '../../components/settlements/EditQRDrawer';
 import { ManualRotationDrawer } from '../../components/settlements/ManualRotationDrawer';
 import { TherapeuticSuccessModal } from '../../components/settlements/TherapeuticSuccessModal';
 import { useCardStore, buildHierarchicalCardList } from '../../lib/cardStore';
+import { useBalanceStore } from '../../lib/balanceStore';
 import { StaticQRViewModal } from '../../components/settlements/StaticQRViewModal';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -308,13 +313,18 @@ export default function SettlementsScreen() {
       const fiveDaysAgo = new Date();
       fiveDaysAgo.setDate(fiveDaysAgo.getDate() - 5);
 
-      const { data: recentTxs } = await supabase
+      let cooldownQuery = supabase
         .from('card_transactions')
-        .select('qr_id, created_at, transaction_date')
+        .select('qr_id, created_at, transaction_date, recorded_by')
         .eq('type', 'withdrawal')
         .gte('created_at', fiveDaysAgo.toISOString())
-        .not('qr_id', 'is', null)
-        .order('created_at', { ascending: false });
+        .not('qr_id', 'is', null);
+
+      if (currentUser?.id) {
+        cooldownQuery = cooldownQuery.eq('recorded_by', currentUser.id);
+      }
+
+      const { data: recentTxs } = await cooldownQuery.order('created_at', { ascending: false });
 
       const cooldownList: ActiveCooldown[] = [];
       const processedQrIds = new Set<string>();
@@ -548,6 +558,21 @@ export default function SettlementsScreen() {
         await supabase.from('qrs').update({ last_used_date: originalCreatedAt }).eq('id', cleanQrId);
       }
 
+      // Dispatch WhatsApp, Push & QStash Cooling Alerts
+      const payingCard = cards.find((c) => c.id === cardId);
+      const chosenQr = qrs.find((q) => q.id === cleanQrId);
+      const currentBal = (cardAvailableMap[cardId] || 0) - amount;
+
+      broadcastRotationWithdrawAlert({
+        cardName: payingCard?.card_name || 'Card',
+        last4: payingCard?.last_4_digits || '0000',
+        qrName: chosenQr?.merchant_name || 'Merchant QR',
+        entryUserName: currentUser?.name || 'User',
+        amount,
+        currentBalance: currentBal,
+        profiles,
+      }).catch((alertErr) => console.warn('Alert broadcast notice:', alertErr));
+
       // Rule 4: Haptics on save
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
@@ -558,6 +583,7 @@ export default function SettlementsScreen() {
       setSuccessModalVisible(true);
 
       await fetchCoreData();
+      useBalanceStore.getState().refreshBalances(true).catch(() => {});
     } catch (onlineError) {
       console.warn('Online rotation failed, saving to offline queue:', onlineError);
       useOfflineQueueStore.getState().enqueueMutation({
@@ -656,6 +682,20 @@ export default function SettlementsScreen() {
         todayDateStr: today,
       });
 
+      // Dispatch Settlement Alert to all team profiles
+      const targetCard = cards.find((c) => c.id === settleTargetCardId);
+      const receiver = profiles.find((p) => p.id === cashReceiverId);
+
+      broadcastRotationSettlementAlert({
+        cardName: targetCard?.card_name || 'Card',
+        last4: targetCard?.last_4_digits || '0000',
+        qrName: tx.merchant_name || 'Merchant QR',
+        entryUserName: currentUser?.name || 'User',
+        amount: amtToSettle,
+        receiverName: receiver?.name || 'Receiver',
+        profiles,
+      }).catch((alertErr) => console.warn('Settlement alert broadcast notice:', alertErr));
+
       // Rule 4: Success Haptics on settlement save
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
@@ -666,6 +706,7 @@ export default function SettlementsScreen() {
       setSuccessModalVisible(true);
 
       await fetchCoreData();
+      useBalanceStore.getState().refreshBalances(true).catch(() => {});
       await fetchSettledHistoryPage(0, true);
     } catch (onlineError) {
       console.warn('Online settlement failed, saving to offline queue:', onlineError);
@@ -1127,6 +1168,7 @@ export default function SettlementsScreen() {
         qr={editingQr}
         onSaveSuccess={async () => {
           await fetchCoreData();
+      useBalanceStore.getState().refreshBalances(true).catch(() => {});
         }}
       />
 

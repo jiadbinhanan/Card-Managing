@@ -113,6 +113,28 @@ export function generateAntiFraudAmounts(mode: 'once' | 'multiple', splitCount: 
 }
 
 /**
+ * Validates individual rotation amount.
+ * Strict Rule: Must be greater than 0 and strictly less than ₹2,000 to prevent merchant surcharge / banking flags.
+ */
+export function validateRotationAmount(amount: number): { isValid: boolean; error?: string } {
+  if (isNaN(amount) || amount <= 0) {
+    return { isValid: false, error: 'Amount must be greater than ₹0' };
+  }
+  if (amount >= 2000) {
+    return { isValid: false, error: 'Amount must be under ₹2,000 for rotation safety' };
+  }
+  return { isValid: true };
+}
+
+/**
+ * Computes aggregate total amount from multiple or single swipe batches.
+ */
+export function computeTotalRotationAmount(amounts: number[]): number {
+  if (!amounts || amounts.length === 0) return 0;
+  return amounts.reduce((sum, a) => sum + (Number(a) || 0), 0);
+}
+
+/**
  * Builds standard UPI intent link or appends amount to base_payment_link.
  */
 export function buildUpiPaymentLink(qr: QRItem, amount?: number): string {

@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -50,9 +50,29 @@ export function QRVaultTab({
 }: QRVaultTabProps) {
   const firstName = (currentUserName || '').trim().split(/\s+/)[0].toLowerCase();
 
-  // 1. Separate Static vs Operational QRs
+  // 1-Second Heartbeat for Live Cooling Countdown
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // 1. Separate Static vs Operational QRs (Operational sorted by last_used_date ascending)
   const staticQrs = useMemo(() => qrs.filter((q) => q.status === 'static'), [qrs]);
-  const dynamicQrs = useMemo(() => qrs.filter((q) => q.status !== 'static'), [qrs]);
+  const dynamicQrs = useMemo(() => {
+    return qrs
+      .filter((q) => q.status !== 'static')
+      .sort((a, b) => {
+        const timeA = a.last_used_date ? new Date(a.last_used_date).getTime() : 0;
+        const timeB = b.last_used_date ? new Date(b.last_used_date).getTime() : 0;
+        return timeA - timeB;
+      });
+  }, [qrs]);
+
+  // Active Cooldowns list based on current timestamp
+  const currentCooldowns = useMemo(() => {
+    return activeCooldowns.filter((c) => c.expiresAt > now);
+  }, [activeCooldowns, now]);
 
   // 2. Recommendation Engine for Top 4 Rotation QRs
   const recommendedQrs = useMemo(() => {
@@ -70,12 +90,12 @@ export function QRVaultTab({
         (q.platform || '').toLowerCase().includes('bharatpe');
       if (isBharatPe && q.last_used_date) {
         const daysSince =
-          (Date.now() - new Date(q.last_used_date).getTime()) / (1000 * 60 * 60 * 24);
+          (now - new Date(q.last_used_date).getTime()) / (1000 * 60 * 60 * 24);
         if (daysSince < 5) return false;
       }
 
       // 24-Hour Active Cooldown Check
-      if (activeCooldowns.some((c) => c.qrId === q.id && c.expiresAt > Date.now())) {
+      if (activeCooldowns.some((c) => c.qrId === q.id && c.expiresAt > now)) {
         return false;
       }
 
@@ -90,7 +110,7 @@ export function QRVaultTab({
     });
 
     return activeOperational.slice(0, 4);
-  }, [dynamicQrs, activeCooldowns, firstName]);
+  }, [dynamicQrs, activeCooldowns, firstName, now]);
 
   const formatLastPaid = (isoString?: string | null) => {
     if (!isoString) return 'Not Used';
@@ -109,14 +129,41 @@ export function QRVaultTab({
 
   return (
     <View style={styles.container}>
-      {/* Active Cooling Alert Banner */}
-      {activeCooldowns.length > 0 && (
-        <View style={styles.coolingBanner}>
-          <Timer size={14} color="#D97706" />
-          <Text style={styles.coolingBannerText}>
-            {activeCooldowns.length} Merchant QR{activeCooldowns.length > 1 ? 's' : ''} resting in
-            cooldown.
-          </Text>
+      {/* ================= ACTIVE COOLING COUNTDOWN CARDS ================= */}
+      {currentCooldowns.length > 0 && (
+        <View style={styles.coolingContainer}>
+          <View style={styles.coolingHeaderRow}>
+            <View style={styles.coolingHeaderBadge}>
+              <Timer size={14} color="#D97706" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.coolingHeaderTitle}>Cooling Period Active</Text>
+              <Text style={styles.coolingHeaderSub}>
+                Personal 24-hour cooling timers for recently rotated QRs.
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.coolingCardsList}>
+            {currentCooldowns.map((c) => {
+              const timeLeft = Math.max(0, c.expiresAt - now);
+              const hours = Math.floor((timeLeft / (1000 * 60 * 60)) % 24);
+              const minutes = Math.floor((timeLeft / 1000 / 60) % 60);
+              const seconds = Math.floor((timeLeft / 1000) % 60);
+              const timeString = `${hours.toString().padStart(2, '0')}h ${minutes.toString().padStart(2, '0')}m ${seconds.toString().padStart(2, '0')}s remaining`;
+
+              return (
+                <View key={c.qrId} style={styles.cooldownItemCard}>
+                  <Text style={styles.cooldownMerchantText} numberOfLines={1}>
+                    {c.merchantName}
+                  </Text>
+                  <View style={styles.cooldownBadge}>
+                    <Text style={styles.cooldownBadgeText}>{timeString}</Text>
+                  </View>
+                </View>
+              );
+            })}
+          </View>
         </View>
       )}
 
@@ -395,23 +442,79 @@ const styles = StyleSheet.create({
   container: {
     paddingBottom: 24,
   },
-  coolingBanner: {
+  coolingContainer: {
+    backgroundColor: '#FFFBEB',
+    borderRadius: 16,
+    padding: 12,
+    borderWidth: 1.2,
+    borderColor: '#FDE68A',
+    marginBottom: 16,
+    gap: 10,
+  },
+  coolingHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(217, 119, 6, 0.1)',
-    borderRadius: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
     gap: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(217, 119, 6, 0.25)',
-    marginBottom: 16,
   },
-  coolingBannerText: {
-    fontSize: 11,
+  coolingHeaderBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: '#FEF3C7',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#FCD34D',
+  },
+  coolingHeaderTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#92400E',
+    letterSpacing: -0.2,
+  },
+  coolingHeaderSub: {
+    fontSize: 10,
     fontWeight: '600',
-    color: '#D97706',
+    color: '#B45309',
+    marginTop: 1,
+  },
+  coolingCardsList: {
+    gap: 6,
+    borderTopWidth: 1,
+    borderTopColor: '#FDE68A',
+    paddingTop: 8,
+  },
+  cooldownItemCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  cooldownMerchantText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#78350F',
     flex: 1,
+    marginRight: 8,
+  },
+  cooldownBadge: {
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#FCD34D',
+  },
+  cooldownBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#B45309',
+    fontVariant: ['tabular-nums'],
   },
   sectionHeaderRow: {
     flexDirection: 'row',

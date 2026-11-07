@@ -8,7 +8,7 @@ import { useDashboardStore } from './dashboardStore';
  * Debounces query invalidations to prevent cascading network thrashing.
  */
 export function useCentralizedRealtimeSync() {
-  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const triggerDebouncedInvalidate = (keys: string[][]) => {

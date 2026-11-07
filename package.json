@@ -16,6 +16,6 @@
     "cap:build": "pnpm --filter @credics/web cap:build"
   },
   "devDependencies": {
-    "@react-native/js-polyfills": "0.76.7"
+    "@react-native/js-polyfills": "0.86.3"
   }
 }

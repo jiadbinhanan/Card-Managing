@@ -7,12 +7,6 @@
     "icon": "./assets/images/icon.png",
     "scheme": "credics",
     "userInterfaceStyle": "dark",
-    "newArchEnabled": true,
-    "splash": {
-      "image": "./assets/images/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#EFF3EE"
-    },
     "android": {
       "package": "com.credics.app",
       "adaptiveIcon": {
@@ -28,7 +22,15 @@
     },
     "plugins": [
       "expo-router",
-      "expo-video"
+      "expo-video",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/splash.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#EFF3EE"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
