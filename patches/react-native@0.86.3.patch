@@ -1,0 +1,13 @@
+diff --git a/ReactCommon/react/renderer/core/graphicsConversions.h b/ReactCommon/react/renderer/core/graphicsConversions.h
+index 37fcc87ca379c74c98e2f9eae3003fa9a32483d2..0c0c125dad174aeee74aeb18d1c843b410f33a7e 100644
+--- a/ReactCommon/react/renderer/core/graphicsConversions.h
++++ b/ReactCommon/react/renderer/core/graphicsConversions.h	
+@@ -68,7 +68,7 @@ inline folly::dynamic toDynamic(const YGValue &dimension)
+     case YGUnitPoint:
+       return dimension.value;
+     case YGUnitPercent:
+-      return std::format("{}%", dimension.value);
++      return std::to_string(dimension.value) + "%";
+   }
+ 
+   return nullptr;

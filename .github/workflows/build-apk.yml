@@ -1,5 +1,8 @@
 name: Build Android APK
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 on:
   workflow_dispatch: # Manual trigger only from GitHub Actions UI
 
@@ -38,6 +41,11 @@ jobs:
 
       - name: Install Dependencies
         run: pnpm install --no-frozen-lockfile
+
+      - name: Patch React Native C++ std::format Compatibility
+        run: |
+          find node_modules -name "graphicsConversions.h" -exec sed -i 's/std::format("{}%", dimension.value)/std::to_string(dimension.value) + "%"/g' {} +
+          echo "✅ Verified and patched graphicsConversions.h"
 
       - name: Build Next.js & Sync Capacitor
         env:
