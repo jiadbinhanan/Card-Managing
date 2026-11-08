@@ -242,10 +242,16 @@ export const useDashboardStore = create<DashboardState>()(
             // Recent Transactions
             const txFeed: RecentTx[] = activeTxs.slice(0, 6).map((t: any) => {
               const isPayment = t.type === 'bill_payment';
+              const recorder = allProfiles.find((p: any) => p.id === t.recorded_by);
+              const recordedByName = recorder ? (recorder.name || '').split(' ')[0] : 'Member';
+              const recordedByAvatar = recorder?.avatar_url || null;
+              const cardName = t.cards?.card_name || 'Card';
+              const cardLast4 = t.cards?.last_4_digits || '';
+
               return {
                 id: t.id,
                 title: isPayment
-                  ? `Bill Payment Repaid (${t.cards?.card_name || 'Card'})`
+                  ? `Bill Payment Repaid (${cardName})`
                   : t.remarks || 'Rotation Withdrawal',
                 category: isPayment
                   ? 'Repayment'
@@ -260,6 +266,10 @@ export const useDashboardStore = create<DashboardState>()(
                     })
                   : 'Recent',
                 isCredit: isPayment,
+                recordedByName,
+                recordedByAvatar,
+                cardName,
+                cardLast4,
               };
             });
 

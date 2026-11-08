@@ -26,6 +26,7 @@ import Animated, {
   withTiming,
   withSequence,
   withRepeat,
+  interpolate,
   FadeInDown,
   FadeInUp,
 } from 'react-native-reanimated';
@@ -36,7 +37,8 @@ import { SwipeDownDrawer, DrawerScrollView } from '../../components/SwipeDownDra
 import { HapticButton } from '../../components/HapticButton';
 import { HomeSkeleton } from '../../components/Skeleton';
 import { HeroCardLimitChart, CardLimitStat } from '../../components/HeroCardLimitChart';
-import { VaultCardSelectorDrawer } from '../../components/VaultCardSelectorDrawer';
+import { buildHierarchicalCardList, HierarchicalCardItem } from '../../lib/cardStore';
+import { useBalanceStore } from '../../lib/balanceStore';
 import { UrgentBillBottomSheet } from '../../components/UrgentBillBottomSheet';
 import { broadcastBillEntryAlert } from '../../lib/alertDispatcher';
 import { supabase } from '../../lib/supabase';
@@ -58,6 +60,8 @@ import {
   TrendingUp,
   CreditCard,
   ChevronDown,
+  Check,
+  CornerDownRight,
   Layers,
   Wallet,
   Users,
@@ -115,9 +119,22 @@ export default function HomeScreen() {
   const isLoading = !isInitialized;
   const [refreshing, setRefreshing] = useState(false);
 
-  // Card & Vault Modal State
-  const [cardModalVisible, setCardModalVisible] = useState(false);
+  // Card & Vault Accordion State (Parity with Transactions & Settlements)
+  const { cardAvailableMap } = useBalanceStore();
+  const [isHeaderExpanded, setIsHeaderExpanded] = useState(false);
+  const headerExpandedProgress = useSharedValue(0);
   const [showBalance, setShowBalance] = useState<boolean>(true);
+
+  // Hierarchical Card List (Primary + Subcards Indented)
+  const hierarchicalCards = useMemo(() => {
+    return buildHierarchicalCardList(accessibleCards);
+  }, [accessibleCards]);
+
+  const totalUnifiedAvailable = useMemo(() => {
+    return accessibleCards
+      .filter((c) => c.is_primary || !c.parent_card_id)
+      .reduce((sum, c) => sum + (cardAvailableMap[c.id] || 0), 0);
+  }, [accessibleCards, cardAvailableMap]);
 
   // Billing Cycle State
   const [showNotificationPanel, setShowNotificationPanel] = useState<boolean>(false);
@@ -247,19 +264,72 @@ export default function HomeScreen() {
     setShowNotificationPanel(true);
   };
 
-  // 120Hz Tactile Pop Animation for Card Dropdown
+  // 120Hz Animations for Card Dropdown Accordion
   const cardDropdownScale = useSharedValue(1);
   const cardDropdownAnimStyle = useAnimatedStyle(() => ({
     transform: [{ scale: cardDropdownScale.value }],
   }));
 
+  const chevronAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${headerExpandedProgress.value * 180}deg` }],
+  }));
+
+  const accordionAnimStyle = useAnimatedStyle(() => ({
+    maxHeight: interpolate(headerExpandedProgress.value, [0, 1], [0, 100]),
+    opacity: headerExpandedProgress.value,
+    marginTop: interpolate(headerExpandedProgress.value, [0, 1], [0, 8]),
+    marginBottom: interpolate(headerExpandedProgress.value, [0, 1], [0, 4]),
+    transform: [
+      {
+        translateY: interpolate(headerExpandedProgress.value, [0, 1], [-8, 0]),
+      },
+    ],
+  }));
+
   const handleCardDropdownPress = () => {
+    const next = !isHeaderExpanded;
+    setIsHeaderExpanded(next);
     cardDropdownScale.value = withSequence(
-      withTiming(0.85, { duration: 60 }),
-      withSpring(1.18, { damping: 9, stiffness: 450 }),
-      withSpring(1.0, { damping: 14, stiffness: 350 })
+      withTiming(0.92, { duration: 80 }),
+      withSpring(1, { damping: 26, stiffness: 220 })
     );
-    setCardModalVisible(true);
+    headerExpandedProgress.value = withSpring(next ? 1 : 0, {
+      damping: 30,
+      stiffness: 240,
+    });
+  };
+
+  const getTxCategoryBadge = (category: string) => {
+    const catLower = (category || '').toLowerCase();
+    let badgeBg = 'rgba(14, 165, 233, 0.12)';
+    let badgeColor = '#0EA5E9';
+    let label = 'Rotation';
+
+    if (catLower.includes('rotation') || catLower.includes('qr')) {
+      badgeBg = 'rgba(14, 165, 233, 0.12)';
+      badgeColor = '#0EA5E9';
+      label = 'Rotation';
+    } else if (catLower.includes('bill') || catLower.includes('repayment')) {
+      badgeBg = 'rgba(16, 185, 129, 0.12)';
+      badgeColor = '#10B981';
+      label = 'Bill Pay';
+    } else if (catLower.includes('lent') || catLower.includes('loan')) {
+      badgeBg = 'rgba(139, 92, 246, 0.12)';
+      badgeColor = '#8B5CF6';
+      label = 'Lent';
+    } else if (catLower.includes('spend')) {
+      badgeBg = 'rgba(245, 158, 11, 0.12)';
+      badgeColor = '#F59E0B';
+      label = 'Spend';
+    } else {
+      return null;
+    }
+
+    return (
+      <View style={[styles.txBadgePill, { backgroundColor: badgeBg }]}>
+        <Text style={[styles.txBadgeText, { color: badgeColor }]}>{label}</Text>
+      </View>
+    );
   };
 
   // Cooldown countdown
@@ -662,7 +732,10 @@ export default function HomeScreen() {
                 >
                   <View style={styles.avatarBorder}>
                     {userAvatar ? (
-                      <Image source={{ uri: userAvatar }} style={styles.avatarImg} />
+                      <Image
+                        source={{ uri: userAvatar, cache: 'force-cache' }}
+                        style={styles.avatarImg}
+                      />
                     ) : (
                       <View style={styles.avatarPlaceholder}>
                         <Text style={styles.avatarText}>{userName.charAt(0).toUpperCase()}</Text>
@@ -670,11 +743,11 @@ export default function HomeScreen() {
                     )}
                   </View>
                   <View style={styles.userTextCol}>
-                    <View style={styles.liveStatusRow}>
-                      <View style={styles.livePulseDot} />
-                      <Text style={styles.liveStatusText}>LIVE STATUS • ACTIVE</Text>
-                    </View>
-                    <Text style={styles.userNameText}>Hey, {firstName || userName}</Text>
+                    <Animated.View entering={FadeInDown.duration(400).springify().damping(18)}>
+                      <Text style={styles.userNameText}>
+                        Hey, <Text style={styles.userNameHighlight}>{firstName || userName}</Text>
+                      </Text>
+                    </Animated.View>
                   </View>
                 </TouchableOpacity>
 
@@ -690,7 +763,9 @@ export default function HomeScreen() {
                       <Text style={styles.cardDropdownText} numberOfLines={1}>
                         {getActiveCardName()}
                       </Text>
-                      <ChevronDown size={13} color="#CAD6C9" />
+                      <Animated.View style={chevronAnimStyle}>
+                        <ChevronDown size={13} color="#CAD6C9" />
+                      </Animated.View>
                     </TouchableOpacity>
                   </Animated.View>
 
@@ -712,35 +787,86 @@ export default function HomeScreen() {
                 </View>
               </View>
 
-              {/* Total Available Limit Hero Body */}
-              <View style={styles.heroMainBody}>
-                <View style={styles.heroTopRow}>
-                  <View style={styles.heroLabelRow}>
-                    <View style={styles.heroDot} />
-                    <Text style={styles.heroLabel}>Total Available Limit</Text>
-                    <TouchableOpacity
-                      onPress={() => setShowBalance(!showBalance)}
-                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                    >
-                      {showBalance ? (
-                        <Eye size={16} color="#CAD6C9" style={{ marginLeft: 8 }} />
-                      ) : (
-                        <EyeOff size={16} color="#CAD6C9" style={{ marginLeft: 8 }} />
-                      )}
-                    </TouchableOpacity>
-                  </View>
-                </View>
-
-                {/* Large Balance Typography with Text Animation */}
-                <View style={styles.heroAmountRow}>
-                  <Animated.Text
-                    entering={FadeInDown.duration(400).springify()}
-                    style={styles.heroAmount}
+              {/* ================= 120HZ EXPANDABLE ACCORDION CARD SELECTOR ================= */}
+              <Animated.View style={[styles.accordionContainer, accordionAnimStyle]}>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.accordionScrollContent}
+                >
+                  {/* Unified All Cards Chip */}
+                  <TouchableOpacity
+                    style={[
+                      styles.accordionCardItem,
+                      selectedCardId === 'all' && styles.accordionCardItemActive,
+                    ]}
+                    onPress={() => {
+                      setSelectedCardId('all');
+                      setIsHeaderExpanded(false);
+                      headerExpandedProgress.value = withSpring(0, { damping: 30, stiffness: 240 });
+                    }}
+                    activeOpacity={0.8}
                   >
-                    {showBalance ? `₹${availableLimit.toLocaleString('en-IN')}` : '••••••••'}
-                  </Animated.Text>
-                </View>
+                    <View style={styles.accordionCardTopRow}>
+                      <Layers size={13} color={selectedCardId === 'all' ? '#10B981' : '#CAD6C9'} />
+                      {selectedCardId === 'all' && (
+                        <View style={styles.accordionActiveCheck}>
+                          <Check size={10} color="#FFFFFF" strokeWidth={3} />
+                        </View>
+                      )}
+                    </View>
+                    <Text style={styles.accordionCardTitle} numberOfLines={1}>
+                      All Cards
+                    </Text>
+                    <Text style={styles.accordionCardSub}>
+                      Avail: ₹{totalUnifiedAvailable.toLocaleString('en-IN')}
+                    </Text>
+                  </TouchableOpacity>
 
+                  {/* Hierarchical Cards List */}
+                  {hierarchicalCards.map((c) => {
+                    const isSelected = selectedCardId === c.id;
+                    const avail = cardAvailableMap[c.id] !== undefined ? cardAvailableMap[c.id] : (c.total_limit || 0);
+                    return (
+                      <TouchableOpacity
+                        key={c.id}
+                        style={[
+                          styles.accordionCardItem,
+                          isSelected && styles.accordionCardItemActive,
+                        ]}
+                        onPress={() => {
+                          setSelectedCardId(c.id);
+                          setIsHeaderExpanded(false);
+                          headerExpandedProgress.value = withSpring(0, { damping: 30, stiffness: 240 });
+                        }}
+                        activeOpacity={0.8}
+                      >
+                        <View style={styles.accordionCardTopRow}>
+                          {c.isSub ? (
+                            <CornerDownRight size={13} color={isSelected ? '#10B981' : '#8CA394'} />
+                          ) : (
+                            <CreditCard size={13} color={isSelected ? '#10B981' : '#CAD6C9'} />
+                          )}
+                          {isSelected && (
+                            <View style={styles.accordionActiveCheck}>
+                              <Check size={10} color="#FFFFFF" strokeWidth={3} />
+                            </View>
+                          )}
+                        </View>
+                        <Text style={styles.accordionCardTitle} numberOfLines={1}>
+                          {c.isSub ? `↳ ${c.card_name}` : c.card_name}
+                        </Text>
+                        <Text style={styles.accordionCardSub} numberOfLines={1}>
+                          ••{c.last_4_digits} • ₹{avail.toLocaleString('en-IN')}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </Animated.View>
+
+              {/* Direct Canvas Hero Body */}
+              <View style={styles.heroMainBody}>
                 {/* Full-Width Spacious Card Family Limit Chart */}
                 <View style={styles.heroChartContainer}>
                   <HeroCardLimitChart
@@ -754,6 +880,7 @@ export default function HomeScreen() {
                           accessibleCards.find((card) => card.id === selectedCardId)?.parent_card_id
                       )
                     }
+                    onSelectCard={(id) => setSelectedCardId(id)}
                   />
                 </View>
 
@@ -1072,7 +1199,7 @@ export default function HomeScreen() {
                         {/* DP Show (Avatar Image with Letter Fallback) */}
                         <View style={[styles.statAvatar, isFirst ? styles.statAvatarMintBorder : styles.statAvatarWarmBorder]}>
                           {stat.avatar_url ? (
-                            <Image source={{ uri: stat.avatar_url }} style={styles.statAvatarImg} />
+                            <Image source={{ uri: stat.avatar_url, cache: 'force-cache' }} style={styles.statAvatarImg} />
                           ) : (
                             <Text style={styles.statAvatarText}>{stat.name.charAt(0)}</Text>
                           )}
@@ -1212,23 +1339,39 @@ export default function HomeScreen() {
                 >
                   <View style={styles.txRow}>
                     <View style={styles.txLeft}>
-                      <View
-                        style={[
-                          styles.txIconBox,
-                          tx.isCredit ? styles.creditIconBox : styles.debitIconBox,
-                        ]}
-                      >
-                        {tx.isCredit ? (
-                          <ArrowDownLeft size={16} color="#15803D" />
+                      {/* User DP or Initials Badge */}
+                      <View style={styles.txUserAvatarContainer}>
+                        {tx.recordedByAvatar ? (
+                          <Image
+                            source={{ uri: tx.recordedByAvatar, cache: 'force-cache' }}
+                            style={styles.txUserAvatarImg}
+                          />
                         ) : (
-                          <ArrowUpRight size={16} color={CedarColors.ink700} />
+                          <View style={styles.txUserAvatarPlaceholder}>
+                            <Text style={styles.txUserAvatarText}>
+                              {(tx.recordedByName || 'M').charAt(0).toUpperCase()}
+                            </Text>
+                          </View>
                         )}
                       </View>
+
                       <View style={styles.txTexts}>
-                        <Text style={styles.txName} numberOfLines={1}>
-                          {tx.title}
-                        </Text>
-                        <Text style={styles.txCategory}>{tx.category}</Text>
+                        <View style={styles.txTopMetaRow}>
+                          <Text style={styles.txRecorderName} numberOfLines={1}>
+                            {tx.recordedByName || 'Member'}
+                          </Text>
+                          <Text style={styles.txTitleDot}>•</Text>
+                          <Text style={styles.txTitleText} numberOfLines={1}>
+                            {tx.title}
+                          </Text>
+                        </View>
+
+                        <View style={styles.txCardRow}>
+                          <CreditCard size={11} color={CedarColors.forest700} />
+                          <Text style={styles.txCardText} numberOfLines={1}>
+                            {tx.cardName || 'Card'}{tx.cardLast4 ? ` ••${tx.cardLast4}` : ''}
+                          </Text>
+                        </View>
                       </View>
                     </View>
 
@@ -1249,16 +1392,6 @@ export default function HomeScreen() {
             )}
           </View>
         </ScrollView>
-
-        {/* ================= CARD SELECTOR DRAWER (Slide Down to Dismiss) ================= */}
-        <VaultCardSelectorDrawer
-          visible={cardModalVisible}
-          onClose={() => setCardModalVisible(false)}
-          cards={accessibleCards}
-          selectedCardId={selectedCardId}
-          onSelectCard={(id) => setSelectedCardId(id)}
-          title="Select Credit Vault"
-        />
 
         {/* ================= BILL ENTRY DRAWER (Slide Down to Dismiss) ================= */}
         <SwipeDownDrawer
@@ -2006,29 +2139,17 @@ const styles = StyleSheet.create({
   userTextCol: {
     gap: 2,
   },
-  liveStatusRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  livePulseDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 3.5,
-    backgroundColor: '#34D399',
-  },
-  liveStatusText: {
-    fontSize: 10,
-    fontFamily: CedarTypography.bodySemiBold,
-    fontWeight: '800',
-    color: '#34D399',
-    letterSpacing: 0.5,
-  },
   userNameText: {
-    fontSize: 17,
+    fontSize: 16,
+    fontFamily: CedarTypography.bodySemiBold,
+    fontWeight: '600',
+    color: '#CAD6C9',
+  },
+  userNameHighlight: {
     fontFamily: CedarTypography.display,
     fontWeight: '800',
-    color: '#F6F9F5',
+    color: '#FFFFFF',
+    letterSpacing: -0.2,
   },
   headerActions: {
     flexDirection: 'row',
@@ -2074,6 +2195,69 @@ const styles = StyleSheet.create({
     backgroundColor: '#EF4444',
     borderWidth: 1.5,
     borderColor: '#071A12',
+  },
+  accordionContainer: {
+    overflow: 'hidden',
+    width: '100%',
+  },
+  accordionScrollContent: {
+    paddingHorizontal: 16,
+    gap: 8,
+  },
+  accordionCardItem: {
+    width: 140,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 14,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.16)',
+    justifyContent: 'center',
+  },
+  accordionCardItemActive: {
+    backgroundColor: 'rgba(16, 185, 129, 0.22)',
+    borderColor: '#10B981',
+  },
+  accordionCardTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  accordionActiveCheck: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#10B981',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  accordionCardTitle: {
+    fontSize: 11,
+    fontFamily: CedarTypography.bodySemiBold,
+    color: '#FFFFFF',
+    fontWeight: '700',
+  },
+  accordionCardSub: {
+    fontSize: 9,
+    fontFamily: CedarTypography.body,
+    color: '#CAD6C9',
+    marginTop: 2,
+  },
+  txTitleBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  txBadgePill: {
+    paddingHorizontal: 5,
+    paddingVertical: 1.5,
+    borderRadius: 5,
+  },
+  txBadgeText: {
+    fontSize: 8,
+    fontFamily: CedarTypography.bodySemiBold,
+    fontWeight: '800',
+    letterSpacing: 0.2,
   },
   heroCard: {
     marginHorizontal: 16,
@@ -2138,8 +2322,8 @@ const styles = StyleSheet.create({
   },
   heroChartContainer: {
     width: '100%',
-    marginTop: 14,
-    marginBottom: 4,
+    marginTop: 4,
+    marginBottom: 6,
   },
   trendPill: {
     flexDirection: 'row',
@@ -2634,21 +2818,66 @@ const styles = StyleSheet.create({
   txLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 10,
     flex: 1,
   },
-  txIconBox: {
+  txUserAvatarContainer: {
     width: 36,
     height: 36,
-    borderRadius: 12,
+    borderRadius: 18,
+    overflow: 'hidden',
+    backgroundColor: '#E2E8F0',
+  },
+  txUserAvatarImg: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 18,
+  },
+  txUserAvatarPlaceholder: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#E6F4EA',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  creditIconBox: {
-    backgroundColor: '#E6F7EB',
+  txUserAvatarText: {
+    fontSize: 14,
+    fontFamily: CedarTypography.bodyBold,
+    fontWeight: '800',
+    color: CedarColors.forest800,
   },
-  debitIconBox: {
-    backgroundColor: '#F3F4F6',
+  txTopMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  txRecorderName: {
+    fontSize: 12,
+    fontFamily: CedarTypography.bodySemiBold,
+    fontWeight: '800',
+    color: CedarColors.ink900,
+  },
+  txTitleDot: {
+    fontSize: 10,
+    color: CedarColors.ink500,
+  },
+  txTitleText: {
+    fontSize: 11,
+    fontFamily: CedarTypography.body,
+    color: CedarColors.ink700,
+    flex: 1,
+  },
+  txCardRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 2,
+  },
+  txCardText: {
+    fontSize: 10,
+    fontFamily: CedarTypography.bodySemiBold,
+    fontWeight: '700',
+    color: CedarColors.forest800,
   },
   txTexts: {
     flex: 1,

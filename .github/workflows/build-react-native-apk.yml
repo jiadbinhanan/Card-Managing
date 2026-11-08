@@ -15,7 +15,7 @@ on:
 jobs:
   build-android-apk:
     name: Build Credics Android APK (React Native)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout Repository
@@ -36,10 +36,11 @@ jobs:
         run: pnpm install --no-frozen-lockfile
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '21'
+          cache: 'gradle'
 
       - name: Set Android SDK Environment
         run: |
@@ -67,6 +68,7 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD || 'credics123456' }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS || 'credics' }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'credics123456' }}
+          GRADLE_OPTS: "-Dorg.gradle.internal.http.socketTimeout=300000 -Dorg.gradle.internal.http.connectionTimeout=300000"
         run: |
           KEYSTORE_PATH="$(pwd)/apps/web/android/app/credics-release.jks"
           if [ -f "$KEYSTORE_PATH" ]; then

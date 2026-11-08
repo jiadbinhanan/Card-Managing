@@ -6,7 +6,7 @@ on:
 jobs:
   build-apk:
     name: Build Android APK
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout Repository
@@ -49,20 +49,11 @@ jobs:
           pnpm cap:build
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '21'
-
-      - name: Setup Gradle Cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('apps/web/android/**/*.gradle*', 'apps/web/android/**/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
+          cache: 'gradle'
 
       - name: Make Gradlew Executable
         run: chmod +x apps/web/android/gradlew
@@ -86,6 +77,7 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD || 'credics123456' }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS || 'credics' }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'credics123456' }}
+          GRADLE_OPTS: "-Dorg.gradle.internal.http.socketTimeout=300000 -Dorg.gradle.internal.http.connectionTimeout=300000"
         run: |
           cd apps/web/android
           ./gradlew assembleRelease --no-daemon

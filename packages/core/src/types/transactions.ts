@@ -103,4 +103,8 @@ export interface RecentTx {
   amount: number;
   date: string;
   isCredit: boolean;
+  recordedByName?: string;
+  recordedByAvatar?: string | null;
+  cardName?: string;
+  cardLast4?: string;
 }
