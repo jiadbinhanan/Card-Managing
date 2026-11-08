@@ -2,9 +2,9 @@
 
 buildscript {
     ext {
-        buildToolsVersion = findProperty('android.buildToolsVersion') ?: '35.0.0'
+        buildToolsVersion = findProperty('android.buildToolsVersion') ?: '36.0.0'
         minSdkVersion = Integer.parseInt(findProperty('android.minSdkVersion') ?: '24')
-        compileSdkVersion = Integer.parseInt(findProperty('android.compileSdkVersion') ?: '35')
+        compileSdkVersion = Integer.parseInt(findProperty('android.compileSdkVersion') ?: '36')
         targetSdkVersion = Integer.parseInt(findProperty('android.targetSdkVersion') ?: '34')
         kotlinVersion = findProperty('android.kotlinVersion') ?: '2.1.20'
 
@@ -38,5 +38,21 @@ allprojects {
         google()
         mavenCentral()
         maven { url 'https://www.jitpack.io' }
+    }
+
+    tasks.matching { it.name.startsWith("buildCMake") || it.name.startsWith("configureCMake") }.configureEach { task ->
+        task.doFirst {
+            def scriptFile = new File(rootDir.parentFile.parentFile, "scripts/patch-rn-cpp.js")
+            if (scriptFile.exists()) {
+                exec {
+                    workingDir scriptFile.parentFile
+                    if (org.gradle.internal.os.OperatingSystem.current().isWindows()) {
+                        commandLine("cmd", "/c", "node scripts/patch-rn-cpp.js")
+                    } else {
+                        commandLine("node", "scripts/patch-rn-cpp.js")
+                    }
+                }
+            }
+        }
     }
 }
