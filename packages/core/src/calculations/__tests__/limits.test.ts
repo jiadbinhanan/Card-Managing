@@ -305,4 +305,44 @@ describe('Pillar 4A: Dashboard Limits & Card Family Utilization', () => {
       expect(countdown.nextBillDate).toContain('Dec');
     });
   });
+
+  describe('7. Web and Mobile Parity Guarantee (SBI BPCL Scenario)', () => {
+    it('should properly deduct non-rotation settled withdrawals (lents/cash-outs)', () => {
+      const sbiCard: CardData = {
+        id: 'sbi-bpcl-1',
+        card_name: 'SBI BPCL Octane',
+        last_4_digits: '8520',
+        total_limit: 180000,
+        is_primary: true,
+        bill_gen_day: 15,
+        bill_due_day: 5,
+      };
+
+      const transactions = [
+        // Rotations
+        { amount: 50000, type: 'withdrawal', status: 'settled', qr_id: 'qr-1', card_id: 'sbi-bpcl-1' },
+        // Non-rotation settled withdrawals (e.g. Lent given from card or POS swipe)
+        { amount: 120317, type: 'withdrawal', status: 'settled', card_id: 'sbi-bpcl-1', remarks: 'Lent to borrower' },
+        // Credit card bill payment
+        { amount: 0, type: 'bill_payment', status: 'settled', card_id: 'sbi-bpcl-1' },
+      ];
+
+      const spends = [
+        // Credit card direct swipe
+        { amount: 0, payment_method: 'credit_card', card_id: 'sbi-bpcl-1' },
+      ];
+
+      const map = calculateCardAvailableMap([sbiCard], transactions as any, spends as any);
+      // Available = 180000 - 50000 - 120317 = 9683
+      expect(map['sbi-bpcl-1']).toBe(9683);
+
+      const limits = calculateCardLimits({
+        totalLimit: sbiCard.total_limit,
+        transactions: transactions as any,
+        spends: spends as any,
+      });
+      expect(limits.availableLimit).toBe(9683);
+      expect(limits.utilizedLimit).toBe(170317);
+    });
+  });
 });

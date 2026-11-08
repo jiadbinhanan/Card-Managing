@@ -15,6 +15,7 @@
     "cap:build": "node scripts/build-mobile.mjs"
   },
   "dependencies": {
+    "@credics/core": "workspace:*",
     "@base-ui/react": "^1.4.0",
     "@capacitor/android": "^8.5.3",
     "@capacitor/app": "^8.1.2",

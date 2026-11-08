@@ -150,6 +150,9 @@ importers:
       '@capacitor/status-bar':
         specifier: ^8.0.4
         version: 8.0.4(@capacitor/core@8.5.3)
+      '@credics/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@ducanh2912/next-pwa':
         specifier: ^10.2.9
         version: 10.2.9(@types/babel__core@7.20.5)(next@16.2.10(@babel/core@7.29.7)(@opentelemetry/api@1.10.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(webpack@5.108.4(postcss@8.5.19))

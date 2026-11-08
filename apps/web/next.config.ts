@@ -39,7 +39,7 @@ const nextConfig: NextConfig = {
       },
     ],
   },
-  transpilePackages: ['motion'],
+  transpilePackages: ['motion', '@credics/core'],
 };
 
 const withPWA = withPWAInit({

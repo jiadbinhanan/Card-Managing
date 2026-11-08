@@ -21,6 +21,7 @@ import {
   Layers,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { calculateCardLimits } from "@credics/core";
 import { sendLentIssueAlert, sendLentRecoveryAlert } from "./WaAlert";
 import TransactionTraceInline, { type TraceTarget } from "@/components/TransactionTraceInline";
 // PDF export is dynamically imported in handleExportPdf
@@ -302,14 +303,12 @@ export default function BorrowerProfilePanel({
     const { data: txs } = await supabase.from("card_transactions").select("amount, type, status, qr_id, settled_to_user, remarks, card_id").in("card_id", familyCardIds);
     const { data: spends } = await supabase.from("spends").select("amount, payment_method, card_id").in("card_id", familyCardIds);
 
-    const withdrawals = (txs || []).filter(t => {
-      if (t.type !== "withdrawal") return false;
-      const isRotation = t.qr_id || t.settled_to_user || (t.remarks || "").toLowerCase().includes("rotation");
-      return isRotation || t.status === "pending_settlement" || t.status === "partially_settled";
-    }).reduce((s, t) => s + Number(t.amount), 0);
-    const billPay = (txs || []).filter(t => t.type === "bill_payment").reduce((s, t) => s + Number(t.amount), 0);
-    const ccSpends = (spends || []).filter(s => s.payment_method === "credit_card").reduce((s, sp) => s + Number(sp.amount), 0);
-    return Number(primaryCard.total_limit) - withdrawals - ccSpends + billPay;
+    const metrics = calculateCardLimits({
+      totalLimit: Number(primaryCard.total_limit || 0),
+      transactions: (txs || []) as any,
+      spends: (spends || []) as any,
+    });
+    return metrics.availableLimit;
   };
 
   // Fresh cash-on-hand balance recompute (incorporates card family if present)

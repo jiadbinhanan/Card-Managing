@@ -13,6 +13,7 @@ import {
   Users
 } from "lucide-react";
 import { BottomNav } from "@/components/BottomNav";
+import { calculateCardLimits, calculatePersonalDue } from "@credics/core";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
@@ -228,29 +229,14 @@ export default function Dashboard() {
         })));
       }
 
-      const withdrawals = txs?.filter(t => {
-        if (t.type !== 'withdrawal') return false;
-        const isRotation = t.qr_id || t.settled_to_user || (t.remarks || '').toLowerCase().includes('rotation');
-        if (isRotation) return true;
-        return t.status === 'pending_settlement' || t.status === 'partially_settled';
-      }).reduce((sum, t) => sum + Number(t.amount), 0) || 0;
+      const summary = calculateCardLimits({
+        totalLimit: currentLimit,
+        transactions: (txs || []) as any,
+        spends: (spends || []) as any,
+      });
 
-      const billPayments = txs?.filter(t => t.type === 'bill_payment').reduce((sum, t) => sum + Number(t.amount), 0) || 0;
-      const ccSpends = spends?.filter(s => s.payment_method === 'credit_card').reduce((sum, s) => sum + Number(s.amount), 0) || 0;
-
-      setAvailableLimit(currentLimit - withdrawals - ccSpends + billPayments);
-
-      const inTransitAmt = txs?.filter(t =>
-        t.type === 'withdrawal' &&
-        (t.qr_id || (t.remarks || '').toLowerCase().includes('rotation')) &&
-        t.status !== 'settled'
-      ).reduce((sum, t) => {
-        const due = (t.status === 'partially_settled' && t.settlement_details?.total_due !== undefined)
-          ? t.settlement_details.total_due
-          : t.amount;
-        return sum + Number(due);
-      }, 0) || 0;
-      setInTransit(inTransitAmt);
+      setAvailableLimit(summary.availableLimit);
+      setInTransit(summary.inTransitAmount);
 
       // User Stats & Cash on Hand
       const { data: profiles } = await supabase.from('profiles').select('id, name, avatar_url');
@@ -272,9 +258,7 @@ export default function Dashboard() {
       if (profiles) {
         const stats = profiles.map(p => {
           const cash = coh?.filter(c => c.user_id === p.id).reduce((sum, c) => sum + Number(c.current_balance || 0), 0) || 0;
-          const totalPersonalSpends = allSpends?.filter(s => s.user_id === p.id && ['credit_card', 'from_card_limit', 'lent_recovery'].includes(s.payment_method)).reduce((sum, s) => sum + Number(s.amount), 0) || 0;
-          const totalRepayments = allTxs?.filter(t => t.recorded_by === p.id && t.type === 'bill_payment' && t.payment_method === 'own_pocket').reduce((sum, t) => sum + Number(t.amount), 0) || 0;
-          const due = Math.max(0, totalPersonalSpends - totalRepayments);
+          const due = calculatePersonalDue(p.id, (allSpends || []) as any, (allTxs || []) as any);
           return { id: p.id, name: p.name.split(' ')[0], cash, due, avatar_url: cleanUrl(p.avatar_url) };
         });
         setUserStats(stats);

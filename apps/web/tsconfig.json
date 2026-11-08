@@ -26,6 +26,12 @@
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "@credics/core": [
+        "../../packages/core/src/index.ts"
+      ],
+      "@credics/core/*": [
+        "../../packages/core/src/*"
       ]
     }
   },

@@ -22,6 +22,7 @@ import {
   Layers,
 } from "lucide-react";
 import { BottomNav } from "@/components/BottomNav";
+import { calculateCardAvailableMap } from "@credics/core";
 import { supabase } from "@/lib/supabase";
 import Link from "next/link";
 import TransactionTraceInline, { type TraceTarget } from "@/components/TransactionTraceInline";
@@ -272,29 +273,11 @@ export default function TransactionsPage() {
     if (spnds) setSpends(spnds as any);
     const activeCycles = activeCyclesRes.data || [];
 
-    const limitsMap: Record<string, number> = {};
-    const primaryCards = currentCards.filter(c => c.is_primary);
-
-    primaryCards.forEach(primary => {
-      const familyIds = currentCards
-        .filter(c => c.id === primary.id || c.parent_card_id === primary.id)
-        .map(c => c.id);
-
-      const famTxs = allTxsRes.data?.filter(t => familyIds.includes(t.card_id || '')) || [];
-      const famSpnds = allSpndsRes.data?.filter(s => familyIds.includes(s.card_id || '')) || [];
-
-      const w = famTxs.filter(t => {
-        if (t.type !== 'withdrawal') return false;
-        const isRotation = t.qr_id || t.settled_to_user || (t.remarks || '').toLowerCase().includes('rotation');
-        if (isRotation) return true;
-        return t.status === 'pending_settlement' || t.status === 'partially_settled';
-      }).reduce((s, t) => s + Number(t.amount), 0);
-
-      const b = famTxs.filter(t => t.type === 'bill_payment').reduce((s, t) => s + Number(t.amount), 0);
-      const s = famSpnds.filter(sp => sp.payment_method === 'credit_card').reduce((sum, sp) => sum + Number(sp.amount), 0);
-
-      limitsMap[primary.id] = Number(primary.total_limit) - w - s + b;
-    });
+    const limitsMap = calculateCardAvailableMap(
+      currentCards as any,
+      (allTxsRes.data || []) as any,
+      (allSpndsRes.data || []) as any
+    );
     setFamilyLimitsMap(limitsMap);
 
     const cashMap: Record<string, number> = {};

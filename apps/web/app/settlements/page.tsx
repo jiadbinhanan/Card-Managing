@@ -19,6 +19,7 @@ import {
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { BottomNav } from "@/components/BottomNav";
+import { calculateCardAvailableMap } from "@credics/core";
 import { supabase } from "@/lib/supabase";
 import Link from "next/link";
 import { NotificationPanel } from "@/components/NotificationPanel";
@@ -251,28 +252,11 @@ export default function SettlementsPage() {
     coh?.forEach(c => { cashMap[c.user_id] = (cashMap[c.user_id] || 0) + Number(c.current_balance); });
     setUserCashMap(cashMap);
 
-    const availableMap: Record<string, number> = {};
-
-    currentCards.filter(c => c.is_primary).forEach(primaryCard => {
-       const familyCardIds = currentCards.filter(c => c.id === primaryCard.id || c.parent_card_id === primaryCard.id).map(c => c.id);
-
-       const withdrawals = allTxs?.filter(t => {
-         if (t.type !== 'withdrawal') return false;
-         if (!t.card_id || !familyCardIds.includes(t.card_id)) return false;
-         const isRotation = t.qr_id || t.settled_to_user || (t.remarks || '').toLowerCase().includes('rotation');
-         if (isRotation) return true;
-         return t.status === 'pending_settlement' || t.status === 'partially_settled';
-       }).reduce((sum, t) => sum + Number(t.amount), 0) || 0;
-
-       const billPayments = allTxs?.filter(t => t.type === 'bill_payment' && t.card_id && familyCardIds.includes(t.card_id)).reduce((sum, t) => sum + Number(t.amount), 0) || 0;
-       const ccSpends = allSpends?.filter(s => s.payment_method === 'credit_card' && s.card_id && familyCardIds.includes(s.card_id)).reduce((sum, s) => sum + Number(s.amount), 0) || 0;
-
-       const available = Number(primaryCard.total_limit) - withdrawals - ccSpends + billPayments;
-
-       familyCardIds.forEach(id => {
-           availableMap[id] = available;
-       });
-    });
+    const availableMap = calculateCardAvailableMap(
+      currentCards as any,
+      (allTxs || []) as any,
+      (allSpends || []) as any
+    );
     setCardAvailableMap(availableMap);
 
     // Save in-memory cache for instant SWR navigation
