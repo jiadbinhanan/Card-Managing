@@ -93,13 +93,17 @@ allprojects {
                 patchGraphicsConversions()
                 def scriptFile = findPatchScript()
                 if (scriptFile != null) {
-                    exec {
-                        workingDir scriptFile.parentFile
-                        if (org.gradle.internal.os.OperatingSystem.current().isWindows()) {
-                            commandLine("cmd", "/c", "node scripts/patch-rn-cpp.js")
-                        } else {
-                            commandLine("node", "scripts/patch-rn-cpp.js")
+                    try {
+                        exec {
+                            ignoreExitValue = true
+                            if (org.gradle.internal.os.OperatingSystem.current().isWindows()) {
+                                commandLine("cmd", "/c", "node \"${scriptFile.absolutePath}\"")
+                            } else {
+                                commandLine("node", scriptFile.absolutePath)
+                            }
                         }
+                    } catch (Exception e) {
+                        println "[Gradle Hook] Script exec notice: ${e.message}"
                     }
                 }
             }
