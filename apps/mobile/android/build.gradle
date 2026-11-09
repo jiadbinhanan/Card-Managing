@@ -85,22 +85,20 @@ allprojects {
         return candidates.find { it.exists() }
     }
 
-    afterEvaluate { project ->
-        project.tasks.configureEach { task ->
-            def tName = task.name.toLowerCase()
-            if (tName.contains("cmake") || tName.contains("externalnativebuild") || tName.contains("prefab") || tName.contains("nativelibs")) {
-                task.doFirst {
-                    println "[Gradle Hook] Checking & patching C++ headers before task: ${task.name}"
-                    patchGraphicsConversions()
-                    def scriptFile = findPatchScript()
-                    if (scriptFile != null) {
-                        project.exec {
-                            workingDir scriptFile.parentFile
-                            if (org.gradle.internal.os.OperatingSystem.current().isWindows()) {
-                                commandLine("cmd", "/c", "node scripts/patch-rn-cpp.js")
-                            } else {
-                                commandLine("node", "scripts/patch-rn-cpp.js")
-                            }
+    tasks.configureEach { task ->
+        def tName = task.name.toLowerCase()
+        if (tName.contains("cmake") || tName.contains("externalnativebuild") || tName.contains("prefab") || tName.contains("nativelibs")) {
+            task.doFirst {
+                println "[Gradle Hook] Checking & patching C++ headers before task: ${task.name}"
+                patchGraphicsConversions()
+                def scriptFile = findPatchScript()
+                if (scriptFile != null) {
+                    exec {
+                        workingDir scriptFile.parentFile
+                        if (org.gradle.internal.os.OperatingSystem.current().isWindows()) {
+                            commandLine("cmd", "/c", "node scripts/patch-rn-cpp.js")
+                        } else {
+                            commandLine("node", "scripts/patch-rn-cpp.js")
                         }
                     }
                 }

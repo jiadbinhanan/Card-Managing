@@ -194,31 +194,3 @@ dependencies {
         implementation jscFlavor
     }
 }
-
-afterEvaluate {
-    tasks.configureEach { task ->
-        def tName = task.name.toLowerCase()
-        if (tName.contains("cmake") || tName.contains("externalnativebuild")) {
-            task.doFirst {
-                def patchScript = [
-                    file("${rootDir}/scripts/patch-rn-cpp.js"),
-                    file("${rootDir}/../scripts/patch-rn-cpp.js"),
-                    file("${rootDir}/../../scripts/patch-rn-cpp.js"),
-                    file("${rootDir}/../../../scripts/patch-rn-cpp.js")
-                ].find { it.exists() }
-
-                if (patchScript != null) {
-                    println "[App Gradle Hook] Executing ${patchScript} before ${task.name}"
-                    exec {
-                        workingDir patchScript.parentFile
-                        if (org.gradle.internal.os.OperatingSystem.current().isWindows()) {
-                            commandLine("cmd", "/c", "node scripts/patch-rn-cpp.js")
-                        } else {
-                            commandLine("node", "scripts/patch-rn-cpp.js")
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
