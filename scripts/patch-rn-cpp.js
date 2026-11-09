@@ -128,44 +128,39 @@ function patchGraphicsHeader(headerPath) {
   } catch (e) {}
 }
 
-function patchReanimatedInterpolator(nodeModulesDir) {
-  const reanimatedDir = path.join(nodeModulesDir, 'react-native-reanimated', 'Common', 'cpp', 'reanimated', 'LayoutAnimations');
-  if (!fs.existsSync(reanimatedDir)) return;
+function patchReanimatedDir(dir) {
+  if (!fs.existsSync(dir)) return;
 
-  const cppFile = path.join(reanimatedDir, 'TransformOperationInterpolator.cpp');
+  const cppFile = path.join(dir, 'TransformOperationInterpolator.cpp');
   if (fs.existsSync(cppFile)) {
-    let content = fs.readFileSync(cppFile, 'utf8');
-    if (content.includes('// Specialization for resolvable operations')) {
-      content = content.replace(
-        /\/\/ Specialization for resolvable operations[\s\S]*?\/\/ Rotate operations/,
-        '// Rotate operations'
-      );
-      fs.writeFileSync(cppFile, content, 'utf8');
-      console.log('[patch-rn-cpp] Patched TransformOperationInterpolator.cpp');
-    }
+    try {
+      let content = fs.readFileSync(cppFile, 'utf8');
+      if (content.includes('// Specialization for resolvable operations')) {
+        content = content.replace(
+          /\/\/ Specialization for resolvable operations[\s\S]*?\/\/ Rotate operations/,
+          '// Rotate operations'
+        );
+        fs.writeFileSync(cppFile, content, 'utf8');
+        console.log('[patch-rn-cpp] Patched TransformOperationInterpolator.cpp in:', dir);
+      }
+    } catch (e) {}
   }
 
-  const hFile = path.join(reanimatedDir, 'TransformOperationInterpolator.h');
+  const hFile = path.join(dir, 'TransformOperationInterpolator.h');
   if (fs.existsSync(hFile)) {
-    let content = fs.readFileSync(hFile, 'utf8');
-    if (!content.includes('fromOp.value.interpolate')) {
-      const oldBlock = `  std::unique_ptr<StyleOperation> interpolate(
-      double progress,
-      const std::shared_ptr<StyleOperation> &from,
-      const std::shared_ptr<StyleOperation> &to,
-      const StyleOperationsInterpolationContext &context) const override;
+    try {
+      let content = fs.readFileSync(hFile, 'utf8');
+      if (!content.includes('fromOp.value.interpolate')) {
+        const regex = /template\s*<ResolvableOp\s+TOperation>\s*class\s+TransformOperationInterpolator<TOperation>[\s\S]*?};\s*(?=\}\s*\/\/\s*namespace\s+reanimated::css)/;
+        const replacement = `template <ResolvableOp TOperation>
+class TransformOperationInterpolator<TOperation> : public StyleOperationInterpolator {
+ public:
+  TransformOperationInterpolator(
+      const std::shared_ptr<TOperation> &defaultOperation,
+      ResolvableValueInterpolatorConfig config)
+      : StyleOperationInterpolator(defaultOperation), config_(std::move(config)) {}
 
-  std::shared_ptr<StyleOperation> resolveOperation(
-      const std::shared_ptr<StyleOperation> &operation,
-      const StyleOperationsInterpolationContext &context) const override;
-
- protected:
-  const ResolvableValueInterpolatorConfig config_;
-
-  ResolvableValueInterpolationContext getResolvableValueContext(
-      const StyleOperationsInterpolationContext &context) const;
-};`;
-      const newBlock = `  std::unique_ptr<StyleOperation> interpolate(
+  std::unique_ptr<StyleOperation> interpolate(
       double progress,
       const std::shared_ptr<StyleOperation> &from,
       const std::shared_ptr<StyleOperation> &to,
@@ -205,13 +200,46 @@ function patchReanimatedInterpolator(nodeModulesDir) {
         .relativeTo = config_.relativeTo};
   }
 };`;
-      if (content.includes(oldBlock)) {
-        content = content.replace(oldBlock, newBlock);
-        fs.writeFileSync(hFile, content, 'utf8');
-        console.log('[patch-rn-cpp] Patched TransformOperationInterpolator.h');
+        if (regex.test(content)) {
+          content = content.replace(regex, replacement);
+          fs.writeFileSync(hFile, content, 'utf8');
+          console.log('[patch-rn-cpp] Patched TransformOperationInterpolator.h in:', dir);
+        }
       }
-    }
+    } catch (e) {}
   }
+}
+
+function patchReanimatedInterpolator(nodeModulesDir) {
+  const directDir = path.join(
+    nodeModulesDir,
+    'react-native-reanimated',
+    'Common',
+    'cpp',
+    'reanimated',
+    'CSS',
+    'interpolation',
+    'transforms'
+  );
+  patchReanimatedDir(directDir);
+
+  // Also scan for any nested/hoisted/pnpm reanimated dirs
+  function scanForReanimated(dir) {
+    if (!fs.existsSync(dir)) return;
+    try {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (!entry.isDirectory() || entry.name === '.git') continue;
+        const full = path.join(dir, entry.name);
+        if (entry.name === 'transforms' && full.includes('reanimated') && full.includes('interpolation')) {
+          patchReanimatedDir(full);
+        } else if (entry.name !== 'node_modules' || dir === nodeModulesDir) {
+          scanForReanimated(full);
+        }
+      }
+    } catch (e) {}
+  }
+
+  scanForReanimated(nodeModulesDir);
 }
 
 function patchSubprojectBuildGradles(nodeModulesDir) {

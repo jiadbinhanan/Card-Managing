@@ -20,7 +20,8 @@
   },
   "pnpm": {
     "patchedDependencies": {
-      "react-native@0.86.3": "patches/react-native@0.86.3.patch"
+      "react-native@0.86.3": "patches/react-native@0.86.3.patch",
+      "react-native-reanimated@4.5.1": "patches/react-native-reanimated@4.5.1.patch"
     }
   }
 }
