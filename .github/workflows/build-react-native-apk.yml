@@ -75,7 +75,7 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD || 'credics123456' }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS || 'credics' }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'credics123456' }}
-          GRADLE_OPTS: "-Dorg.gradle.internal.http.socketTimeout=300000 -Dorg.gradle.internal.http.connectionTimeout=300000"
+          GRADLE_OPTS: "-Dorg.gradle.internal.http.socketTimeout=120000 -Dorg.gradle.internal.http.connectionTimeout=120000 -Dorg.gradle.internal.repository.max.retries=10 -Dorg.gradle.internal.repository.initial.backoff=1000 -Dhttp.keepAlive=false -Dorg.gradle.jvmargs='-Xmx4096m -XX:MaxMetaspaceSize=1024m'"
         run: |
           KEYSTORE_PATH="$(pwd)/apps/web/android/app/credics-release.jks"
           if [ -f "$KEYSTORE_PATH" ]; then
@@ -85,16 +85,28 @@ jobs:
 
           cd apps/mobile/android
           chmod +x gradlew
-          if [ "${{ github.event.inputs.build_type }}" = "release" ]; then
-            ./gradlew assembleRelease \
-              -Pandroid.injected.signing.store.file="$KEYSTORE_PATH" \
-              -Pandroid.injected.signing.store.password="${KEYSTORE_PASSWORD}" \
-              -Pandroid.injected.signing.key.alias="${KEY_ALIAS}" \
-              -Pandroid.injected.signing.key.password="${KEY_PASSWORD}" \
-              --no-daemon
-          else
-            ./gradlew assembleDebug --no-daemon
-          fi
+
+          MAX_RETRIES=3
+          for attempt in $(seq 1 $MAX_RETRIES); do
+            echo "▶ Starting Gradle build attempt $attempt of $MAX_RETRIES..."
+            if [ "${{ github.event.inputs.build_type }}" = "release" ]; then
+              ./gradlew assembleRelease \
+                -Pandroid.injected.signing.store.file="$KEYSTORE_PATH" \
+                -Pandroid.injected.signing.store.password="${KEYSTORE_PASSWORD}" \
+                -Pandroid.injected.signing.key.alias="${KEY_ALIAS}" \
+                -Pandroid.injected.signing.key.password="${KEY_PASSWORD}" \
+                --no-daemon --stacktrace && break
+            else
+              ./gradlew assembleDebug --no-daemon --stacktrace && break
+            fi
+
+            if [ $attempt -eq $MAX_RETRIES ]; then
+              echo "❌ All $MAX_RETRIES build attempts failed."
+              exit 1
+            fi
+            echo "⚠️ Gradle attempt $attempt encountered network/transient failure. Retrying in 15 seconds..."
+            sleep 15
+          done
           cd ../../..
 
       - name: Find and Stage APK
