@@ -16,7 +16,13 @@ react {
     if (localHermesc.exists()) {
         hermesCommand = localHermesc.getAbsolutePath()
     } else {
-        hermesCommand = new File(["node", "--print", "require.resolve('react-native/package.json')"].execute(null, rootDir).text.trim()).getParentFile().getAbsolutePath() + "/sdks/hermesc/%OS-BIN%/hermesc"
+        def hermesBinName = org.gradle.internal.os.OperatingSystem.current().isWindows() ? "hermesc.exe" : "hermesc"
+        def hermesCompilerPkg = new File(["node", "--print", "try { console.log(require.resolve('hermes-compiler/package.json')) } catch(e) { console.log('') }"].execute(null, rootDir).text.trim())
+        if (hermesCompilerPkg.exists()) {
+            hermesCommand = hermesCompilerPkg.getParentFile().getAbsolutePath() + "/hermesc/%OS-BIN%/" + hermesBinName
+        } else {
+            hermesCommand = new File(["node", "--print", "require.resolve('react-native/package.json')"].execute(null, rootDir).text.trim()).getParentFile().getAbsolutePath() + "/sdks/hermesc/%OS-BIN%/" + hermesBinName
+        }
     }
     codegenDir = new File(["node", "--print", "require.resolve('@react-native/codegen/package.json', { paths: [require.resolve('react-native/package.json')] })"].execute(null, rootDir).text.trim()).getParentFile().getAbsoluteFile()
 

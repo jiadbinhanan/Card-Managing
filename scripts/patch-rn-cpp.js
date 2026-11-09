@@ -320,10 +320,56 @@ function findAndPatchAllGraphics(dir) {
   }
 }
 
+function provisionHermesc() {
+  const rootDir = path.resolve(__dirname, '..');
+  let hermesCompilerDir = path.join(rootDir, 'node_modules', 'hermes-compiler', 'hermesc');
+  if (!fs.existsSync(hermesCompilerDir)) {
+    try {
+      const pkgPath = require.resolve('hermes-compiler/package.json');
+      hermesCompilerDir = path.join(path.dirname(pkgPath), 'hermesc');
+    } catch (e) {}
+  }
+
+  if (fs.existsSync(hermesCompilerDir)) {
+    const targetDirs = [
+      path.join(rootDir, 'node_modules', 'react-native', 'sdks', 'hermesc'),
+      path.join(rootDir, 'apps', 'mobile', 'node_modules', 'react-native', 'sdks', 'hermesc'),
+      path.join(rootDir, 'apps', 'mobile', 'node_modules', 'hermes-compiler', 'hermesc')
+    ];
+
+    for (const targetDir of targetDirs) {
+      try {
+        const parentPkg = path.dirname(path.dirname(targetDir));
+        if (fs.existsSync(parentPkg)) {
+          fs.mkdirSync(path.dirname(targetDir), { recursive: true });
+          if (!fs.existsSync(targetDir)) {
+            fs.cpSync(hermesCompilerDir, targetDir, { recursive: true });
+            console.log('[patch-rn-cpp] Provisioned hermesc to:', targetDir);
+          }
+        }
+      } catch (e) {
+        console.error('[patch-rn-cpp] Could not provision hermesc to:', targetDir, e.message);
+      }
+    }
+
+    if (process.platform !== 'win32') {
+      try {
+        child_process.execSync(`chmod -R +x "${hermesCompilerDir}"`, { stdio: 'ignore' });
+        for (const targetDir of targetDirs) {
+          if (fs.existsSync(targetDir)) {
+            child_process.execSync(`chmod -R +x "${targetDir}"`, { stdio: 'ignore' });
+          }
+        }
+      } catch (e) {}
+    }
+  }
+}
+
 // 1. Patch node_modules
 const rootDir = path.resolve(__dirname, '..');
 const nodeModulesDir = path.join(rootDir, 'node_modules');
 
+provisionHermesc();
 findAndPatchAllGraphics(nodeModulesDir);
 findAndPatchAllGraphics(path.join(rootDir, 'apps', 'mobile', 'node_modules'));
 findAndPatchAllGraphics(path.join(rootDir, 'apps', 'mobile', 'android'));
