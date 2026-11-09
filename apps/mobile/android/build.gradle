@@ -42,16 +42,66 @@ allprojects {
         maven { url 'https://www.jitpack.io' }
     }
 
-    tasks.matching { it.name.startsWith("buildCMake") || it.name.startsWith("configureCMake") }.configureEach { task ->
-        task.doFirst {
-            def scriptFile = new File(rootDir.parentFile.parentFile, "scripts/patch-rn-cpp.js")
-            if (scriptFile.exists()) {
-                exec {
-                    workingDir scriptFile.parentFile
-                    if (org.gradle.internal.os.OperatingSystem.current().isWindows()) {
-                        commandLine("cmd", "/c", "node scripts/patch-rn-cpp.js")
-                    } else {
-                        commandLine("node", "scripts/patch-rn-cpp.js")
+    def patchGraphicsConversions = {
+        def patchFile = { File file ->
+            if (file.name == 'graphicsConversions.h' && file.isFile()) {
+                try {
+                    def text = file.text
+                    if (text.contains('std::format')) {
+                        file.text = text.replaceAll(/std::format\s*\(\s*["']\{\}%["']\s*,\s*dimension\.value\s*\)/, 'std::to_string(dimension.value) + "%"')
+                        println "[Gradle Hook] Successfully patched: ${file.absolutePath}"
+                    }
+                } catch (Exception e) {
+                    println "[Gradle Hook] Could not patch ${file.absolutePath}: ${e.message}"
+                }
+            }
+        }
+
+        def candidateDirs = [
+            gradle.gradleUserHomeDir != null ? new File(gradle.gradleUserHomeDir, "caches") : null,
+            new File(System.getProperty("user.home"), ".gradle/caches"),
+            new File("/home/runner/.gradle/caches"),
+            rootDir
+        ]
+
+        candidateDirs.findAll { it != null && it.exists() }.each { dir ->
+            try {
+                dir.eachFileRecurse(groovy.io.FileType.FILES) { f ->
+                    if (f.name == 'graphicsConversions.h') {
+                        patchFile(f)
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+    }
+
+    def findPatchScript = {
+        def candidates = [
+            new File(rootDir, "scripts/patch-rn-cpp.js"),
+            new File(rootDir.parentFile, "scripts/patch-rn-cpp.js"),
+            new File(rootDir.parentFile.parentFile, "scripts/patch-rn-cpp.js"),
+            new File(rootDir.parentFile.parentFile.parentFile, "scripts/patch-rn-cpp.js")
+        ]
+        return candidates.find { it.exists() }
+    }
+
+    afterEvaluate { project ->
+        project.tasks.configureEach { task ->
+            def tName = task.name.toLowerCase()
+            if (tName.contains("cmake") || tName.contains("externalnativebuild") || tName.contains("prefab") || tName.contains("nativelibs")) {
+                task.doFirst {
+                    println "[Gradle Hook] Checking & patching C++ headers before task: ${task.name}"
+                    patchGraphicsConversions()
+                    def scriptFile = findPatchScript()
+                    if (scriptFile != null) {
+                        project.exec {
+                            workingDir scriptFile.parentFile
+                            if (org.gradle.internal.os.OperatingSystem.current().isWindows()) {
+                                commandLine("cmd", "/c", "node scripts/patch-rn-cpp.js")
+                            } else {
+                                commandLine("node", "scripts/patch-rn-cpp.js")
+                            }
+                        }
                     }
                 }
             }

@@ -21,6 +21,7 @@ function patchAarFile(aarPath) {
         if (fs.existsSync(extracted)) {
           let content = fs.readFileSync(extracted, 'utf8');
           if (content.includes('std::format')) {
+            content = content.replace(/return\s+std::format\s*\(\s*["']\{\}%["']\s*,\s*dimension\.value\s*\)\s*;/g, 'return std::to_string(dimension.value) + "%";');
             content = content.replace('return std::format("{}%", dimension.value);', 'return std::to_string(dimension.value) + "%";');
             fs.writeFileSync(extracted, content, 'utf8');
             child_process.execSync(`cd "${tmpDir}" && zip -u "${aarPath}" "prefab/modules/reactnative/include/react/renderer/core/graphicsConversions.h"`, { stdio: 'ignore' });
@@ -40,7 +41,6 @@ function findTransformPath() {
   const baseTransforms = path.join(os.homedir(), '.gradle', 'caches');
   if (!fs.existsSync(baseTransforms)) return '';
   
-  // Search only in .gradle/caches/*/transforms
   try {
     for (const v of fs.readdirSync(baseTransforms)) {
       const tDir = path.join(baseTransforms, v, 'transforms');
@@ -119,13 +119,19 @@ function patchGraphicsHeader(headerPath) {
     let content = fs.readFileSync(headerPath, 'utf8');
     if (content.includes('std::format')) {
       content = content.replace(
+        /return\s+std::format\s*\(\s*["']\{\}%["']\s*,\s*dimension\.value\s*\)\s*;/g,
+        'return std::to_string(dimension.value) + "%";'
+      );
+      content = content.replace(
         'return std::format("{}%", dimension.value);',
         'return std::to_string(dimension.value) + "%";'
       );
       fs.writeFileSync(headerPath, content, 'utf8');
       console.log('[patch-rn-cpp] Successfully patched graphicsConversions.h:', headerPath);
     }
-  } catch (e) {}
+  } catch (e) {
+    console.error('[patch-rn-cpp] Error patching:', headerPath, e.message);
+  }
 }
 
 function patchReanimatedDir(dir) {
@@ -187,7 +193,7 @@ class TransformOperationInterpolator<TOperation> : public StyleOperationInterpol
     return std::make_shared<TOperation>(resolved.value());
   }
 
- protected:
+  protected:
   const ResolvableValueInterpolatorConfig config_;
 
   ResolvableValueInterpolationContext getResolvableValueContext(
@@ -292,12 +298,35 @@ function scanAndProvisionPrefab(rootDir) {
   } catch (e) {}
 }
 
+function findAndPatchAllGraphics(dir) {
+  if (!fs.existsSync(dir)) return;
+  let entries = [];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch (e) {
+    return;
+  }
+  for (const ent of entries) {
+    try {
+      const full = path.join(dir, ent.name);
+      if (ent.isDirectory()) {
+        if (ent.name !== '.git') {
+          findAndPatchAllGraphics(full);
+        }
+      } else if (ent.name === 'graphicsConversions.h') {
+        patchGraphicsHeader(full);
+      }
+    } catch (e) {}
+  }
+}
+
 // 1. Patch node_modules
 const rootDir = path.resolve(__dirname, '..');
 const nodeModulesDir = path.join(rootDir, 'node_modules');
 
-patchGraphicsHeader(path.join(nodeModulesDir, 'react-native', 'ReactCommon', 'react', 'renderer', 'core', 'graphicsConversions.h'));
-patchGraphicsHeader(path.join(nodeModulesDir, '.pnpm_patches', 'react-native@0.86.3', 'ReactCommon', 'react', 'renderer', 'core', 'graphicsConversions.h'));
+findAndPatchAllGraphics(nodeModulesDir);
+findAndPatchAllGraphics(path.join(rootDir, 'apps', 'mobile', 'node_modules'));
+findAndPatchAllGraphics(path.join(rootDir, 'apps', 'mobile', 'android'));
 patchReanimatedInterpolator(nodeModulesDir);
 patchSubprojectBuildGradles(nodeModulesDir);
 
@@ -318,29 +347,15 @@ if (fs.existsSync(aarDir)) {
   } catch (e) {}
 }
 
-// 3. Patch extracted transforms in Gradle caches
-const baseTransforms = path.join(os.homedir(), '.gradle', 'caches');
-if (fs.existsSync(baseTransforms)) {
-  try {
-    for (const v of fs.readdirSync(baseTransforms)) {
-      const tDir = path.join(baseTransforms, v, 'transforms');
-      if (fs.existsSync(tDir)) {
-        for (const t of fs.readdirSync(tDir)) {
-          const transformedDir = path.join(tDir, t, 'transformed');
-          if (fs.existsSync(transformedDir)) {
-            for (const candName of fs.readdirSync(transformedDir)) {
-              if (candName.startsWith('react-android-0.86.3')) {
-                const cand = path.join(transformedDir, candName, 'prefab', 'modules', 'reactnative', 'include', 'react', 'renderer', 'core', 'graphicsConversions.h');
-                if (fs.existsSync(cand)) {
-                  patchGraphicsHeader(cand);
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  } catch (e) {}
+// 3. Patch all extracted transforms and headers in ~/.gradle/caches and /home/runner/.gradle/caches
+const gradleCandidates = [
+  path.join(os.homedir(), '.gradle', 'caches'),
+  '/home/runner/.gradle/caches'
+];
+for (const gDir of gradleCandidates) {
+  if (fs.existsSync(gDir)) {
+    findAndPatchAllGraphics(gDir);
+  }
 }
 
 // 4. Provision prefab ReactAndroidConfig in all .cxx dirs

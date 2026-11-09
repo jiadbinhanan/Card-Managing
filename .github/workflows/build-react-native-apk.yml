@@ -86,9 +86,24 @@ jobs:
           cd apps/mobile/android
           chmod +x gradlew
 
+          patch_rn_headers() {
+            echo "🔧 [CI Patch] Running patch-rn-cpp.js..."
+            node ../../../scripts/patch-rn-cpp.js || true
+            node ./scripts/patch-rn-cpp.js || true
+            echo "🔧 [CI Patch] Searching and patching graphicsConversions.h in ~/.gradle..."
+            find /home/runner/.gradle -name "graphicsConversions.h" -exec sed -i 's/return std::format("{}%", dimension.value);/return std::to_string(dimension.value) + "%";/g' {} + 2>/dev/null || true
+            find /home/runner/.gradle -name "graphicsConversions.h" -exec sed -i 's/std::format("{}%", dimension.value)/std::to_string(dimension.value) + "%"/g' {} + 2>/dev/null || true
+            echo "🔧 [CI Patch] Header patch step complete."
+          }
+
+          echo "▶ Triggering dependency pre-download..."
+          ./gradlew :app:generateReleaseBuildConfig --dry-run || true
+          patch_rn_headers
+
           MAX_RETRIES=3
           for attempt in $(seq 1 $MAX_RETRIES); do
             echo "▶ Starting Gradle build attempt $attempt of $MAX_RETRIES..."
+            patch_rn_headers
             if [ "${{ github.event.inputs.build_type }}" = "release" ]; then
               ./gradlew assembleRelease \
                 -Pandroid.injected.signing.store.file="$KEYSTORE_PATH" \
@@ -104,7 +119,8 @@ jobs:
               echo "❌ All $MAX_RETRIES build attempts failed."
               exit 1
             fi
-            echo "⚠️ Gradle attempt $attempt encountered network/transient failure. Retrying in 15 seconds..."
+            echo "⚠️ Gradle attempt $attempt encountered failure. Re-patching headers and retrying in 15 seconds..."
+            patch_rn_headers
             sleep 15
           done
           cd ../../..
